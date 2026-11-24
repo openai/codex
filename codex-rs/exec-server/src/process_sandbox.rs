@@ -7,12 +7,12 @@ use crate::process_telemetry::ProcessTelemetry;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::ProcessStartErrorData;
 use codex_file_system::WindowsSandboxSelection;
-use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::PreparedNetworkRoute;
 use codex_network_proxy::RemoteCredentialBrokerCache;
 use codex_network_proxy::ShellStartupCredentials;
 use codex_sandboxing::SandboxCommand;
@@ -198,7 +198,7 @@ async fn prepare_managed_network(
 ) -> Result<
     (
         HashMap<String, String>,
-        Option<ManagedNetworkSandboxContext>,
+        Option<PreparedNetworkRoute>,
         Option<NetworkProxyHandle>,
     ),
     JSONRPCErrorError,
@@ -211,7 +211,11 @@ async fn prepare_managed_network(
                 "a mandatory TCP upstream requires an executor-local managed proxy".to_string(),
             ));
         }
-        Ok((env, params.managed_network.clone(), None))
+        let route = params
+            .managed_network
+            .clone()
+            .map(PreparedNetworkRoute::from_portable_context);
+        Ok((env, route, None))
     };
     let Some(launch) = &params.network_proxy else {
         return without_executor_proxy(env);

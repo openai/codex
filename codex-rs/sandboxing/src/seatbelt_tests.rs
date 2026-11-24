@@ -1560,7 +1560,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
-        managed_network: Some(&prepared.sandbox_context),
+        managed_network: Some(&prepared.sandbox_context.portable),
 
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     })

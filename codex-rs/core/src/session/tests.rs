@@ -1363,7 +1363,7 @@ network.transparent_tcp = true
         let prepared = proxy
             .proxy()
             .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
-        assert_eq!(prepared.sandbox_context.transparent_tcp, capture);
+        assert_eq!(prepared.sandbox_context.portable.transparent_tcp, capture);
     }
     Ok(())
 }

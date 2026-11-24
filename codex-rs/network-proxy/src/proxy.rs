@@ -510,8 +510,61 @@ pub struct ManagedNetworkSandboxContext {
 pub struct PreparedManagedNetwork {
     /// Complete command environment with managed proxy variables applied.
     pub env: HashMap<String, String>,
-    /// Matching portable sandbox inputs for the command environment.
-    pub sandbox_context: ManagedNetworkSandboxContext,
+    /// Matching sandbox policy and executor-local CA grant.
+    pub sandbox_context: PreparedNetworkRoute,
+}
+
+/// Sandbox inputs captured together when the proxy prepares a command environment.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PreparedNetworkRoute {
+    /// Policy that can be sent to another executor.
+    pub portable: ManagedNetworkSandboxContext,
+    ca_bundle: CaBundleSource,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum CaBundleSource {
+    #[default]
+    None,
+    Prepared(AbsolutePathBuf),
+    ControllerEnvironment,
+}
+
+impl PreparedNetworkRoute {
+    /// Controller-supplied routes carry the generated CA in the command environment.
+    pub fn from_portable_context(portable: ManagedNetworkSandboxContext) -> Self {
+        Self {
+            portable,
+            ca_bundle: CaBundleSource::ControllerEnvironment,
+        }
+    }
+
+    /// Validate the CA when the sandbox grants access. A local proxy with no CA
+    /// must never pick up an unrelated bundle from the command environment.
+    pub fn into_sandbox_inputs(
+        self,
+        env: &HashMap<String, String>,
+    ) -> (ManagedNetworkSandboxContext, Option<AbsolutePathBuf>) {
+        let bundle = match self.ca_bundle {
+            CaBundleSource::None => None,
+            CaBundleSource::Prepared(path) => path
+                .to_str()
+                .is_some_and(crate::certs::is_managed_mitm_ca_trust_bundle_path)
+                .then_some(path),
+            CaBundleSource::ControllerEnvironment => crate::certs::managed_mitm_ca_from_env(env),
+        };
+        (self.portable, bundle)
+    }
+}
+
+impl From<ManagedNetworkSandboxContext> for PreparedNetworkRoute {
+    /// Portable sandbox inputs carry no executor-local file grant.
+    fn from(portable: ManagedNetworkSandboxContext) -> Self {
+        Self {
+            portable,
+            ca_bundle: CaBundleSource::None,
+        }
+    }
 }
 
 struct EnvironmentProxy {
@@ -1178,17 +1231,6 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the generated MITM CA bundle path child sandboxes should expose to TLS clients.
-    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<AbsolutePathBuf> {
-        self.runtime_settings()
-            .mitm_ca_trust_bundle
-            .and_then(|bundle| {
-                AbsolutePathBuf::from_absolute_path(bundle.path)
-                    .map_err(|err| warn!("managed MITM CA trust bundle path is invalid: {err}"))
-                    .ok()
-            })
-    }
-
     fn prepare_for_addrs(
         &self,
         mut env: HashMap<String, String>,
@@ -1275,13 +1317,25 @@ impl NetworkProxy {
         }
         PreparedManagedNetwork {
             env,
-            sandbox_context: ManagedNetworkSandboxContext {
-                loopback_ports,
-                transparent_tcp: runtime_settings.transparent_tcp,
-                allow_local_binding: runtime_settings.allow_local_binding,
-                allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
-                dangerously_allow_all_unix_sockets: runtime_settings
-                    .dangerously_allow_all_unix_sockets,
+            sandbox_context: PreparedNetworkRoute {
+                ca_bundle: runtime_settings
+                    .mitm_ca_trust_bundle
+                    .and_then(|bundle| {
+                        AbsolutePathBuf::from_absolute_path(bundle.path)
+                            .map_err(|err| {
+                                warn!("managed MITM CA trust bundle path is invalid: {err}")
+                            })
+                            .ok()
+                    })
+                    .map_or(CaBundleSource::None, CaBundleSource::Prepared),
+                portable: ManagedNetworkSandboxContext {
+                    loopback_ports,
+                    transparent_tcp: runtime_settings.transparent_tcp,
+                    allow_local_binding: runtime_settings.allow_local_binding,
+                    allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
+                    dangerously_allow_all_unix_sockets: runtime_settings
+                        .dangerously_allow_all_unix_sockets,
+                },
             },
         }
     }
@@ -2387,7 +2441,7 @@ mod tests {
             let prepared = proxy
                 .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
             assert_eq!(
-                prepared.sandbox_context,
+                prepared.sandbox_context.portable,
                 ManagedNetworkSandboxContext {
                     transparent_tcp: false,
                     loopback_ports: vec![43128, 48081],
@@ -2465,7 +2519,7 @@ mod tests {
             expected_ports.sort_unstable();
             expected_ports.dedup();
             assert_eq!(
-                prepared.sandbox_context,
+                prepared.sandbox_context.portable,
                 ManagedNetworkSandboxContext {
                     loopback_ports: expected_ports,
                     allow_local_binding: false,
@@ -2775,7 +2829,10 @@ mod tests {
                 )
                 .expect("prepare stable Windows proxy");
             assert_eq!(
-                prepared_before_upgrade.sandbox_context.loopback_ports,
+                prepared_before_upgrade
+                    .sandbox_context
+                    .portable
+                    .loopback_ports,
                 vec![proxy.http_addr.port()]
             );
             assert_eq!(
@@ -2793,7 +2850,10 @@ mod tests {
                 .prepare_for_optional_environment(HashMap::new(), Some(environment_id))
                 .expect("prepare cached HTTP-only environment");
             assert_eq!(
-                environment_before_upgrade.sandbox_context.loopback_ports,
+                environment_before_upgrade
+                    .sandbox_context
+                    .portable
+                    .loopback_ports,
                 vec![proxy.http_addr.port()]
             );
 
@@ -2833,7 +2893,10 @@ mod tests {
                 .prepare_for_optional_environment(HashMap::new(), Some(environment_id))
                 .expect("re-prepare cached environment after SOCKS5 upgrade");
             for prepared in [&prepared_after_upgrade, &environment_after_upgrade] {
-                assert_eq!(prepared.sandbox_context.loopback_ports, expected_ports);
+                assert_eq!(
+                    prepared.sandbox_context.portable.loopback_ports,
+                    expected_ports
+                );
                 assert_eq!(
                     prepared.env.get(WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY),
                     Some(
@@ -2853,7 +2916,7 @@ mod tests {
                 .prepare_for_optional_environment(HashMap::new(), None)
                 .expect("prepare SOCKS-enabled route");
             assert_eq!(
-                socks_prepared.sandbox_context.loopback_ports,
+                socks_prepared.sandbox_context.portable.loopback_ports,
                 expected_ports
             );
             assert_eq!(
@@ -2869,7 +2932,7 @@ mod tests {
                     "remote",
                 )
                 .expect("prepare HTTP-only trusted bridge proxy");
-            assert_eq!(remote.sandbox_context.loopback_ports.len(), 1);
+            assert_eq!(remote.sandbox_context.portable.loopback_ports.len(), 1);
             assert_eq!(remote.env.get(WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY), None);
             assert_eq!(proxy.network_proxy_restricting_sid(Some("remote")), None);
             socks_handle

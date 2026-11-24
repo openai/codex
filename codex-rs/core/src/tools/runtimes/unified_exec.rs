@@ -303,7 +303,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
         } else {
             None
         };
-        let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
+        let (mut env, prepared_route, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
                 let (mut launch, credential_masking) = remote_network_proxy_launch(
                     &prepared.turn_environment,
@@ -616,7 +616,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                     command,
                     prepared.cwd.clone(),
                     env,
-                    managed_network_context,
+                    prepared_route.map(|route| route.portable),
                     network_proxy_launch,
                     additional_permissions.as_ref(),
                     options,
@@ -628,7 +628,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                 args: args.to_vec(),
                 cwd: prepared.cwd.clone(),
                 env,
-                managed_network: managed_network_context,
+                managed_network: prepared_route,
                 additional_permissions,
             };
             attempt

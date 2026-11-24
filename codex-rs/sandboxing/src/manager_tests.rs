@@ -389,8 +389,10 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
     );
 }
 
-#[cfg(unix)]
-fn sandbox_transform_request(cwd: &PathUri, sandbox: SandboxType) -> SandboxTransformRequest<'_> {
+fn test_request<'a>(
+    cwd: &'a PathUri,
+    permissions: &'a PermissionProfile,
+) -> SandboxTransformRequest<'a> {
     SandboxTransformRequest {
         command: SandboxCommand {
             program: "true".into(),
@@ -400,9 +402,9 @@ fn sandbox_transform_request(cwd: &PathUri, sandbox: SandboxType) -> SandboxTran
             managed_network: None,
             additional_permissions: None,
         },
-        permissions: &PermissionProfile::Disabled,
+        permissions,
         workspace_roots: None,
-        selection: SandboxSelection::Explicit(sandbox),
+        selection: SandboxSelection::Explicit(SandboxType::None),
         network: Default::default(),
         sandbox_policy_cwd: cwd,
         executables: SandboxExecutables::Launcher(None),
@@ -419,7 +421,8 @@ fn windows_token_filesystem_helper_is_unavailable_on_unix() {
         permissions: &PermissionProfile::read_only(),
         workspace_roots: Some(std::slice::from_ref(&cwd)),
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
-        ..sandbox_transform_request(&cwd, SandboxType::WindowsRestrictedToken)
+        selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
+        ..test_request(&cwd, &PermissionProfile::Disabled)
     };
 
     assert!(matches!(
@@ -437,7 +440,8 @@ fn transform_linux_seccomp_request(
     manager
         .transform(SandboxTransformRequest {
             executables: SandboxExecutables::Launcher(Some(codex_linux_sandbox_exe)),
-            ..sandbox_transform_request(&cwd, SandboxType::LinuxSeccomp)
+            selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
+            ..test_request(&cwd, &PermissionProfile::Disabled)
         })
         .expect("transform")
 }
@@ -542,29 +546,13 @@ async fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_
 async fn native_launch_preserves_borrowed_proxy_credentials() -> anyhow::Result<()> {
     use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
     use codex_network_proxy::ManagedProxyRouting;
-    use codex_network_proxy::NetworkProxy;
-    use codex_network_proxy::NetworkProxyConfig;
-    use codex_network_proxy::NetworkProxyState;
-    use codex_network_proxy::RemoteNetworkProxyConfig;
-    use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
     use codex_utils_path_uri::Platform;
 
-    let config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
-        enabled: true,
-        enable_socks5: false,
-        ..Default::default()
-    })?;
-    let state = NetworkProxyState::from_remote_launch_config(
-        RemoteNetworkProxyLaunchConfig::new(config),
-        Platform::native(),
-        &Default::default(),
-        &HashMap::new(),
-    )?;
-    let proxy = NetworkProxy::builder()
-        .state(state.into())
-        .managed_proxy_routing(ManagedProxyRouting::SharedIngress)
-        .build()
-        .await?;
+    let proxy = test_network_proxy(
+        ManagedProxyRouting::SharedIngress,
+        /*credential_masking*/ false,
+    )
+    .await?;
     let handle = proxy.run().await?;
     let dir = tempfile::tempdir()?;
     let access_key = dir.path().join("access-key");
@@ -632,18 +620,13 @@ async fn native_launch_preserves_borrowed_proxy_credentials() -> anyhow::Result<
                     managed_network: context,
                     additional_permissions: None,
                 },
-                permissions: &PermissionProfile::Disabled,
-                workspace_roots: None,
-                selection: SandboxSelection::Explicit(SandboxType::None),
                 network: SandboxNetwork::new(
                     /*enforce_managed_network*/ false,
                     Some(&proxy),
                     environment_id,
                 ),
-                sandbox_policy_cwd: &cwd,
-                executables: SandboxExecutables::Launcher(None),
-                use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                ..test_request(&cwd, &PermissionProfile::Disabled)
             })?
             .into_command_request()?;
         assert!(request.network.is_some());
@@ -753,7 +736,7 @@ socket.create_connection(("127.0.0.1", int(sys.argv[3]))).close()
             ],
             cwd: cwd.clone(),
             env: HashMap::new(),
-            managed_network: Some(route),
+            managed_network: Some(route.into()),
             additional_permissions: None,
         },
         permissions: &PermissionProfile::read_only(),
@@ -785,7 +768,7 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
     let network = proxy_allowing_all_unix_sockets().await?;
     let prepared =
         network.prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
-    let allow_all = prepared.sandbox_context;
+    let allow_all = prepared.sandbox_context.portable;
     let path_only = ManagedNetworkSandboxContext {
         allow_unix_sockets: vec!["/tmp/daemon.sock".to_string()],
         ..Default::default()
@@ -838,7 +821,7 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
                 args: Vec::new(),
                 cwd: cwd_uri.clone(),
                 env: HashMap::new(),
-                managed_network: context,
+                managed_network: context.map(Into::into),
                 additional_permissions: None,
             },
             permissions: &PermissionProfile::Disabled,
@@ -871,6 +854,144 @@ async fn check_linux_managed_policy(transparent_tcp: bool) -> anyhow::Result<()>
     }
 
     Ok(())
+}
+
+async fn test_network_proxy(
+    managed_proxy_routing: codex_network_proxy::ManagedProxyRouting,
+    credential_masking: bool,
+) -> anyhow::Result<codex_network_proxy::NetworkProxy> {
+    use codex_network_proxy::NetworkProxy;
+    use codex_network_proxy::NetworkProxyConfig;
+    use codex_network_proxy::NetworkProxyState;
+    use codex_network_proxy::RemoteNetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+    use codex_utils_path_uri::Platform;
+
+    let mut config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+        enabled: true,
+        enable_socks5: false,
+        ..Default::default()
+    })?;
+    if credential_masking {
+        config.enable_credential_masking(Default::default());
+    }
+    let state = NetworkProxyState::from_remote_launch_config(
+        RemoteNetworkProxyLaunchConfig::new(config),
+        Platform::native(),
+        &Default::default(),
+        &HashMap::new(),
+    )?;
+    NetworkProxy::builder()
+        .state(state.into())
+        .managed_proxy_routing(managed_proxy_routing)
+        .build()
+        .await
+}
+
+#[test]
+fn borrowed_proxy_prepares_matching_child_and_sandbox_routes() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args(["--ignored", "borrowed_proxy_child"])
+        .env("CODEX_HOME", home.path())
+        .status()?;
+    assert!(status.success() && home.path().join("proxy").is_dir());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "run with an isolated CODEX_HOME by borrowed_proxy_prepares_matching_child_and_sandbox_routes"]
+async fn borrowed_proxy_child() -> anyhow::Result<()> {
+    use codex_network_proxy::ManagedNetworkSandboxContext;
+    use codex_network_proxy::ManagedProxyRouting;
+    use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
+    use std::path::Path;
+    let proxy = test_network_proxy(
+        ManagedProxyRouting::DedicatedListeners,
+        /*credential_masking*/ true,
+    )
+    .await?;
+    let owner = proxy.run().await?;
+    let scoped = proxy.for_execution(
+        "env",
+        "call",
+        "token".into(),
+        /*environment_policy*/ None,
+        /*fallback_policy_decider*/ None,
+    )?;
+    let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir()?);
+    let prepare = |env| scoped.prepare_for_optional_environment(env, Some("env"));
+    let active =
+        AbsolutePathBuf::from_absolute_path(&prepare(HashMap::new())?.env["CURL_CA_BUNDLE"])?;
+    let external = active.parent().unwrap().join("external");
+    std::fs::create_dir_all(&external)?;
+    let inherited = external.join(active.file_name().unwrap());
+    std::fs::copy(&active, &inherited)?;
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(Vec::new()),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let env = HashMap::from([(
+        "CODEX_CA_CERTIFICATE".into(),
+        inherited.display().to_string(),
+    )]);
+    let transform = |env, route| -> anyhow::Result<_> {
+        let mut request = test_request(&cwd, &permissions);
+        request.command.env = env;
+        request.command.managed_network = route;
+        request.selection = SandboxSelection::Explicit(SandboxType::LinuxSeccomp);
+        request.executables = SandboxExecutables::Launcher(Some(Path::new("codex-linux-sandbox")));
+        request.network = SandboxNetwork::new(
+            /*enforce_managed_network*/ true,
+            Some(&scoped),
+            Some("env"),
+        );
+        Ok(SandboxManager::new()
+            .transform(request)?
+            .into_command_request()?)
+    };
+    let request = transform(env.clone(), None)?;
+    assert_eq!(
+        request.env["CODEX_CA_CERTIFICATE"],
+        inherited.display().to_string()
+    );
+    assert_eq!(Path::new(&request.env["CURL_CA_BUNDLE"]), active.as_path());
+    let policy = request.permission_profile.file_system_sandbox_policy();
+    let roots = policy.get_readable_roots_with_cwd(&cwd.to_abs_path()?);
+    assert_eq!(roots, [active]);
+    let addr: std::net::SocketAddr = request.env["HTTP_PROXY"]
+        .strip_prefix("http://")
+        .expect("managed HTTP proxy")
+        .parse()?;
+    assert_ne!(addr, proxy.http_addr(), "must use the execution's listener");
+    assert_eq!(request.env[PROXY_ATTRIBUTION_TOKEN_ENV_KEY], "token");
+    let route = request
+        .command
+        .windows(2)
+        .find(|args| args[0] == "--managed-network")
+        .expect("sandbox must use the child's route");
+    let context: ManagedNetworkSandboxContext = serde_json::from_str(&route[1])?;
+    assert_eq!(context.loopback_ports, [addr.port()]);
+
+    let prepared = prepare(env.clone())?;
+    let mut config = proxy.current_cfg().await?;
+    config.set_credential_broker_enabled(/*enabled*/ false);
+    config.mitm = false;
+    proxy
+        .replace_config_state(codex_network_proxy::build_config_state(
+            config,
+            Default::default(),
+            codex_utils_path_uri::Platform::native(),
+        )?)
+        .await?;
+    let without_ca = transform(env, None)?;
+    assert_eq!(without_ca.permission_profile, permissions);
+
+    let frozen = transform(prepared.env, Some(prepared.sandbox_context))?;
+    assert_eq!(frozen.env, request.env);
+    assert_eq!(frozen.command, request.command);
+    assert_eq!(frozen.permission_profile, request.permission_profile);
+    owner.shutdown().await
 }
 
 #[cfg(target_os = "windows")]

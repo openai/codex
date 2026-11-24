@@ -606,7 +606,7 @@ fn is_generated_managed_ca_artifact_path(path: &Path, proxy_dir: &Path, prefix: 
 }
 
 /// Find a generated CA in the environment prepared for a managed route on this host.
-pub fn managed_mitm_ca_from_env(env: &HashMap<String, String>) -> Option<AbsolutePathBuf> {
+pub(crate) fn managed_mitm_ca_from_env(env: &HashMap<String, String>) -> Option<AbsolutePathBuf> {
     CUSTOM_CA_ENV_KEYS
         .into_iter()
         .chain(CHILD_ONLY_CA_ENV_KEYS)

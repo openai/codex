@@ -64,7 +64,7 @@ async fn dedicated_listeners_preserve_http_and_socks_policy_without_restricted_t
         let mut ports = vec![http.port(), socks.port()];
         ports.sort_unstable();
         assert_eq!(
-            prepared.sandbox_context,
+            prepared.sandbox_context.portable,
             ManagedNetworkSandboxContext {
                 loopback_ports: ports,
                 allow_local_binding: false,

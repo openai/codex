@@ -165,7 +165,7 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
             .arg("--permission-profile")
             .arg(serde_json::to_string(&PermissionProfile::Disabled).unwrap())
             .arg("--managed-network")
-            .arg(serde_json::to_string(&prepared.sandbox_context).unwrap())
+            .arg(serde_json::to_string(&prepared.sandbox_context.portable).unwrap())
             .args(["--", "python3", "-c", probe])
             .arg(&socket_path)
             .arg(tcp_addr.port().to_string())

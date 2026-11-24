@@ -1276,8 +1276,12 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 }
 
 #[cfg(unix)]
+#[test_case(false; "portable_route")]
+#[test_case(true; "executor_proxy")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_reads() -> Result<()> {
+async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_reads(
+    executor_proxy: bool,
+) -> Result<()> {
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(
         &PermissionProfile::read_only(),
         &std::env::current_dir()?,
@@ -1289,9 +1293,11 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
     let server = exec_server().await?;
     let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
     let proxy_dir = server.codex_home().canonicalize()?.join("proxy");
-    std::fs::create_dir_all(&proxy_dir)?;
+    // Proxy startup prunes stale bundles in proxy/, but leaves external bundles alone.
+    let external = proxy_dir.join("external");
+    std::fs::create_dir_all(&external)?;
     // The bundle name contains the SHA-256 of its contents.
-    let bundle = proxy_dir
+    let bundle = external
         .join("ca-bundle-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.pem");
     std::fs::write(&bundle, b"abc")?;
     let untrusted = proxy_dir.join("untrusted.pem");
@@ -1326,6 +1332,33 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
         cwd.clone(),
     );
 
+    let (network_proxy, override_key, probe) = if executor_proxy {
+        let mut config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+            enabled: true,
+            ..Default::default()
+        })?;
+        config.enable_credential_masking(Default::default());
+        (
+            Some(RemoteNetworkProxyLaunchConfig::new(config)),
+            // An environment scan would grant this alternate bundle before the active one.
+            "CODEX_CA_CERTIFICATE",
+            r#"
+                test "$CODEX_CA_CERTIFICATE" = "$2" &&
+                test "$CURL_CA_BUNDLE" = "$2" &&
+                test "$SSL_CERT_FILE" = "$3" &&
+                ! cat "$CURL_CA_BUNDLE" 2>/dev/null &&
+                grep -q -- '-----BEGIN CERTIFICATE-----' "$REQUESTS_CA_BUNDLE" &&
+                ! cat "$SSL_CERT_FILE" 2>/dev/null &&
+                cat "$1"
+            "#,
+        )
+    } else {
+        (
+            None,
+            "DENO_CERT",
+            r#"test "$DENO_CERT" = profile.pem && cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#,
+        )
+    };
     let session = environment
         .get_exec_backend()
         .start(ExecParams {
@@ -1333,8 +1366,9 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
             process_id: ProcessId::from("proc-restricted-helper"),
             argv: vec![
                 "/bin/bash".to_owned(), "-lc".to_owned(),
-                r#"test "$DENO_CERT" = profile.pem && cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#.to_owned(),
+                probe.to_owned(),
                 "bash".to_owned(), file.to_string_lossy().into_owned(),
+                bundle.to_string_lossy().into_owned(), untrusted.to_string_lossy().into_owned(),
             ],
             cwd,
             shell_snapshot: Some(ShellSnapshotRequest {
@@ -1345,7 +1379,7 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
             env: HashMap::from([
                 ("PATH".to_owned(), std::env::var("PATH")?),
                 ("HOME".to_owned(), workspace.path().display().to_string()),
-                ("DENO_CERT".to_owned(), bundle.to_string_lossy().into_owned()),
+                (override_key.to_owned(), bundle.to_string_lossy().into_owned()),
                 ("CURL_CA_BUNDLE".to_owned(), bundle.to_string_lossy().into_owned()),
                 ("SSL_CERT_FILE".to_owned(), untrusted.to_string_lossy().into_owned()),
             ]),
@@ -1354,15 +1388,27 @@ async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_rea
             arg0: None,
             sandbox: Some(sandbox),
             enforce_managed_network: false,
-            managed_network: Some(codex_network_proxy::ManagedNetworkSandboxContext::default()),
-            network_proxy: None,
+            managed_network: (!executor_proxy).then(codex_network_proxy::ManagedNetworkSandboxContext::default),
+            network_proxy,
         })
         .await?;
     let output = collect_process_output_from_events(session.process).await?;
 
+    assert_eq!(std::fs::read(&bundle)?, b"abc");
+    assert_eq!(std::fs::read(&untrusted)?, b"untrusted");
     assert_eq!(
         output,
-        ("allowedabc".to_string(), String::new(), Some(0), true)
+        (
+            (if executor_proxy {
+                "allowed"
+            } else {
+                "allowedabc"
+            })
+            .to_string(),
+            String::new(),
+            Some(0),
+            true
+        )
     );
     Ok(())
 }
