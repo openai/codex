@@ -291,62 +291,6 @@ pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
-/// List thread ids from SQLite for parity checks without rollout scanning.
-#[allow(clippy::too_many_arguments)]
-pub async fn list_thread_ids_db(
-    context: Option<&codex_state::StateRuntime>,
-    sqlite: &codex_state::SqliteConfig,
-    page_size: usize,
-    cursor: Option<&Cursor>,
-    sort_key: ThreadSortKey,
-    allowed_sources: &[SessionSource],
-    model_providers: Option<&[String]>,
-    archived_only: bool,
-    stage: &str,
-) -> Option<Vec<ThreadId>> {
-    let ctx = context?;
-    if ctx.sqlite() != sqlite {
-        warn!(
-            "state db SQLite home mismatch: expected {}, got {}",
-            sqlite.home().display(),
-            ctx.sqlite().home().display()
-        );
-        return None;
-    }
-
-    let anchor = cursor_to_anchor(cursor);
-    let allowed_sources: Vec<String> = allowed_sources
-        .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
-        .collect();
-    let model_providers = model_providers.map(<[String]>::to_vec);
-    match ctx
-        .list_thread_ids(
-            page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-                ThreadSortKey::RecencyAt => codex_state::SortKey::RecencyAt,
-            },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived_only,
-        )
-        .await
-    {
-        Ok(ids) => Some(ids),
-        Err(err) => {
-            warn!("state db list_thread_ids failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
 /// List thread metadata from SQLite without rollout directory traversal.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_threads_db(
