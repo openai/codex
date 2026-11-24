@@ -27,6 +27,8 @@ use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
 use std::time::Instant;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
 
@@ -913,11 +915,19 @@ impl LocalAgentControl {
         let control = self.clone();
         let source = notification_source.clone();
         let ephemeral = config.ephemeral;
-        pending_spawn.set_edge_write(tokio::spawn(async move {
-            control
-                .persist_thread_spawn_edge_for_source(ephemeral, child_thread_id, source.as_ref())
-                .await
-        }));
+        pending_spawn.set_edge_write(tokio::spawn(
+            async move {
+                control
+                    .persist_thread_spawn_edge_for_source(
+                        ephemeral,
+                        child_thread_id,
+                        source.as_ref(),
+                    )
+                    .await
+            }
+            .in_current_span()
+            .with_current_subscriber(),
+        ));
         pending_spawn.wait_for_edge().await?;
         let edge_write = edge_write_started_at.elapsed();
         let child_create_started_at = Instant::now();

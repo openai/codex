@@ -9,7 +9,12 @@ use codex_agent_graph_store::AgentGraphStoreError;
 use codex_agent_graph_store::AgentGraphStoreFuture;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_agent_graph_store::ThreadSpawnEdgeStatus;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::InMemorySpanExporter;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
+use tracing::Instrument;
+use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(Clone, Copy)]
 enum SpawnEdgeFailure {
@@ -41,6 +46,7 @@ impl FaultingGraphStore {
 }
 
 impl AgentGraphStore for FaultingGraphStore {
+    #[tracing::instrument(name = "test_agent_graph_store_upsert", skip_all)]
     fn upsert_thread_spawn_edge(
         &self,
         parent: ThreadId,
@@ -139,12 +145,13 @@ async fn publication_harness(
 async fn spawn_publication_child(
     harness: &AgentControlHarness,
     parent: ThreadId,
+    options: SpawnAgentOptions,
 ) -> CodexResult<ThreadId> {
     harness
         .control
-        .spawn_agent(
+        .spawn_agent_internal(
             harness.config.clone(),
-            text_input("child task"),
+            spawn::SpawnInitialInput::UserInput(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: parent,
                 depth: 1,
@@ -152,8 +159,10 @@ async fn spawn_publication_child(
                 agent_nickname: None,
                 agent_role: None,
             })),
+            options,
         )
         .await
+        .map(|(agent, _)| agent.thread_id)
 }
 
 async fn assert_publication_closed(
@@ -204,7 +213,11 @@ async fn cancelled_spawn_edge_publication_cleanup(
 ) {
     let (harness, graph) = publication_harness(failure, ThreadId::new).await;
     let parent = ThreadId::new();
-    let mut spawn = Box::pin(spawn_publication_child(&harness, parent));
+    let mut spawn = Box::pin(spawn_publication_child(
+        &harness,
+        parent,
+        SpawnAgentOptions::default(),
+    ));
     tokio::select! {
         biased;
         () = graph.held.cancelled() => {},
@@ -235,19 +248,66 @@ async fn cancelled_spawn_edge_publication_cleanup(
     assert_publication_closed(&harness, &graph, parent).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn failed_spawn_edge_publication_cleanup() {
     let (harness, graph) =
         publication_harness(SpawnEdgeFailure::ErrorAfterCommit, ThreadId::new).await;
-    let parent = ThreadId::new();
-    let error = spawn_publication_child(&harness, parent)
-        .await
-        .expect_err("lost commit acknowledgement rejects spawn");
+    let (parent, thread) = harness.start_paginated_thread().await;
+    let call_id = "fork-publication";
+    let turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .record_conversation_items(
+            turn.as_ref(),
+            turn.model_info(),
+            &[spawn_agent_call(call_id)],
+        )
+        .await;
+
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("spawn-publication")));
+    // The test driver owns the subscriber. The separate Tokio worker must receive it from Core.
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    // Keep parallel tests from caching disabled interest when a callsite is first registered.
+    let _parallel_dispatch = tracing::Dispatch::new(
+        tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::OFF),
+    );
+    let error = spawn_publication_child(
+        &harness,
+        parent,
+        SpawnAgentOptions {
+            fork_mode: Some(SpawnAgentForkMode::FullHistory),
+            fork_parent_spawn_call_id: Some(call_id.to_string()),
+            ..Default::default()
+        },
+    )
+    .instrument(tracing::info_span!("test_spawn_publication"))
+    .await
+    .expect_err("lost commit acknowledgement rejects spawn");
     assert_eq!(
         error.to_string(),
         "Fatal error: failed to persist spawned agent relationship"
     );
     assert_publication_closed(&harness, &graph, parent).await;
+
+    let spans = exporter.get_finished_spans().expect("exported spawn spans");
+    let span = |name| spans.iter().find(|span| span.name == name).expect(name);
+    let caller = span("test_spawn_publication");
+    let fork = span("agent.spawn.prepare_forked_history");
+    let upsert = span("agent.spawn.upsert_thread_spawn_edge");
+    let backend = span("test_agent_graph_store_upsert");
+    for (child, parent) in [(fork, caller), (upsert, caller), (backend, upsert)] {
+        assert_eq!(child.parent_span_id, parent.span_context.span_id());
+        assert_eq!(
+            child.span_context.trace_id(),
+            parent.span_context.trace_id()
+        );
+    }
+    assert!(fork.end_time <= upsert.start_time);
 }
 
 #[test_case::test_case(SkippedPublication::Ephemeral; "ephemeral")]
@@ -319,7 +379,7 @@ async fn repeated_child_id_preserves_existing_thread_and_graph() {
         .list_thread_spawn_children(parent, /*status_filter*/ None)
         .await
         .expect("initial graph");
-    let error = spawn_publication_child(&harness, parent)
+    let error = spawn_publication_child(&harness, parent, SpawnAgentOptions::default())
         .await
         .expect_err("loaded IDs are rejected");
     assert_eq!(
