@@ -2299,23 +2299,6 @@ impl Config {
         )
         .await
     }
-    /// This is a secondary way of creating [Config], which is appropriate when
-    /// the harness is meant to be used with a specific configuration that
-    /// ignores user settings. For example, the `codex exec` subcommand is
-    /// designed to use [AskForApproval::Never] exclusively.
-    ///
-    /// Further, [ConfigOverrides] contains some options that are not supported
-    /// in [ConfigToml], such as `cwd`, `codex_self_exe`, and `codex_linux_sandbox_exe`.
-    pub async fn load_with_cli_overrides_and_harness_overrides(
-        cli_overrides: Vec<(String, TomlValue)>,
-        harness_overrides: ConfigOverrides,
-    ) -> std::io::Result<Self> {
-        ConfigBuilder::default()
-            .cli_overrides(cli_overrides)
-            .harness_overrides(harness_overrides)
-            .build()
-            .await
-    }
 }
 
 pub fn resolve_profile_v2_config_path(
@@ -2326,53 +2309,6 @@ pub fn resolve_profile_v2_config_path(
         format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}"),
         codex_home,
     )
-}
-
-/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
-/// with [ConfigToml] directly means that [ConfigRequirements] have not been
-/// applied yet, which risks failing to enforce required constraints.
-pub async fn load_config_as_toml_with_cli_overrides(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-    loader_overrides: LoaderOverrides,
-) -> std::io::Result<ConfigToml> {
-    load_config_as_toml_with_cli_and_loader_overrides(
-        codex_home,
-        cwd,
-        cli_overrides,
-        loader_overrides,
-    )
-    .await
-}
-
-/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
-/// [ConfigBuilder] because working with [ConfigToml] directly means
-/// [ConfigRequirements] have not been applied yet, which risks skipping
-/// required constraints.
-pub async fn load_config_as_toml_with_cli_and_loader_overrides(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-    loader_overrides: LoaderOverrides,
-) -> std::io::Result<ConfigToml> {
-    load_config_as_toml_with_cli_and_load_options(codex_home, cwd, cli_overrides, loader_overrides)
-        .await
-}
-
-/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
-/// [ConfigBuilder] because working with [ConfigToml] directly means
-/// [ConfigRequirements] have not been applied yet, which risks skipping
-/// required constraints.
-pub async fn load_config_as_toml_with_cli_and_load_options(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-    options: impl Into<ConfigLoadOptions>,
-) -> std::io::Result<ConfigToml> {
-    load_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, options)
-        .await
-        .map(|result| result.config_toml)
 }
 
 /// Partially loaded config plus the layer stack used to derive it.
