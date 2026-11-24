@@ -233,62 +233,6 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
-    /// Find a direct spawned child of `parent_thread_id` by canonical agent path.
-    pub async fn find_thread_spawn_child_by_path(
-        &self,
-        parent_thread_id: ThreadId,
-        agent_path: &str,
-    ) -> anyhow::Result<Option<ThreadId>> {
-        let rows = sqlx::query(
-            r#"
-SELECT threads.id
-FROM thread_spawn_edges
-JOIN threads ON threads.id = thread_spawn_edges.child_thread_id
-WHERE thread_spawn_edges.parent_thread_id = ?
-  AND threads.agent_path = ?
-ORDER BY threads.id
-LIMIT 2
-            "#,
-        )
-        .bind(parent_thread_id.to_string())
-        .bind(agent_path)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-        one_thread_id_from_rows(rows, agent_path)
-    }
-
-    /// Find a spawned descendant of `root_thread_id` by canonical agent path.
-    pub async fn find_thread_spawn_descendant_by_path(
-        &self,
-        root_thread_id: ThreadId,
-        agent_path: &str,
-    ) -> anyhow::Result<Option<ThreadId>> {
-        let rows = sqlx::query(
-            r#"
-WITH RECURSIVE subtree(child_thread_id) AS (
-    SELECT child_thread_id
-    FROM thread_spawn_edges
-    WHERE parent_thread_id = ?
-    UNION ALL
-    SELECT edge.child_thread_id
-    FROM thread_spawn_edges AS edge
-    JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
-)
-SELECT threads.id
-FROM subtree
-JOIN threads ON threads.id = subtree.child_thread_id
-WHERE threads.agent_path = ?
-ORDER BY threads.id
-LIMIT 2
-            "#,
-        )
-        .bind(root_thread_id.to_string())
-        .bind(agent_path)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-        one_thread_id_from_rows(rows, agent_path)
-    }
-
     async fn list_thread_spawn_children_matching(
         &self,
         parent_thread_id: ThreadId,
@@ -1314,26 +1258,6 @@ ON CONFLICT(id) DO UPDATE SET
         tx.commit().await?;
 
         Ok(rows_affected)
-    }
-}
-
-fn one_thread_id_from_rows(
-    rows: Vec<sqlx::sqlite::SqliteRow>,
-    agent_path: &str,
-) -> anyhow::Result<Option<ThreadId>> {
-    let mut ids = rows
-        .into_iter()
-        .map(|row| {
-            let id: String = row.try_get("id")?;
-            ThreadId::try_from(id).map_err(anyhow::Error::from)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    match ids.len() {
-        0 => Ok(None),
-        1 => Ok(ids.pop()),
-        _ => Err(anyhow::anyhow!(
-            "multiple agents found for canonical path `{agent_path}`"
-        )),
     }
 }
 
