@@ -68,6 +68,10 @@ impl RestrictedInputMode {
 }
 
 impl ChatComposer {
+    pub(crate) fn accepts_reconnect_shortcut(&self) -> bool {
+        !self.is_vim_enabled() || self.draft.textarea.uses_vim_insert_cursor()
+    }
+
     pub(crate) fn set_restricted_input_mode(&mut self, mode: Option<RestrictedInputMode>) {
         let was_disconnected =
             self.popups.restricted_input_mode == Some(RestrictedInputMode::Disconnected);
@@ -240,6 +244,12 @@ impl ChatComposer {
                         && text.trim().lines().count() == 1
                         && (command.supports_inline_args()
                             || text.split_once(char::is_whitespace).is_none_or(|(_, args)| args.trim().is_empty())))
+                {
+                    return InputResult::None;
+                }
+                if submit
+                    && let CommandItem::Builtin(command) = selected
+                    && self.reject_slash_command_if_unavailable(&SlashCommandItem::Builtin(command))
                 {
                     return InputResult::None;
                 }

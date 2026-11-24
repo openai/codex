@@ -2,8 +2,6 @@
 source: tui/src/chatwidget/tests/composer_submission.rs
 expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80)).replace('◦', \"•\")"
 ---
-• Reconnect failed — check the endpoint, then relaunch (0s)
-
 • Queued follow-up inputs
   ↳ x
     ⇧← edit last queued message
@@ -11,4 +9,4 @@ expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80)).replace('�
 › describe
 
   GPT-5.6-Sol default · /tmp/project
-  ⌃c quit
+  ⌃r reconnect · ⌃c quit

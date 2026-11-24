@@ -683,8 +683,15 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
         .err()
         .expect("reconnect should time out");
     assert_eq!(start.elapsed().as_secs(), 120);
+    app.active_thread_id = Some(ThreadId::new());
     app.begin_reconnect();
-    app.chat_widget.reconnect_failed();
+    app.reconnect.failed = true;
+    let target = std::mem::replace(&mut app.app_server_target, AppServerTarget::Cloud);
+    assert!(!app.can_retry_reconnect());
+    app.app_server_target = target;
+    app.reconnect.presentation = ReconnectPresentation::Overview;
+    app.chat_widget.reconnect_failed(app.can_retry_reconnect());
+    app.reconnect.presentation = ReconnectPresentation::Conversation;
     assert_snapshot!(
         "reconnect_failed",
         format!(
@@ -696,6 +703,38 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
         )
     );
     tokio::time::resume();
+    let mut session = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.chat_widget.toggle_vim_mode_and_notify();
+    for key in [
+        KeyCode::Esc.into(),
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        KeyCode::Char('d').into(),
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    ] {
+        app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(key))
+            .await?;
+    }
+    assert!(app.reconnect.failed, "Vim Normal mode owns redo");
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.handle_tui_event(
+        &mut tui,
+        &mut session,
+        TuiEvent::Key(KeyCode::Char('x').into()),
+    )
+    .await?;
+    for key in [
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('\u{0012}'), KeyModifiers::NONE),
+    ] {
+        app.reconnect.failed = true;
+        app.chat_widget.reconnect_failed(app.can_retry_reconnect());
+        app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(key))
+            .await?;
+        assert!(app.is_offline());
+        assert!(!app.reconnect.failed, "{key:?} should start a retry");
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "x");
+    }
     Ok(())
 }
 

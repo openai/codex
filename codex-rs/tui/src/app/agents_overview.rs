@@ -183,11 +183,7 @@ impl App {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.finish_loading();
-            state.connection_notice = Some(if self.reconnect.failed {
-                "Reconnect failed — agent list is stale; relaunch to retry"
-            } else {
-                "Reconnecting — agent list is stale"
-            });
+            state.connection_notice = Some(self.offline_overview_notice());
         }
         if app_server.thread_params_mode() == crate::app_server_session::ThreadParamsMode::Cloud {
             let owner = app_server.backend_id();

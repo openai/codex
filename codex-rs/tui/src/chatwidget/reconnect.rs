@@ -47,16 +47,48 @@ impl ChatWidget {
                 self.restore_user_message_to_composer(message);
             }
         }
+        // Startup notifications from the disconnected transport can no longer
+        // finish. Only real turn activity should keep local commands busy.
+        if self.mcp_startup_status.take().is_some() {
+            self.update_task_running_state();
+        }
+        self.show_reconnecting();
+        self.statusline_disconnected = true;
+        self.refresh_status_line();
+    }
+
+    pub(crate) fn accepts_reconnect_shortcut(&self) -> bool {
+        self.bottom_pane.accepts_reconnect_shortcut()
+    }
+
+    pub(crate) fn show_reconnecting(&mut self) {
+        self.bottom_pane
+            .set_status_timer_origin(Some(Instant::now()));
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status_header("Reconnecting to server…".to_string());
-        self.set_footer_hint_override(Some(vec![(
+        self.set_disconnected_footer(/*can_retry*/ false);
+    }
+
+    fn set_disconnected_footer(&mut self, can_retry: bool) {
+        let mut hints = Vec::new();
+        if can_retry {
+            hints.push((
+                crate::key_hint::ctrl(KeyCode::Char('r')).display_label(),
+                if self.composer_is_vim_enabled() {
+                    "reconnect in Insert mode"
+                } else {
+                    "reconnect"
+                }
+                .into(),
+            ));
+        }
+        hints.push((
             crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
             "quit".into(),
-        )]));
-        self.statusline_disconnected = true;
-        self.refresh_status_line();
+        ));
+        self.set_footer_hint_override(Some(hints));
     }
 
     /// Restore local input only after replay, which can otherwise move interrupted queues into the draft.
@@ -249,14 +281,13 @@ impl ChatWidget {
             self.refresh_startup_recovery();
             return KeyEventAction::None;
         }
-        let startup_key_handled = self.input_queue.startup_submission.is_some()
+        let had_startup_submission = self.input_queue.startup_submission.is_some();
+        let startup_key_handled = had_startup_submission
             && !self.startup_submission_has_protected_input()
             && (key.code == KeyCode::Null || self.handle_startup_submission_key(key));
-        if mode == RestrictedInputMode::Disconnected {
-            self.set_footer_hint_override(Some(vec![(
-                crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
-                "quit".into(),
-            )]));
+        // Cancelling a confirmed startup prompt clears its footer override.
+        if mode == RestrictedInputMode::Disconnected && had_startup_submission {
+            self.set_disconnected_footer(/*can_retry*/ false);
         }
         if startup_key_handled {
             return KeyEventAction::None;
@@ -295,8 +326,17 @@ impl ChatWidget {
         KeyEventAction::None
     }
 
-    pub(crate) fn reconnect_failed(&mut self) {
-        self.set_status_header("Reconnect failed — check the endpoint, then relaunch".into());
+    pub(crate) fn reconnect_failed(&mut self, can_retry: bool) {
+        self.bottom_pane
+            .set_status_timer_origin(/*started_at*/ None);
+        self.bottom_pane.hide_status_indicator();
+        self.set_disconnected_footer(can_retry);
+        if can_retry {
+            self.add_error_message(
+                "Automatic reconnect failed. Check the server and press Ctrl+R to retry. Your draft is still editable. Copy it before quitting with Ctrl+C.".into(),
+            );
+            return;
+        }
         self.add_error_message(
             "Automatic reconnect could not restore this session. Your draft is still editable. Copy it before quitting with Ctrl+C, then reconnect with the same command.".into(),
         );

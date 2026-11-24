@@ -19,7 +19,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub(super) fn normalize_reconnect_status(popup: &str) -> String {
     let status =
-        regex_lite::Regex::new(r"(?m)^[•◦] (Reconnecting to server…|Reconnect failed — check the endpoint, then relaunch) \([\dhms ]+\)").unwrap();
+        regex_lite::Regex::new(r"(?m)^[•◦] (Reconnecting to server…) \([\dhms ]+\)").unwrap();
     normalize_snapshot_paths(status.replace(popup, "• ${1} (<elapsed>)").into_owned())
 }
 

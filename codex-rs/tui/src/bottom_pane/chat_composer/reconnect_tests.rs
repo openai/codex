@@ -598,3 +598,49 @@ fn disconnected_edit_invalidates_ordinary_redo() {
     composer.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
     assert_eq!(composer.current_text(), "b");
 }
+
+#[test]
+fn disconnected_completion_checks_the_full_command_and_task_state() {
+    let (mut composer, _) = new_test_composer();
+    let mode = RestrictedInputMode::Disconnected;
+    composer.handle_paste("/warnings".into());
+    composer.handle_restricted_key(KeyCode::Left.into(), mode);
+    composer.handle_restricted_key(KeyCode::End.into(), mode);
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Enter.into(), mode),
+        InputResult::Command(SlashCommand::Warnings)
+    );
+
+    composer.set_task_running(/*running*/ true);
+    composer.handle_paste("/config".into());
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Enter.into(), mode),
+        InputResult::None
+    );
+    assert_eq!(composer.current_text(), "/config");
+}
+
+#[test]
+fn disconnected_mid_token_keeps_arguments_and_dispatches_literal_aliases() {
+    let (mut composer, _) = new_test_composer();
+    let mode = RestrictedInputMode::Disconnected;
+    composer.set_text_content("/rc stop".into(), Vec::new(), Vec::new());
+    composer.draft.textarea.set_cursor(/*pos*/ 2);
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Tab.into(), mode),
+        InputResult::None
+    );
+    assert_eq!(composer.current_text(), "/rc stop");
+    composer.set_text_content("/remote".into(), Vec::new(), Vec::new());
+    composer.draft.textarea.set_cursor(/*pos*/ 2);
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Tab.into(), mode),
+        InputResult::None
+    );
+    assert_eq!(composer.current_text(), "/remote");
+    composer.handle_restricted_key(KeyCode::End.into(), mode);
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Enter.into(), mode),
+        InputResult::Command(SlashCommand::Rc)
+    );
+}

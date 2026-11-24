@@ -1874,6 +1874,10 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
+    pub(crate) fn accepts_reconnect_shortcut(&self) -> bool {
+        self.composer.accepts_reconnect_shortcut()
+    }
+
     pub(crate) fn composer_is_vim_enabled(&self) -> bool {
         self.composer.is_vim_enabled()
     }

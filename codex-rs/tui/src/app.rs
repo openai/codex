@@ -1116,14 +1116,28 @@ impl App {
                 .active_view_accepts_input_when_disconnected()
             && let TuiEvent::Key(key) = &event
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && key.modifiers.contains(KeyModifiers::CONTROL)
             && let KeyCode::Char(character) = key.code
-            && (character.eq_ignore_ascii_case(&'c')
-                || (character.eq_ignore_ascii_case(&'d')
-                    && self.chat_widget.composer_is_empty()
-                    && self.chat_widget.no_modal_or_popup_active()))
         {
-            return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && (character.eq_ignore_ascii_case(&'c')
+                    || (character.eq_ignore_ascii_case(&'d')
+                        && self.chat_widget.composer_is_empty()
+                        && self.chat_widget.no_modal_or_popup_active()))
+            {
+                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            }
+            if crate::key_hint::ctrl(KeyCode::Char('r')).is_press(*key)
+                && self.overlay.is_none()
+                && self.can_retry_reconnect()
+                && !self.key_chord_matcher.is_pending()
+                && self.chat_widget.accepts_reconnect_shortcut()
+                && !self
+                    .chat_widget
+                    .active_view_is(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
+            {
+                self.retry_reconnect();
+                return Ok(AppRunControl::Continue);
+            }
         }
         let screen_size = tui.screen_size_for_event(&event)?;
         let draws_history = matches!(

@@ -224,10 +224,44 @@ impl App {
         ) {
             self.begin_reconnect();
             self.reconnect.failed = true;
-            self.chat_widget.reconnect_failed();
+            self.chat_widget.reconnect_failed(/*can_retry*/ false);
             return true;
         }
         self.begin_reconnect_inner(/*preserve_startup_input*/ true)
+    }
+
+    pub(super) fn offline_overview_notice(&self) -> &'static str {
+        if self.can_retry_reconnect() {
+            "Reconnect failed — return to the conversation and press Ctrl+R to retry"
+        } else if self.reconnect.failed {
+            "Reconnect failed — agent list is stale; relaunch to retry"
+        } else {
+            "Reconnecting — agent list is stale"
+        }
+    }
+
+    pub(super) fn can_retry_reconnect(&self) -> bool {
+        self.reconnect.offline
+            && self.reconnect.failed
+            && !matches!(
+                self.app_server_target,
+                AppServerTarget::Embedded | AppServerTarget::Cloud
+            )
+            && !matches!(
+                self.reconnect.presentation,
+                ReconnectPresentation::Startup(_)
+            )
+            && self.reconnect_thread_id().is_some()
+    }
+
+    // Let the event loop start a fresh bounded attempt without pausing input again.
+    pub(super) fn retry_reconnect(&mut self) {
+        self.reconnect.presentation = ReconnectPresentation::Conversation;
+        self.reconnect.failed = false;
+        self.chat_widget.show_reconnecting();
+        if let Ok(mut state) = self.agents_overview.view_state.lock() {
+            state.connection_notice = Some(self.offline_overview_notice());
+        }
     }
 
     pub(super) fn reconnect_thread_id(&self) -> Option<ThreadId> {
@@ -339,7 +373,7 @@ impl App {
                 || self.reconnect.presentation == ReconnectPresentation::Overview)
                 && let Ok(mut state) = self.agents_overview.view_state.lock()
             {
-                state.connection_notice = Some("Reconnecting — agent list is stale");
+                state.connection_notice = Some(self.offline_overview_notice());
             }
             if preserve_startup_input {
                 // Draining admission never reopens. Wait for this connection to close before

@@ -977,3 +977,16 @@ async fn app_server_mcp_startup_next_reported_start_reactivates_progress() {
     assert!(summary_text.contains("MCP startup incomplete (failed: runtime)"));
     assert!(!chat.bottom_pane.is_task_running());
 }
+
+#[tokio::test]
+async fn disconnect_drops_stale_mcp_activity_but_keeps_an_active_turn_busy() {
+    for running in [false, true] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        notify_mcp_status(&mut chat, "slow", McpServerStartupState::Starting);
+        if running {
+            handle_turn_started(&mut chat, "turn-1");
+        }
+        chat.pause_for_disconnect();
+        assert_eq!(chat.bottom_pane.is_task_running(), running);
+    }
+}

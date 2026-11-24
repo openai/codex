@@ -3317,8 +3317,13 @@ fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
                     assert_eq!(chat.bottom_pane.composer_text(), "earlier\ndescribe\nx");
                     chat.on_images_prepared(id);
                 } else if scenario == "disconnect" {
+                    chat.bottom_pane
+                        .reset_status_timer(std::time::Duration::from_secs(/*secs*/ 3600));
                     chat.pause_for_disconnect();
-                    chat.reconnect_failed();
+                    let reconnecting = render_bottom_popup(&chat, /*width*/ 80);
+                    assert!(reconnecting.contains("Reconnecting to server…"));
+                    assert!(!reconnecting.contains("1h"));
+                    chat.reconnect_failed(/*can_retry*/ true);
                     assert_eq!(chat.bottom_pane.composer_text(), "describe");
                     assert_eq!(
                         chat.bottom_pane.composer_draft_snapshot().local_images,
