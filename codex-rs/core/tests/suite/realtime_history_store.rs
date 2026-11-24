@@ -22,6 +22,7 @@ use codex_thread_store::ThreadPage;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreFuture;
+use codex_thread_store::ThreadStoreResult;
 use codex_thread_store::UpdateThreadMetadataParams;
 use std::any::Any;
 use std::collections::HashSet;
@@ -104,6 +105,10 @@ macro_rules! delegate_store_methods {
 }
 
 impl ThreadStore for HostedClockStore {
+    fn model_ids(&self) -> ThreadStoreResult<Arc<dyn codex_state::SessionModelIdStore>> {
+        self.inner.model_ids()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

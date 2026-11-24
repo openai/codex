@@ -45,6 +45,7 @@ use codex_thread_store::StoredThreadHistory;
 use codex_thread_store::ThreadPage;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreFuture;
+use codex_thread_store::ThreadStoreResult;
 use codex_thread_store::UpdateThreadMetadataParams;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -112,6 +113,10 @@ macro_rules! delegate_store_methods {
 }
 
 impl ThreadStore for GatedCheckpointStore {
+    fn model_ids(&self) -> ThreadStoreResult<Arc<dyn codex_state::SessionModelIdStore>> {
+        self.inner.model_ids()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

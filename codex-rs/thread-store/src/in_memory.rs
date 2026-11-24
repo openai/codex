@@ -936,8 +936,8 @@ impl InMemoryThreadStore {
 }
 
 impl ThreadStore for InMemoryThreadStore {
-    fn model_ids(&self) -> Option<Arc<dyn codex_state::SessionModelIdStore>> {
-        Some(self.model_ids.clone())
+    fn model_ids(&self) -> ThreadStoreResult<Arc<dyn codex_state::SessionModelIdStore>> {
+        Ok(self.model_ids.clone())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
