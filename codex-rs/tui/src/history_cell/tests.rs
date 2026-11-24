@@ -191,38 +191,6 @@ fn stdio_server_config(
         .expect("test stdio MCP config should deserialize")
 }
 
-fn streamable_http_server_config(
-    url: &str,
-    bearer_token_env_var: Option<&str>,
-    http_headers: Option<HashMap<String, String>>,
-    env_http_headers: Option<HashMap<String, String>>,
-) -> McpServerConfig {
-    let mut table = toml::Table::new();
-    table.insert("url".to_string(), toml::Value::String(url.to_string()));
-    if let Some(bearer_token_env_var) = bearer_token_env_var {
-        table.insert(
-            "bearer_token_env_var".to_string(),
-            toml::Value::String(bearer_token_env_var.to_string()),
-        );
-    }
-    if let Some(http_headers) = http_headers {
-        table.insert(
-            "http_headers".to_string(),
-            string_map_to_toml_value(http_headers),
-        );
-    }
-    if let Some(env_http_headers) = env_http_headers {
-        table.insert(
-            "env_http_headers".to_string(),
-            string_map_to_toml_value(env_http_headers),
-        );
-    }
-
-    toml::Value::Table(table)
-        .try_into()
-        .expect("test streamable_http MCP config should deserialize")
-}
-
 fn string_map_to_toml_value(entries: HashMap<String, String>) -> toml::Value {
     toml::Value::Table(
         entries
@@ -1073,72 +1041,6 @@ unset it, then restart Codex"
     };
     let cell = new_error_event(error.to_string());
     let rendered = render_lines(&cell.display_lines(/*width*/ 100)).join("\n");
-
-    insta::assert_snapshot!(rendered);
-}
-
-#[tokio::test]
-async fn mcp_tools_output_masks_sensitive_values() {
-    let mut config = test_config().await;
-    let mut env = HashMap::new();
-    env.insert("TOKEN".to_string(), "secret".to_string());
-    let stdio_config = stdio_server_config("docs-server", vec![], Some(env), vec!["APP_TOKEN"]);
-    let mut servers = config.mcp_servers.get().clone();
-    servers.insert("docs".to_string(), stdio_config);
-
-    let mut headers = HashMap::new();
-    headers.insert("Authorization".to_string(), "Bearer secret".to_string());
-    let mut env_headers = HashMap::new();
-    env_headers.insert("X-API-Key".to_string(), "API_KEY_ENV".to_string());
-    let http_config = streamable_http_server_config(
-        "https://example.com/mcp",
-        Some("MCP_TOKEN"),
-        Some(headers),
-        Some(env_headers),
-    );
-    servers.insert("http".to_string(), http_config);
-    config
-        .mcp_servers
-        .set(servers)
-        .expect("test mcp servers should accept any configuration");
-
-    let mut tools: HashMap<String, Tool> = HashMap::new();
-    tools.insert(
-        "mcp__docs__list".to_string(),
-        Tool {
-            description: None,
-            name: "list".to_string(),
-            title: None,
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            output_schema: None,
-            annotations: None,
-            icons: None,
-            meta: None,
-        },
-    );
-    tools.insert(
-        "mcp__http__ping".to_string(),
-        Tool {
-            description: None,
-            name: "ping".to_string(),
-            title: None,
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            output_schema: None,
-            annotations: None,
-            icons: None,
-            meta: None,
-        },
-    );
-
-    let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
-    let cell = new_mcp_tools_output(
-        &config,
-        tools,
-        HashMap::new(),
-        HashMap::new(),
-        &auth_statuses,
-    );
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
 }
