@@ -47,7 +47,15 @@ async fn server_with_keys(keys: Value) -> (MockServer, String) {
 async fn verifies_production_compatible_archive_and_rejects_tampering() {
     let cache = SigningKeyCache::default();
     let (archive, fixture) = signed_fixture();
-    let (_server, base_url) = server_with_keys(fixture["signing_keys_response"].clone()).await;
+    // Legacy servers included eval keys in the same list as marketplace keys for all callers.
+    let mut keys = fixture["signing_keys_response"].clone();
+    let mut eval_key = keys["keys"][0].clone();
+    eval_key["key_id"] = json!("old-eval-key");
+    eval_key["purpose"] = json!("EVAL_PLUGIN_RELEASE_ARCHIVE_SIGNING");
+    keys["keys"].as_array_mut().unwrap().push(eval_key.clone());
+    eval_key["key_id"] = json!("scoped-eval-key");
+    keys["eval_keys"] = json!([eval_key]);
+    let (_server, base_url) = server_with_keys(keys).await;
     let auth = auth_headers("user-token", "account");
     let metadata = download(&fixture["signing"]);
 
@@ -86,6 +94,31 @@ async fn verifies_production_compatible_archive_and_rejects_tampering() {
         Err(ArchiveVerificationFailure::SigningKeysUnavailable)
     );
 
+    let mut eval_signing = fixture["signing"].clone();
+    eval_signing["key_id"] = json!("old-eval-key");
+    assert_eq!(
+        download(&eval_signing)
+            .verify(
+                archive.clone(),
+                &base_url,
+                &cache,
+                key_request(auth.clone())
+            )
+            .await,
+        Err(ArchiveVerificationFailure::UnsupportedKeyPurpose)
+    );
+    eval_signing["key_id"] = json!("scoped-eval-key");
+    assert_eq!(
+        download(&eval_signing)
+            .verify(
+                archive.clone(),
+                &base_url,
+                &cache,
+                key_request(auth.clone())
+            )
+            .await,
+        Ok((archive.clone(), PluginArchiveVerification::Verified))
+    );
     let mut altered_archive = archive.clone();
     altered_archive[0] ^= 1;
     assert_eq!(

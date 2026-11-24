@@ -375,8 +375,11 @@ async fn canceled_refresh_leaves_waiter_free_to_fetch_new_keys() {
 #[tokio::test]
 async fn rejects_invalid_key_responses() {
     let valid = key_response();
+    let mut eval_key = valid["keys"][0].clone();
+    eval_key["purpose"] = json!(EVAL_ARCHIVE_PURPOSE);
     for response in [
         json!({"keys": [], "cache_ttl_seconds": 600}),
+        json!({"keys": valid["keys"], "eval_keys": [eval_key], "cache_ttl_seconds": 600}),
         json!({"keys": valid["keys"], "cache_ttl_seconds": -1}),
     ] {
         let server = MockServer::start().await;
@@ -398,5 +401,58 @@ async fn rejects_invalid_key_responses() {
                 .await,
             Err(ArchiveVerificationFailure::InvalidSigningKeysResponse)
         );
+    }
+}
+
+#[tokio::test]
+async fn eval_key_cache_requires_the_same_endpoint_account_and_token() {
+    let server = MockServer::start().await;
+    let cache = SigningKeyCache::default();
+    let mut keys = key_response();
+    let mut eval_key = keys["keys"][0].clone();
+    eval_key["key_id"] = json!("eval-key");
+    eval_key["purpose"] = json!(EVAL_ARCHIVE_PURPOSE);
+    keys["eval_keys"] = json!([eval_key]);
+    Mock::given(method("GET"))
+        .and(path("/first/ps/plugins/signing-keys"))
+        .and(header("authorization", "Bearer e30.e30.b2xk"))
+        .and(header("chatgpt-account-id", "employee"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(keys))
+        .with_priority(/*p*/ 1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Other callers and endpoints publish only the marketplace key.
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(key_response()))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let eval_key: SigningKey = serde_json::from_value(eval_key).unwrap();
+    let unknown = ArchiveVerificationFailure::UnknownSigningKey;
+    for (endpoint, account, token, expected) in [
+        ("first", "employee", "e30.e30.b2xk", Ok(eval_key)),
+        ("second", "employee", "e30.e30.b2xk", Err(unknown)),
+        ("first", "other", "e30.e30.b2xk", Err(unknown)),
+        ("first", "employee", "e30.e30.bmV3", Err(unknown)),
+    ] {
+        let base_url = format!("{}/{endpoint}", server.uri());
+        let auth = auth_headers(token, account);
+        assert_eq!(
+            cache
+                .key(&base_url, "eval-key", key_request(auth.clone()))
+                .await,
+            expected
+        );
+        if expected.is_ok() {
+            assert_eq!(
+                cache
+                    .key(&base_url, "eval-key", |_| async {
+                        Err(ArchiveVerificationFailure::AuthenticationRequired)
+                    })
+                    .await,
+                Err(ArchiveVerificationFailure::AuthenticationRequired)
+            );
+        }
     }
 }

@@ -20,6 +20,7 @@ use std::time::Instant;
 use tokio::sync::Semaphore;
 
 const MARKETPLACE_ARCHIVE_PURPOSE: &str = "PLUGIN_RELEASE_ARCHIVE_SIGNING";
+const EVAL_ARCHIVE_PURPOSE: &str = "EVAL_PLUGIN_RELEASE_ARCHIVE_SIGNING";
 const MAX_CACHED_SCOPES: usize = 8;
 const MAX_SIGNING_KEYS: usize = 64;
 const MAX_SIGNING_KEYS_RESPONSE_BYTES: usize = 128 * 1024;
@@ -108,6 +109,7 @@ impl SigningKey {
     pub(crate) fn archive_kind(&self) -> &'static str {
         match self.purpose.as_str() {
             MARKETPLACE_ARCHIVE_PURPOSE => "release",
+            EVAL_ARCHIVE_PURPOSE => "eval",
             _ => "unknown",
         }
     }
@@ -263,20 +265,25 @@ async fn fetch_signing_keys(
             return Err(ArchiveVerificationFailure::InvalidSigningKeysResponse);
         }
         let mut keys = HashMap::with_capacity(key_count);
-        // Older servers published eval keys to all callers in `keys`.
-        for key in response.keys {
-            if key.key_id.is_empty()
-                || key.public_key_spki_der_base64.len() > MAX_PUBLIC_KEY_BASE64_BYTES
-                || keys.contains_key(&key.key_id)
-            {
-                return Err(ArchiveVerificationFailure::InvalidSigningKeysResponse);
+        for (list, expected_purpose) in [
+            // Older servers published eval keys to all callers in `keys`. Only `eval_keys` is scoped.
+            (response.keys, MARKETPLACE_ARCHIVE_PURPOSE),
+            (response.eval_keys, EVAL_ARCHIVE_PURPOSE),
+        ] {
+            for key in list {
+                if key.key_id.is_empty()
+                    || key.public_key_spki_der_base64.len() > MAX_PUBLIC_KEY_BASE64_BYTES
+                    || keys.contains_key(&key.key_id)
+                {
+                    return Err(ArchiveVerificationFailure::InvalidSigningKeysResponse);
+                }
+                keys.insert(
+                    key.key_id.clone(),
+                    (key.purpose == expected_purpose)
+                        .then_some(key)
+                        .ok_or(ArchiveVerificationFailure::UnsupportedKeyPurpose),
+                );
             }
-            keys.insert(
-                key.key_id.clone(),
-                (key.purpose == MARKETPLACE_ARCHIVE_PURPOSE)
-                    .then_some(key)
-                    .ok_or(ArchiveVerificationFailure::UnsupportedKeyPurpose),
-            );
         }
         let now = Instant::now();
         let expires_at = now

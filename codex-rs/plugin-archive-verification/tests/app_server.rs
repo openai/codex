@@ -23,12 +23,15 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Match;
 use wiremock::Mock;
+use wiremock::MockBuilder;
 use wiremock::MockServer;
+use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
@@ -115,6 +118,31 @@ fn bundle(bytes: Vec<u8>) -> Mock {
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
 }
 
+fn remote_plugin_install(remote_plugin_id: &str) -> MockBuilder {
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/backend-api/ps/plugins/{remote_plugin_id}/install"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+}
+
+fn remote_plugin_install_response(remote_plugin_id: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": remote_plugin_id,
+        "enabled": true,
+    }))
+}
+
+#[derive(Debug)]
+struct CacheManifestExists(PathBuf);
+
+impl Match for CacheManifestExists {
+    fn matches(&self, _request: &Request) -> bool {
+        self.0.is_file()
+    }
+}
+
 fn signing_keys(response: ResponseTemplate) -> Mock {
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/signing-keys"))
@@ -153,14 +181,8 @@ async fn unsigned_install_skips_signing_keys() -> Result<()> {
         .mount(&server)
         .await;
     bundle(fixture.archive).expect(1).mount(&server).await;
-    Mock::given(method("POST"))
-        .and(path(format!(
-            "/backend-api/ps/plugins/{REMOTE_PLUGIN_ID}/install"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": REMOTE_PLUGIN_ID,
-            "enabled": true,
-        })))
+    remote_plugin_install(REMOTE_PLUGIN_ID)
+        .respond_with(remote_plugin_install_response(REMOTE_PLUGIN_ID))
         .expect(1)
         .mount(&server)
         .await;
@@ -411,6 +433,84 @@ async fn share_checkout_verifies_before_writing_local_files() -> Result<()> {
                 json!(checkout)
             );
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn install_verifies_eval_archives_before_cloud_mutation() -> Result<()> {
+    let mut fixture = PluginArchiveSigningFixture::load()?;
+    let mut eval_key = fixture.signing_keys_response["keys"][0].clone();
+    eval_key["key_id"] = json!("scoped-eval-key");
+    eval_key["purpose"] = json!("EVAL_PLUGIN_RELEASE_ARCHIVE_SIGNING");
+    fixture.signing_keys_response["eval_keys"] = json!([eval_key]);
+    fixture.signing["key_id"] = json!("scoped-eval-key");
+    for tampered in [false, true] {
+        let server = MockServer::start().await;
+        let codex_home = TempDir::new()?;
+        let installed = codex_home.path().join(CACHE_DIR).join("1.2.3");
+        let requested_id = "linear-alias";
+        let mut plugin = catalog_plugin(&server, "1.2.3");
+        plugin["release"]["signing"] = fixture.signing.clone();
+        catalog_detail(requested_id, plugin).mount(&server).await;
+        installed_snapshot(query_param("scope", "GLOBAL"), Vec::new())
+            .mount(&server)
+            .await;
+        let archive = fixture.archive.clone();
+        bundle(if tampered {
+            tampered_archive(archive)
+        } else {
+            archive
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+        signing_keys(ResponseTemplate::new(200).set_body_json(&fixture.signing_keys_response))
+            .expect(u64::from(!tampered))
+            .mount(&server)
+            .await;
+        remote_plugin_install(requested_id)
+            .and(CacheManifestExists(installed.join(MANIFEST)))
+            .respond_with(remote_plugin_install_response(requested_id))
+            .mount(&server)
+            .await;
+        let mut app = app_server(&server, codex_home.path())?
+            .build_initialized()
+            .await?;
+        app.start_thread(Default::default()).await?;
+        let id = app
+            .send_plugin_install_request(PluginInstallParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some("caller-marketplace-is-ignored".to_owned()),
+                install_attempt_id: None,
+                plugin_name: requested_id.to_owned(),
+            })
+            .await?;
+        if tampered {
+            assert_digest_error(&mut app, id).await?;
+        } else {
+            let response: PluginInstallResponse =
+                timeout(DEFAULT_TIMEOUT, app.read_response(id)).await??;
+            assert_eq!(
+                response,
+                PluginInstallResponse {
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    apps_needing_auth: Vec::new(),
+                }
+            );
+        }
+        assert_eq!(installed.is_dir(), !tampered);
+        let requests = server
+            .received_requests()
+            .await
+            .context("recorded requests")?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|req| req.method == "POST" && req.url.path().ends_with("/install"))
+                .count(),
+            usize::from(!tampered)
+        );
     }
     Ok(())
 }
