@@ -75,6 +75,16 @@ impl ChatWidget {
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);
         }
+        self.model_picker_header(header)
+    }
+
+    fn model_picker_header(&self, mut header: Vec<Line<'static>>) -> Box<dyn Renderable> {
+        if self.model_selection_is_session_only() {
+            if self.model_catalog.provider().is_none() {
+                header.push("Showing the server’s default models.".dim().into());
+            }
+            header.push("Changes apply only to this session.".dim().into());
+        }
         Box::new(Paragraph::new(header).wrap(Wrap { trim: false }))
     }
 
@@ -175,7 +185,7 @@ impl ChatWidget {
                     secondary_action: if requires_advanced_selection {
                         None
                     } else {
-                        self.session_model_selection_action(
+                        self.session_model_shortcut(
                             model.clone(),
                             Some(preset.default_reasoning_effort),
                         )
@@ -296,7 +306,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 secondary_action: direct_effort.and_then(|effort| {
-                    self.session_model_selection_action(preset.model.clone(), Some(effort))
+                    self.session_model_shortcut(preset.model.clone(), Some(effort))
                 }),
                 actions,
                 dismiss_on_select: single_supported_effort,
@@ -323,6 +333,9 @@ impl ChatWidget {
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
+        if self.model_selection_is_session_only() && model_for_action != LUNA_RESERVE_MODEL {
+            return vec![self.select_session_model_action(model_for_action, effort_for_action)];
+        }
         let warning = effort_for_action
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
@@ -371,7 +384,8 @@ impl ChatWidget {
         selected_model: &str,
         selected_effort: Option<ReasoningEffortConfig>,
     ) -> bool {
-        if !self.collaboration_modes_enabled()
+        if self.model_selection_is_session_only()
+            || !self.collaboration_modes_enabled()
             || selected_model == LUNA_RESERVE_MODEL
             || self.active_mode_kind() != ModeKind::Plan
             || selected_model != self.current_model()
@@ -634,8 +648,7 @@ impl ChatWidget {
                 description,
                 selected_description,
                 is_current: is_current_model && Some(choice) == highlight_choice.as_ref(),
-                secondary_action: self
-                    .session_model_selection_action(model_slug.clone(), choice_effort),
+                secondary_action: self.session_model_shortcut(model_slug.clone(), choice_effort),
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -673,14 +686,13 @@ impl ChatWidget {
             });
         }
 
-        let header = Paragraph::new(Line::from(
+        let header = self.model_picker_header(vec![Line::from(
             format!("Select Reasoning Level for {model_label}").bold(),
-        ))
-        .wrap(Wrap { trim: false });
+        )]);
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(MODEL_OPTIONS_VIEW_ID),
-            header: Box::new(header),
+            header,
             items,
             initial_selected_idx,
             ..SelectionViewParams::picker()
@@ -734,21 +746,20 @@ impl ChatWidget {
                 description: Some(description.to_string()),
                 is_current: is_current_model && Some(&effort) == highlight_choice.as_ref(),
                 secondary_action: self
-                    .session_model_selection_action(model_slug.clone(), Some(effort.clone())),
+                    .session_model_shortcut(model_slug.clone(), Some(effort.clone())),
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
             });
         }
 
-        let header = Paragraph::new(vec![
+        let header = self.model_picker_header(vec![
             Line::from("Advanced Reasoning".bold()),
             Line::from("⚠ Consumes usage limits faster".cyan()),
-        ])
-        .wrap(Wrap { trim: false });
+        ]);
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(MODEL_OPTIONS_VIEW_ID),
-            header: Box::new(header),
+            header,
             items,
             ..SelectionViewParams::picker()
         });

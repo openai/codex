@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/model_picker_tests.rs
+expression: popup
+---
+  Select Model and Effort
+  Showing the server’s default models.
+  Changes apply only to this session.
+
+
+› 1. GPT-5.5  Legacy coding model.
+
+  enter select · esc back

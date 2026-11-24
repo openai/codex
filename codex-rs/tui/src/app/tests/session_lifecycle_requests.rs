@@ -1550,7 +1550,7 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
     app.chat_widget
         .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false);
-    let mut models = app.chat_widget.model_catalog().models.clone();
+    let mut models = app.chat_widget.model_catalog().models().to_vec();
     for (name, cyber) in [
         ("red", vec![CyberAccessProgram::DaybreakRed]),
         ("empty", vec![]),

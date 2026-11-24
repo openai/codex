@@ -194,6 +194,31 @@ async fn model_picker_refresh_updates_app_catalog_from_app_server() -> Result<()
     ))
     .await?;
     assert_eq!(app.model_catalog.try_list_models()?, stripped);
+
+    // Refreshing a resumed provider changes the picker, but not the defaults used below.
+    let mut other = test_thread_session(ThreadId::new(), test_path_buf("/tmp/other"));
+    other.model_provider_id = "alternate".into();
+    app.chat_widget.handle_thread_session(other);
+    let request_id = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::FetchModels { request_id } => Some(request_id),
+            _ => None,
+        })
+        .expect("provider-scoped model refresh");
+    let mut alternate = stripped[0].clone();
+    alternate.model = "alternate-only".into();
+    alternate.default_service_tier = None;
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::ApiKeyCompatModelsLoaded {
+            request_id,
+            result: Ok(vec![alternate.clone()]),
+        },
+    ))
+    .await?;
+    assert_eq!(app.model_catalog.models(), vec![alternate]);
+
     let mut config = app.config.clone();
     config.service_tier = None;
     config.features.enable(Feature::FastMode)?;

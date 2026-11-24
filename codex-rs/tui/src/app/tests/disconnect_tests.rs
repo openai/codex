@@ -443,6 +443,9 @@ where
             "account/read" => {
                 Some(json!({"result": {"account": null, "requiresOpenaiAuth": false}}))
             }
+            "modelProvider/list" => {
+                Some(json!({"error": {"code": -32601, "message": "Method not found"}}))
+            }
             "model/list" => Some(json!({"result": {"data": [], "nextCursor": null}})),
             "collaborationMode/list" => Some(json!({"result": {"data": []}})),
             "configRequirements/read" => Some(json!({"result": {"requirements": null}})),

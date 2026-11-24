@@ -122,8 +122,10 @@ impl ChatWidget {
             .set_voice_command_enabled(self.realtime_conversation_available_for_thread);
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
+        self.set_model_provider(&session.model_provider_id);
         if previous_thread_id != self.thread_id {
-            if (previous_thread_id.is_some() || cwd_changed)
+            if self.model_popup_request_id.is_none()
+                && (previous_thread_id.is_some() || cwd_changed)
                 && self.status_account_display == Some(StatusAccountDisplay::ApiKey)
             {
                 self.refresh_account_scoped_models();
@@ -152,7 +154,6 @@ impl ChatWidget {
         if let Ok(native_cwd) = session.cwd.to_abs_path() {
             self.config.cwd = native_cwd;
         }
-        self.config.model_provider_id = session.model_provider_id.clone();
         if previous_thread_id.is_none()
             && let Some(event) = crate::app::provider::refresh_list_if_present(self)
         {

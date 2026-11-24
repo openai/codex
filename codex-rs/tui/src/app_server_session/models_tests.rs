@@ -39,7 +39,7 @@ async fn model_catalog_prefetch_and_refresh_use_server_discovery() -> color_eyre
             }),
         };
         let worker = tokio::spawn(async move {
-            for _ in 0..if cloud { 1 } else { 2 } {
+            for index in 0..if cloud { 1 } else { 2 } {
                 let command = commands.recv().await.expect("model list request");
                 let CloudOperation::Request(request) = command.operation else {
                     panic!("expected model/list");
@@ -47,6 +47,7 @@ async fn model_catalog_prefetch_and_refresh_use_server_discovery() -> color_eyre
                 let params =
                     assert_matches!(*request, ClientRequest::ModelList { params, .. } => params);
                 let expected = ModelListParams {
+                    model_provider: (index == 1).then(|| "alternate".to_string()),
                     include_hidden: Some(true),
                     ..Default::default()
                 };
@@ -57,7 +58,12 @@ async fn model_catalog_prefetch_and_refresh_use_server_discovery() -> color_eyre
         let client = AppServerClient::Cloud(client);
         let mut session = AppServerSession::new(BackendId::new(), client, mode);
         session.prefetch_model_list();
-        let initial = session.prefetched_model_list.take().unwrap().await;
+        let initial = session
+            .prefetched_model_list
+            .take()
+            .unwrap()
+            .await
+            .map(|catalog| catalog.models);
         match error_code {
             _ if cloud => assert!(initial?.is_empty()),
             None => assert_eq!(initial?, vec![preset.clone()]),
@@ -66,7 +72,7 @@ async fn model_catalog_prefetch_and_refresh_use_server_discovery() -> color_eyre
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let request_id = Uuid::new_v4();
-        session.fetch_models(request_id, AppEventSender::new(tx));
+        session.fetch_models(request_id, Some("alternate"), AppEventSender::new(tx));
         let event = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await?;
         let (loaded, result) = assert_matches!(
             event,
@@ -81,4 +87,86 @@ async fn model_catalog_prefetch_and_refresh_use_server_discovery() -> color_eyre
         worker.await?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn legacy_servers_and_failed_discovery_keep_the_startup_catalog_unscoped() {
+    for (mode, version, error) in [
+        (ThreadParamsMode::Remote, Some("0.168.0"), None),
+        (ThreadParamsMode::Embedded, Some("0.168.0"), None),
+        (ThreadParamsMode::Remote, None, None),
+        (ThreadParamsMode::Remote, Some("0.169.0"), Some(-32601)),
+        (ThreadParamsMode::Remote, Some("0.170.0"), Some(-32602)),
+    ] {
+        let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
+        let client = AppServerClient::Cloud(client);
+        let request = startup_list(
+            mode,
+            client.request_handle(),
+            RequestId::Integer(1),
+            version,
+        );
+        let (catalog, ()) = tokio::join!(request, async {
+            if let Some(code) = error {
+                let mut command = commands.recv().await.unwrap();
+                let CloudOperation::Request(request) = command.operation else {
+                    panic!("expected provider discovery");
+                };
+                assert_matches!(*request, ClientRequest::ModelProviderList { .. });
+                if code == -32602 {
+                    command.response.send(Ok(Ok(json!({"data": [], "defaultProviderId": "gateway", "canChangeDefault": false})))).unwrap();
+                    command = commands.recv().await.unwrap();
+                    let CloudOperation::Request(request) = command.operation else {
+                        panic!("expected scoped discovery");
+                    };
+                    assert_matches!(*request, ClientRequest::ModelList { params, .. } if params.model_provider.as_deref() == Some("gateway"));
+                }
+                command
+                    .response
+                    .send(Ok(Err(JSONRPCErrorError {
+                        code,
+                        message: "unsupported".into(),
+                        data: None,
+                    })))
+                    .unwrap();
+            }
+            let command = commands.recv().await.unwrap();
+            let CloudOperation::Request(request) = command.operation else {
+                panic!("expected unscoped discovery");
+            };
+            assert_matches!(*request, ClientRequest::ModelList { params, .. } if params.model_provider.is_none());
+            command
+                .response
+                .send(Ok(Ok(json!({"data": [], "nextCursor": null}))))
+                .unwrap();
+        });
+        assert_eq!(catalog.unwrap().provider, None);
+    }
+}
+
+#[tokio::test]
+async fn account_update_discards_new_thread_model_metadata() {
+    use codex_app_server_client::AppServerEvent;
+    use codex_app_server_protocol::AccountUpdatedNotification;
+    use codex_app_server_protocol::ServerNotification;
+
+    let (client, _commands, events) = CloudClient::channel(/*capacity*/ 1);
+    let mut session = AppServerSession::new(
+        BackendId::new(),
+        AppServerClient::Cloud(client),
+        ThreadParamsMode::Remote,
+    );
+    session.set_available_models(crate::test_support::TEST_MODEL_PRESETS.clone());
+    events
+        .send(AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::AccountUpdated(AccountUpdatedNotification {
+                reason: None,
+                auth_mode: None,
+                plan_type: None,
+            }),
+        )))
+        .unwrap();
+    session.next_event().await.expect("account event");
+    assert_eq!(session.default_model, None);
+    assert!(session.available_models.is_empty());
 }

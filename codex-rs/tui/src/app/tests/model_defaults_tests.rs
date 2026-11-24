@@ -192,7 +192,7 @@ async fn cloud_ultrafast_toggle_updates_the_conversation_on_admission() -> Resul
                 _ => None,
             })
             .expect("Cloud catalog request");
-        let mut model = app.model_catalog.models[0].clone();
+        let mut model = app.model_catalog.models()[0].clone();
         model.model = app.chat_widget.current_model().to_owned();
         app.chat_widget.local_settings.tui.terminal_title = Some(vec!["fast-mode".into()]);
         model.default_service_tier = Some("ultrafast".into());
@@ -314,7 +314,7 @@ async fn cloud_speed_tracks_the_model_staged_for_the_next_turn() -> Result<()> {
                 _ => None,
             })
             .expect("Cloud catalog request");
-        let mut standard = app.model_catalog.models[0].clone();
+        let mut standard = app.model_catalog.models()[0].clone();
         standard.id = "standard-model".into();
         standard.model = standard.id.clone();
         standard.model_specialty = None;
@@ -455,7 +455,7 @@ async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
                 _ => None,
             })
             .expect("Cloud catalog request");
-        let mut models = app.model_catalog.models.clone();
+        let mut models = app.model_catalog.models().to_vec();
         let selected = models
             .iter_mut()
             .find(|model| model.model == "gpt-5.6-terra")
@@ -775,7 +775,7 @@ async fn changing_cloud_environment_carries_staged_settings_to_first_turn() -> R
         .await?;
     app.chat_widget
         .apply_external_edit("keep this draft".into());
-    let mut model = app.model_catalog.models[0].clone();
+    let mut model = app.model_catalog.models()[0].clone();
     model.model = "model-selected-before-switch".into();
     cloud
         .stage_cloud_model_selection(source, &model, Some(ReasoningEffortConfig::High))

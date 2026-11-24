@@ -9699,7 +9699,7 @@ pub(super) fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSe
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-test".to_string(),
-        model_provider_id: "test-provider".to_string(),
+        model_provider_id: "openai".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
@@ -12702,7 +12702,10 @@ async fn selecting_cyber_model_defaults_active_thread_to_auto_review() {
             .find(|model| model.model == "gpt-5.5")
             .expect("gpt-5.5 model");
         model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
-        app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+        app.model_catalog = Arc::new(ModelCatalog::new(
+            vec![model],
+            Some(app.config.model_provider_id.clone()),
+        ));
 
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -12820,7 +12823,10 @@ async fn changing_cyber_model_reasoning_preserves_selected_permissions() {
             .find(|model| model.model == model_name)
             .expect("current model");
         model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
-        app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+        app.model_catalog = Arc::new(ModelCatalog::new(
+            vec![model],
+            Some(app.config.model_provider_id.clone()),
+        ));
 
         assert!(
             app.apply_permission_profile_selection(PermissionProfileSelection {
@@ -12955,7 +12961,10 @@ async fn selecting_cyber_model_falls_back_to_user_when_auto_review_is_unavailabl
         .find(|model| model.model == "gpt-5.5")
         .expect("gpt-5.5 model");
     model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
-    app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+    app.model_catalog = Arc::new(ModelCatalog::new(
+        vec![model],
+        Some(app.config.model_provider_id.clone()),
+    ));
     let _ = app.config.features.disable(Feature::GuardianApproval);
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
@@ -13010,7 +13019,10 @@ async fn selecting_cyber_model_respects_auto_review_requirements() {
             .find(|model| model.model == "gpt-5.5")
             .expect("gpt-5.5 model");
         model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
-        app.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+        app.model_catalog = Arc::new(ModelCatalog::new(
+            vec![model],
+            Some(app.config.model_provider_id.clone()),
+        ));
 
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())

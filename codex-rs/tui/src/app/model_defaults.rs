@@ -103,7 +103,7 @@ impl App {
                 );
                 return;
             };
-            let preset = self.model_catalog.models.iter().find(|preset| {
+            let preset = self.model_catalog.models().iter().find(|preset| {
                 preset.model == model
                     && effort.as_ref().is_none_or(|effort| {
                         *effort == preset.default_reasoning_effort
@@ -169,7 +169,7 @@ impl App {
                     self.chat_widget.config_ref(),
                     &self.local_settings.notices,
                     &model,
-                    &self.model_catalog.models,
+                    self.model_catalog.models(),
                 ),
             };
             if !self.send_model_settings_update(app_server, params).await {

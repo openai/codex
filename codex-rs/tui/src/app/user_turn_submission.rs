@@ -65,7 +65,7 @@ pub(super) async fn try_submit_user_turn(
             && !app.chat_widget.side_conversation_active()
             && !app.side_threads.contains_key(&thread_id);
         crate::daybreak::program_for_turn(
-            &app.chat_widget.model_catalog().models,
+            app.chat_widget.model_catalog().models(),
             model,
             app.chat_widget.daybreak_account_eligible(),
             enabled,

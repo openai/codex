@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/session_model_selection_tests.rs
+expression: popup
+---
+  Select Model and Effort
+  Changes apply only to this session.
+
+
+› 1. GPT-5.5 (current)  Legacy coding model.
+
+  enter session · esc back

@@ -2044,7 +2044,7 @@ async fn shared_overview_shows_only_root_sessions() {
     threads.push(attached);
     let default_model = app
         .model_catalog
-        .models
+        .models()
         .first()
         .expect("test model catalog");
     threads[0].model = Some(default_model.model.clone());

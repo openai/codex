@@ -88,9 +88,10 @@ async fn session_header_uses_catalog_display_name_without_changing_model() {
         let mut preset = get_available_model(&chat, "gpt-5.5");
         preset.model = slug.to_string();
         preset.display_name = display_name.unwrap_or_default().to_string();
-        chat.model_catalog = Arc::new(ModelCatalog::new(
+        set_test_model_catalog(
+            &mut chat,
             display_name.map(|_| preset).into_iter().collect(),
-        ));
+        );
         chat.show_welcome_banner = first_event;
         chat.local_settings.tui.show_tooltips = false;
         let mut session = configured_thread_session(ThreadId::new());
@@ -296,7 +297,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     let mut preset = get_available_model(&chat, "gpt-5.5");
     preset.model = "faster-model".to_string();
     preset.display_name = "Faster Model".to_string();
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
     let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
 
     let notification = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));

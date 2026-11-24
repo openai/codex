@@ -53,11 +53,11 @@ async fn resumed_initial_messages_render_history() {
         daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+    set_test_model_catalog(&mut chat, vec![model]);
     chat.handle_thread_session(configured.clone());
     assert!(
         chat.model_catalog
-            .models
+            .models()
             .iter()
             .all(|model| model.available_access_programs.is_none()),
         "access from the launch directory must not carry over to the attached project"

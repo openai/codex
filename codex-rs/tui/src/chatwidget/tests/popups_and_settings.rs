@@ -3411,7 +3411,7 @@ async fn model_picker_refreshes_startup_catalog() {
         auto.description = "Auto model".to_string();
         refreshed.push(auto);
         startup[0].show_in_picker = !hidden_startup;
-        chat.model_catalog = Arc::new(ModelCatalog::new(startup.clone()));
+        set_test_model_catalog(&mut chat, startup.clone());
         chat.open_model_popup();
         assert!(
             std::iter::from_fn(|| rx.try_recv().ok())
@@ -3451,7 +3451,7 @@ async fn model_picker_queued_all_models_uses_refreshed_catalog() {
     let mut auto = preset.clone();
     auto.model = "codex-auto-test".to_string();
     auto.id = auto.model.clone();
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![auto, preset]));
+    set_test_model_catalog(&mut chat, vec![auto, preset]);
     chat.open_model_popup();
     assert_matches!(rx.try_recv(), Ok(AppEvent::FetchModels { .. }));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -3483,7 +3483,7 @@ async fn model_picker_refresh_preserves_highlight() {
         for preset in &mut presets {
             preset.display_name = "Shared display name".to_string();
         }
-        chat.model_catalog = Arc::new(ModelCatalog::new(presets.clone()));
+        set_test_model_catalog(&mut chat, presets.clone());
         chat.open_model_popup();
         chat.handle_key_event(KeyEvent::from(KeyCode::Down));
         if reasoning_submenu {
@@ -3553,7 +3553,7 @@ async fn model_picker_refresh_preserves_dismissal_and_reasoning_submenu() {
         chat.thread_id = Some(ThreadId::new());
         let preset = get_available_model(&chat, "gpt-5.5");
         let refreshed = chat.model_catalog.try_list_models().unwrap();
-        chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset.clone()]));
+        set_test_model_catalog(&mut chat, vec![preset.clone()]);
         chat.open_model_popup();
         assert_matches!(rx.try_recv(), Ok(AppEvent::FetchModels { .. }));
         if explicit_all_models {
@@ -4032,7 +4032,7 @@ async fn reasoning_up_shortcuts_reach_max_in_default_and_plan_modes() {
                     .expect("expected plan collaboration mode");
                 chat.set_collaboration_mask(plan_mask);
             }
-            chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+            set_test_model_catalog(&mut chat, vec![preset]);
             if plan_mode {
                 chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
             } else {
@@ -4109,7 +4109,7 @@ async fn reasoning_up_shortcut_does_not_silently_enter_ultra() {
                 description: "Ultra reasoning".to_string(),
             },
         ]);
-        chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+        set_test_model_catalog(&mut chat, vec![preset]);
         chat.set_model(model);
 
         chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
@@ -4153,7 +4153,7 @@ async fn reasoning_down_shortcut_can_leave_advanced_effort() {
             description: "Maximum reasoning".to_string(),
         },
     ]);
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
 
     for (current, expected) in [
         (ReasoningEffortConfig::Ultra, ReasoningEffortConfig::Max),

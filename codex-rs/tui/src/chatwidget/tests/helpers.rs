@@ -203,10 +203,13 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
     )
 }
 
-pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
+pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
     Arc::new(
-        ModelCatalog::new(crate::test_support::TEST_MODEL_PRESETS.clone())
-            .with_collaboration_modes(
+        ModelCatalog::new(
+            crate::test_support::TEST_MODEL_PRESETS.clone(),
+            Some(config.model_provider_id.clone()),
+        )
+        .with_collaboration_modes(
             codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets(),
         ),
     )
@@ -328,7 +331,10 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 pub(crate) fn set_test_model_catalog(chat: &mut ChatWidget, models: Vec<ModelPreset>) {
-    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        Some(chat.config.model_provider_id.clone()),
+    ));
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
@@ -393,7 +399,7 @@ pub(crate) fn set_fast_mode_test_catalog_for_models(
     .map(Into::into)
     .collect();
 
-    Arc::make_mut(&mut chat.model_catalog).models = models;
+    Arc::make_mut(&mut chat.model_catalog).set_models(models);
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (

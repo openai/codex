@@ -328,7 +328,7 @@ async fn backend_banner_fallback_candidates_and_notice_follow_selected_model() {
         show_in_picker: model != "hidden-model",
         ..template.clone()
     });
-    chat.model_catalog = Arc::new(ModelCatalog::new(models.to_vec()));
+    set_test_model_catalog(&mut chat, models.to_vec());
     let mut response = banner_response(Some("inline"), json!([]));
     response.rate_limit_upsell.as_mut().unwrap()["blocked_model_slug"] = json!("test-model-a");
     response.rate_limit_upsell.as_mut().unwrap()["fallback_model_slugs"] =

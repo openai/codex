@@ -1302,7 +1302,7 @@ impl App {
                     && self.chat_widget.config_ref().model_provider_id == OPENAI_PROVIDER_ID
                     && !self
                         .model_catalog
-                        .models
+                        .models()
                         .iter()
                         .any(|preset| preset.model == model)
                 {

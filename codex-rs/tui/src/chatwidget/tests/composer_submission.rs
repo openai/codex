@@ -284,7 +284,7 @@ async fn hidden_shell_paste_restored_after_image_rejection_submits_literal_promp
         .expect("current model")
         .input_modalities
         .retain(|modality| *modality != InputModality::Image);
-    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+    set_test_model_catalog(&mut chat, models);
     chat.set_remote_image_urls(vec!["https://example.com/image.png".to_string()]);
     let payload = paste_hidden_shell_payload(&mut chat);
 
@@ -538,7 +538,7 @@ async fn handoff_image_survives_model_rejection_and_submission_failure() {
             .input_modalities
             .retain(|modality| *modality != InputModality::Image);
     }
-    source.model_catalog = Arc::new(ModelCatalog::new(models));
+    set_test_model_catalog(&mut source, models);
     source.sync_image_paste_enabled();
     let path = PathBuf::from("image.png");
     let action = source.handle_restricted_key(
@@ -588,7 +588,7 @@ async fn handoff_image_survives_model_rejection_and_submission_failure() {
             .input_modalities
             .retain(|modality| *modality != InputModality::Image);
     }
-    destination.model_catalog = Arc::new(ModelCatalog::new(unsupported_models));
+    set_test_model_catalog(&mut destination, unsupported_models);
     destination.handle_key_event(KeyCode::Enter.into());
     assert_no_submit_op(&mut destination_ops);
     assert_eq!(
@@ -600,7 +600,7 @@ async fn handoff_image_survives_model_rejection_and_submission_failure() {
     );
 
     // A capable destination admits the image; a subsequent submission failure restores it.
-    destination.model_catalog = Arc::new(ModelCatalog::new(supported_models));
+    set_test_model_catalog(&mut destination, supported_models);
     destination.handle_key_event(KeyCode::Enter.into());
     assert_matches!(next_submit_op(&mut destination_ops), Op::UserTurn { .. });
     let client_id = destination
@@ -3277,7 +3277,7 @@ fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
                             .input_modalities
                             .retain(|modality| *modality != InputModality::Image);
                     }
-                    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+                    set_test_model_catalog(&mut chat, models);
                     chat.on_images_prepared(id);
                     assert_eq!(chat.bottom_pane.composer_text(), "describe\nnew draft");
                 } else if scenario == "escape" || scenario == "ctrl_c" {

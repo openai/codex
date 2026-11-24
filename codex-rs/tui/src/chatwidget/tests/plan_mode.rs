@@ -26,7 +26,7 @@ fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSession
         fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
-        model_provider_id: "test-provider".to_string(),
+        model_provider_id: "openai".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
@@ -1474,7 +1474,7 @@ async fn plan_slash_command_with_hidden_shell_paste_rejected_image_remains_liter
         .expect("current model")
         .input_modalities
         .retain(|modality| *modality != InputModality::Image);
-    Arc::make_mut(&mut chat.model_catalog).models = models;
+    Arc::make_mut(&mut chat.model_catalog).set_models(models);
     let payload = paste_hidden_plan_shell_payload(&mut chat);
     chat.set_remote_image_urls(vec!["https://example.com/image.png".to_string()]);
 
@@ -1549,7 +1549,7 @@ async fn rejected_initial_image_does_not_submit_later_queued_prompt() {
         .expect("current model")
         .input_modalities
         .retain(|modality| *modality != InputModality::Image);
-    Arc::make_mut(&mut chat.model_catalog).models = models;
+    Arc::make_mut(&mut chat.model_catalog).set_models(models);
     let mut initial_message = UserMessage::from("initial prompt");
     initial_message.remote_image_urls = vec!["https://example.com/image.png".to_string()];
     chat.initial_user_message = Some(initial_message);

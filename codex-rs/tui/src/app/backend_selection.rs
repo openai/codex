@@ -542,7 +542,7 @@ impl App {
         self.file_search.on_user_query(String::new());
         self.bind_backend_workspace(destination, cwd);
         self.model_catalog = Arc::new(
-            ModelCatalog::new(bootstrap.available_models)
+            ModelCatalog::new(bootstrap.available_models, bootstrap.catalog_provider)
                 .for_backend(destination.backend_id(), &mut self.provider_writes)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );

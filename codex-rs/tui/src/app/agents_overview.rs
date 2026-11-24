@@ -1510,12 +1510,11 @@ impl App {
         {
             // Bootstrap's fallback model may be seeded from the client. Resolve tiers
             // against the server catalog when config/read cleared the model.
-            config.model = self
-                .model_catalog
-                .models
+            let defaults = self.model_catalog.default_models();
+            config.model = defaults
                 .iter()
                 .find(|model| model.is_default)
-                .or_else(|| self.model_catalog.models.first())
+                .or_else(|| defaults.first())
                 .map(|model| model.model.clone());
         }
         Some((config, remote_cwd))

@@ -105,6 +105,7 @@ async fn account_updated_with_backend_only_auth_enables_thread_usage() -> Result
 
     assert!(!app.chat_widget.has_chatgpt_account());
     assert!(app.chat_widget.has_codex_backend_auth());
+    assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::FetchModels { .. }));
     app.chat_widget.add_status_output(
         /*refreshing_rate_limits*/ false, /*request_id*/ None,
     );

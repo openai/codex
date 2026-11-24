@@ -157,7 +157,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
     });
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
+    set_test_model_catalog(&mut chat, vec![model]);
 
     chat.thread_usage.replaying_turn_completion = true;
     chat.on_cyber_policy_error();
@@ -262,7 +262,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
     });
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![daybreak.clone()]));
+    set_test_model_catalog(&mut chat, vec![daybreak.clone()]);
     chat.set_model("gpt-5.6-sol");
     chat.daybreak_enabled = true;
     handle_turn_started(&mut chat, "daybreak-recourse");
@@ -310,7 +310,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![astra]));
+    set_test_model_catalog(&mut chat, vec![astra]);
     chat.set_model("gpt-6-astra");
     handle_turn_started(&mut chat, "astra-recourse");
     safety_recourse::on_metadata(
@@ -348,7 +348,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     assert!(!picker.contains("Enable Daybreak"));
     chat.handle_key_event(KeyCode::Esc.into());
 
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![daybreak]));
+    set_test_model_catalog(&mut chat, vec![daybreak]);
     chat.set_model("gpt-5.6-sol");
     chat.daybreak_enabled = false;
     chat.set_parent_owned_thread();
@@ -4608,7 +4608,7 @@ async fn status_line_model_with_reasoning_speed_footer_snapshots() {
             description: String::new(),
         },
     ]);
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
 
     for (tier_id, tier_name, snapshot) in [
         (

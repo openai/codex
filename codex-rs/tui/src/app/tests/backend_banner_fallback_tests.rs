@@ -457,7 +457,10 @@ async fn backend_banner_fallback_preserves_permissions_for_first_eligible_cyber_
     cyber_model.model = "cyber-test-model".into();
     cyber_model.model_specialty = Some(MODEL_SPECIALTY_CYBER.into());
     models.push(cyber_model.clone());
-    app.model_catalog = Arc::new(ModelCatalog::new(models));
+    app.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        Some(app.config.model_provider_id.clone()),
+    ));
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut init = app.chatwidget_init_for_forked_or_resumed_thread(
         &mut tui,

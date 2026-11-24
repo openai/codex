@@ -430,7 +430,7 @@ impl ChatWidget {
         let can_enable_daybreak =
             self.daybreak_account_eligible() && !self.side_conversation_active();
         crate::daybreak::notice_for_setting(
-            &self.model_catalog.models,
+            self.model_catalog.models(),
             self.current_model(),
             self.daybreak_enabled && can_enable_daybreak,
             can_enable_daybreak,

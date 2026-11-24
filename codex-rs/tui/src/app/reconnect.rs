@@ -484,7 +484,7 @@ impl App {
             connection.is_managed_daemon = connection.is_local_daemon && managed_daemon;
         }
         self.model_catalog = Arc::new(
-            ModelCatalog::new(bootstrap.available_models)
+            ModelCatalog::new(bootstrap.available_models, bootstrap.catalog_provider)
                 .for_backend(app_server.backend_id(), &mut self.provider_writes)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );

@@ -1632,6 +1632,8 @@ pub(crate) enum AppEvent {
         model: String,
     },
 
+    /// Adopt the widget's active catalog without requesting another model list.
+    SyncModelCatalog,
     /// Fetch the current catalog even when cached models produce no picker.
     FetchModels {
         request_id: uuid::Uuid,

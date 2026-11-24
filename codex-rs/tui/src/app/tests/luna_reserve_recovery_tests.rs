@@ -42,7 +42,7 @@ pub(super) fn configure_reserve_catalog(app: &mut App) {
     let mut high = original.supported_reasoning_efforts[0].clone();
     high.effort = ReasoningEffortConfig::High;
     original.supported_reasoning_efforts.push(high);
-    Arc::make_mut(&mut app.model_catalog).models = models;
+    Arc::make_mut(&mut app.model_catalog).set_models(models);
     let mut tui = crate::tui::test_support::make_test_tui().unwrap();
     let mut init = app.chatwidget_init_for_forked_or_resumed_thread(
         &mut tui,

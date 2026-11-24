@@ -11,7 +11,7 @@ async fn clipped_full_access_confirmation_discloses_hidden_warning_text() {
         chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
         let current_model = chat.current_model().to_owned();
         Arc::make_mut(&mut chat.model_catalog)
-            .models
+            .models_mut()
             .iter_mut()
             .find(|model| model.model == current_model)
             .expect("the selected model is in the catalog")

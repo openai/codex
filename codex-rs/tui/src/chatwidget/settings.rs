@@ -49,7 +49,7 @@ impl ChatWidget {
         } else if !self.daybreak_account_eligible() {
             None
         } else {
-            match crate::daybreak::availability(&self.model_catalog.models) {
+            match crate::daybreak::availability(self.model_catalog.models()) {
                 Some(true) => Some("Enable broader access for cybersecurity work"),
                 Some(false) => Some("Learn about broader access for cybersecurity work"),
                 None => Some("Manage broader access for cybersecurity work"),
@@ -295,7 +295,10 @@ impl ChatWidget {
         self.quota_plan = None;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
-        if api_key_changed {
+        if api_key_changed
+            || (self.model_catalog.models().is_empty()
+                && self.thread_params_mode != crate::ThreadParamsMode::Cloud)
+        {
             self.refresh_account_scoped_models();
         }
         self.set_daybreak_enabled(self.daybreak_enabled);
@@ -353,7 +356,7 @@ impl ChatWidget {
 
     pub(crate) fn should_disable_daybreak(&self, model: &str) -> bool {
         self.daybreak_enabled
-            && self.model_catalog.models.iter().any(|entry| {
+            && self.model_catalog.models().iter().any(|entry| {
                 entry.model == model
                     && crate::daybreak::availability(std::slice::from_ref(entry)) == Some(false)
             })
@@ -570,7 +573,7 @@ impl ChatWidget {
             &self.current_workspace_roots,
         );
         self.current_cwd = cwd;
-        self.config.model_provider_id = settings.model_provider.clone();
+        self.set_model_provider(&settings.model_provider);
         self.set_daybreak_enabled(self.daybreak_enabled);
         self.set_service_tier(settings.service_tier.clone());
         if let Err(err) = self

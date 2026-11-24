@@ -35,6 +35,7 @@ async fn collaboration_catalog_is_optional_and_refetched_on_bootstrap() -> Resul
             let (stream, _) = listener.accept().await?;
             let mut socket = tokio_tungstenite::accept_async(stream).await?;
             let mut catalog_requests = 0;
+            let mut provider = "first";
             while let Some(Ok(Message::Text(text))) = socket.next().await {
                 let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                     continue;
@@ -44,7 +45,14 @@ async fn collaboration_catalog_is_optional_and_refetched_on_bootstrap() -> Resul
                     "account/read" => {
                         json!({"result": {"account": null, "requiresOpenaiAuth": false}})
                     }
-                    "model/list" => json!({"result": {"data": [], "nextCursor": null}}),
+                    "modelProvider/list" => {
+                        json!({"result": {"data": [], "defaultProviderId": provider, "canChangeDefault": false}})
+                    }
+                    "model/list" => {
+                        assert_eq!(request.params.unwrap()["modelProvider"], provider);
+                        provider = "second";
+                        json!({"result": {"data": [], "nextCursor": null}})
+                    }
                     "configRequirements/read" => json!({"result": {"requirements": null}}),
                     "collaborationMode/list" => {
                         assert_eq!(request.params, Some(json!({})));
@@ -70,12 +78,15 @@ async fn collaboration_catalog_is_optional_and_refetched_on_bootstrap() -> Resul
             crate::connect_remote_app_server(endpoint).await?,
             ThreadParamsMode::Remote,
         );
+        session.prefetch_model_list();
         let initial = session.bootstrap(&config).await?;
+        assert_eq!(initial.catalog_provider.as_deref(), Some("first"));
         assert_eq!(
             (initial.default_model, initial.collaboration_modes),
             (Some("task-model".into()), vec![])
         );
         let refreshed = session.bootstrap(&config).await?;
+        assert_eq!(refreshed.catalog_provider.as_deref(), Some("second"));
         assert_eq!(
             refreshed.collaboration_modes,
             vec![CollaborationModeMask {

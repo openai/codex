@@ -120,7 +120,7 @@ async fn service_tier_commands_and_saved_selection_respect_independent_speed_pol
             })
             .collect();
         preset.default_service_tier = Some("ultrafast".to_string());
-        chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+        set_test_model_catalog(&mut chat, vec![preset]);
         chat.set_feature_enabled(Feature::FastMode, fast_enabled);
         chat.set_feature_enabled(Feature::UltrafastMode, ultrafast_enabled);
         chat.set_service_tier(Some("ultrafast".to_string()));
@@ -173,7 +173,7 @@ async fn service_tier_commands_lowercase_catalog_names() {
         .find(|tier| tier.id == ServiceTier::Fast.request_value())
         .expect("fast tier")
         .name = "Fast".to_string();
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
 
     assert_eq!(
         chat.current_model_service_tier_commands(),
@@ -479,7 +479,7 @@ async fn queued_settings_selection_applies_before_next_input() {
     let mut preset = get_available_model(&chat, "gpt-5.6-terra");
     preset.supported_reasoning_efforts.truncate(1);
     let selected_effort = preset.supported_reasoning_efforts[0].effort.clone();
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
     handle_turn_started(&mut chat, "turn-1");
 
     queue_composer_text_with_tab(&mut chat, "/model");
@@ -2279,7 +2279,7 @@ async fn assert_daybreak_catalog_and_account_gates(provider_id: &str) {
         daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model.clone()]));
+    set_test_model_catalog(&mut chat, vec![model.clone()]);
 
     chat.set_daybreak_enabled(/*enabled*/ false);
     chat.bottom_pane
@@ -2300,7 +2300,7 @@ async fn assert_daybreak_catalog_and_account_gates(provider_id: &str) {
         lines_to_single_string(&cells[0])
     );
 
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(Vec::new()));
+    set_test_model_catalog(&mut chat, Vec::new());
     chat.dispatch_command(SlashCommand::Daybreak);
     let cells = drain_insert_history(&mut rx);
     assert_chatwidget_snapshot!(
@@ -2323,7 +2323,7 @@ async fn assert_daybreak_catalog_and_account_gates(provider_id: &str) {
         .unwrap()
         .cyber
         .push(codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue);
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
+    set_test_model_catalog(&mut chat, vec![model]);
     chat.has_chatgpt_account = false;
     chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
     chat.set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ true);
@@ -3655,7 +3655,7 @@ async fn user_turn_preserves_flex_without_catalog_support() {
             model.service_tiers.clear();
             model.default_service_tier = None;
         }
-        chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(models));
+        set_test_model_catalog(&mut chat, models);
         chat.set_feature_enabled(Feature::FastMode, fast_mode_enabled);
         chat.set_service_tier(Some(ServiceTier::Flex.request_value().to_string()));
 
@@ -3691,7 +3691,7 @@ async fn model_switch_recomputes_catalog_default_service_tier() {
         .find(|model| model.model == "gpt-5.4")
         .expect("gpt-5.4 test model");
     default_model.default_service_tier = Some(ServiceTier::Fast.request_value().to_string());
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(models));
+    set_test_model_catalog(&mut chat, models);
     chat.refresh_effective_service_tier();
 
     assert_eq!(chat.current_service_tier(), None);

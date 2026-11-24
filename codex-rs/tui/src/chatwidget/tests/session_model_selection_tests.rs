@@ -4,6 +4,15 @@ use super::*;
 
 #[tokio::test]
 async fn session_model_selection_accepts_final_choices_without_saving() {
+    check_session_selection(/*alternate_provider*/ false).await;
+}
+
+#[tokio::test]
+async fn enter_on_an_alternate_provider_only_changes_the_session() {
+    check_session_selection(/*alternate_provider*/ true).await;
+}
+
+async fn check_session_selection(alternate_provider: bool) {
     for picker in [
         "auto",
         "single",
@@ -31,6 +40,14 @@ async fn session_model_selection_accepts_final_choices_without_saving() {
         if picker == "default_only" {
             preset.supported_reasoning_efforts.clear();
         }
+        if alternate_provider {
+            chat.set_model_provider("alternate");
+            Arc::make_mut(&mut chat.model_catalog).set_models(vec![preset.clone()]);
+            if picker == "default_only" {
+                let plan = collaboration_modes::plan_mask(&chat.model_catalog).expect("Plan mode");
+                chat.set_collaboration_mask(plan);
+            }
+        }
         match picker {
             "auto" | "single" | "default_only" => chat.open_model_popup_with_presets(vec![preset]),
             "max" | "ultra" => chat.open_advanced_reasoning_popup(preset),
@@ -47,8 +64,27 @@ async fn session_model_selection_accepts_final_choices_without_saving() {
             _ => unreachable!(),
         }
         while rx.try_recv().is_ok() {}
-        chat.handle_key_event(KeyEvent::from(KeyCode::Char('s')));
-        let selected = rx.try_recv().expect("session-only selection");
+        if alternate_provider {
+            let popup = render_bottom_popup(&chat, /*width*/ 80);
+            assert!(
+                popup.contains("Changes apply only to this session."),
+                "{popup}"
+            );
+            assert!(popup.contains("enter session"), "{popup}");
+            if picker == "single" {
+                assert_chatwidget_snapshot!("alternate_provider_model_picker", popup);
+            }
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        } else {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char('s')));
+        }
+        let mut selected = rx.try_recv().expect("session-only selection");
+        if let AppEvent::OpenReasoningPopup { model } = selected {
+            chat.open_reasoning_popup(model);
+            selected = std::iter::from_fn(|| rx.try_recv().ok())
+                .find(|event| !matches!(event, AppEvent::SettingsSelectionClosed))
+                .expect("single-effort selection");
+        }
         assert_matches!(selected, AppEvent::SelectSessionModel { model, effort: selected_effort, service_tier: None }
             if model == expected_model && selected_effort.as_ref() == Some(&effort));
         assert!(chat.bottom_pane.no_modal_or_popup_active(), "{picker}");
@@ -119,7 +155,7 @@ async fn model_settings_only_command_accepts_the_current_hidden_model() {
     chat.thread_id = Some(ThreadId::new());
     let mut preset = get_available_model(&chat, "gpt-5.5");
     preset.show_in_picker = false;
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
 
     chat.handle_model_command_args("--reasoning high --speed standard");
 

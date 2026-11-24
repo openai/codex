@@ -850,6 +850,8 @@ goals = true
                 .cloned()
                 .map(Into::into)
                 .collect(),
+            // This scenario switches the thread to OpenAI before retrying.
+            Some("openai".to_string()),
         ));
     }
     app.config.model_catalog = Some(model_catalog);

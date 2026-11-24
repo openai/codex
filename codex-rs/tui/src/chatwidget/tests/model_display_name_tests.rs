@@ -27,9 +27,9 @@ async fn custom_model_display_name_in_pickers_preserves_selection_slug() {
     auto.id = "codex-auto-fast".to_string();
     auto.model = auto.id.clone();
     auto.display_name = "Auto Fast".to_string();
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![auto, preset.clone()]));
+    set_test_model_catalog(&mut chat, vec![auto, preset.clone()]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
-    chat.open_model_popup_with_presets(chat.model_catalog.models.clone());
+    chat.open_model_popup_with_presets(chat.model_catalog.models().to_vec());
     assert_chatwidget_snapshot!(
         "custom_model_display_name_quick_picker",
         render_bottom_popup(&chat, /*width*/ 80)
@@ -69,7 +69,7 @@ async fn custom_model_display_name_in_status_line_and_fallback() {
     preset.model = slug.to_string();
     preset.display_name = "GPT-5.6 Luna".to_string();
     preset.show_in_picker = false;
-    chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+    set_test_model_catalog(&mut chat, vec![preset]);
     chat.show_welcome_banner = false;
     chat.local_settings.tui.status_line = Some(vec![
         "model-name".to_string(),
@@ -88,7 +88,7 @@ async fn custom_model_display_name_in_status_line_and_fallback() {
         normalized_backend_snapshot(terminal.backend())
     );
 
-    Arc::make_mut(&mut chat.model_catalog).models.clear();
+    Arc::make_mut(&mut chat.model_catalog).set_models(Vec::new());
     assert_eq!(chat.model_display_name(), slug);
     chat.set_model(crate::model_catalog::LUNA_RESERVE_MODEL);
     assert_eq!(chat.model_display_name(), "Luna Reserve");

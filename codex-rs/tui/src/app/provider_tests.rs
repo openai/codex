@@ -160,7 +160,8 @@ async fn space_saves_once_retries_and_preserves_the_current_chat() -> Result<()>
         r#"model_providers.gateway = { name = "Example Gateway", base_url = "http://127.0.0.1:9/v1" }"#,
     )?;
     let server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    let mut session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    session.model_provider_id = "test-provider".into();
     let original = session.model_provider_id.clone();
     app.chat_widget.handle_thread_session_quiet(session);
     let (view, load) = loading();
@@ -218,10 +219,11 @@ async fn space_saves_once_retries_and_preserves_the_current_chat() -> Result<()>
     // Wait for the RPC without dispatching its completion on the original event channel.
     let backend = server.backend_id();
     assert!(*app.provider_writes[&backend].lock().await);
-    let other =
-        ModelCatalog::new(Vec::new()).for_backend(BackendId::new(), &mut app.provider_writes);
+    let other = ModelCatalog::new(Vec::new(), /*provider*/ None)
+        .for_backend(BackendId::new(), &mut app.provider_writes);
     assert!(!other.provider_may_have_changed());
-    let reconnected = ModelCatalog::new(Vec::new()).for_backend(backend, &mut app.provider_writes);
+    let reconnected = ModelCatalog::new(Vec::new(), /*provider*/ None)
+        .for_backend(backend, &mut app.provider_writes);
     assert!(reconnected.provider_may_have_changed());
     app.chat_widget.show_selection_view(SelectionViewParams {
         view_id: Some("test_overlay"),
@@ -351,8 +353,8 @@ async fn only_ambiguous_write_failures_invalidate_the_model_catalog() {
                 matches!(event, AppEvent::InsertHistoryCell(cell) if cell.display_lines(/*width*/ 120)[0].to_string().contains("Update the connected app server to change the default model provider."))
             }));
         }
-        let reconnected =
-            ModelCatalog::new(Vec::new()).for_backend(backend, &mut app.provider_writes);
+        let reconnected = ModelCatalog::new(Vec::new(), /*provider*/ None)
+            .for_backend(backend, &mut app.provider_writes);
         assert_eq!(reconnected.provider_may_have_changed(), stale);
     }
 }

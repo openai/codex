@@ -45,12 +45,36 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn set_model_provider(&mut self, provider: &str) {
+        self.config.model_provider_id = provider.to_owned();
+        if self.thread_params_mode == crate::ThreadParamsMode::Cloud
+            || self.model_catalog.provider().is_none()
+            || self.model_catalog.provider() == Some(provider)
+        {
+            return;
+        }
+        self.dismiss_stale_model_picker();
+        Arc::make_mut(&mut self.model_catalog).select_provider(provider.to_owned());
+        // API-key access metadata is scoped to the thread and working directory.
+        if self.model_catalog.models().is_empty()
+            || self.status_account_display == Some(StatusAccountDisplay::ApiKey)
+        {
+            self.refresh_account_scoped_models();
+        } else {
+            self.app_event_tx.send(AppEvent::SyncModelCatalog);
+        }
+    }
+
+    pub(crate) fn clear_account_models(&mut self) {
+        Arc::make_mut(&mut self.model_catalog).clear_models();
+    }
+
     pub(super) fn refresh_account_scoped_models(&mut self) {
         if self.model_catalog.provider_may_have_changed() {
             return;
         }
         if self.status_account_display == Some(StatusAccountDisplay::ApiKey) {
-            for model in &mut Arc::make_mut(&mut self.model_catalog).models {
+            for model in Arc::make_mut(&mut self.model_catalog).models_mut() {
                 model.available_access_programs = None;
             }
         }
@@ -98,10 +122,10 @@ impl ChatWidget {
         let Ok(presets) = result else {
             return false;
         };
-        if presets.is_empty() || self.model_catalog.models == presets {
+        if presets.is_empty() || self.model_catalog.models() == presets {
             return false;
         }
-        Arc::make_mut(&mut self.model_catalog).models = presets;
+        Arc::make_mut(&mut self.model_catalog).set_models(presets);
         self.set_daybreak_enabled(self.daybreak_enabled);
         self.queue_unavailable_daybreak_disable(self.current_model());
         self.refresh_effective_service_tier();

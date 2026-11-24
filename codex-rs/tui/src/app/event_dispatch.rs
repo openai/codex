@@ -2804,9 +2804,13 @@ impl App {
             AppEvent::PermissionProfilesLoaded { request_id, result } => {
                 self.chat_widget.on_permission_profiles_loaded(request_id, result);
             }
+            AppEvent::SyncModelCatalog => {
+                self.model_catalog = self.chat_widget.model_catalog();
+            }
             AppEvent::FetchModels { request_id } => {
                 if self.chat_widget.model_popup_request_is_current(request_id) {
-                    app_server.fetch_models(request_id, self.app_event_tx.clone());
+                    self.model_catalog = self.chat_widget.model_catalog();
+                    app_server.fetch_models(request_id, self.model_catalog.provider(), self.app_event_tx.clone());
                 }
             }
             AppEvent::ModelsLoaded { request_id, result: Ok(models) }
@@ -2836,7 +2840,9 @@ impl App {
                 let catalog = self.chat_widget.model_catalog();
                 if !Arc::ptr_eq(&self.model_catalog, &catalog) {
                     self.model_catalog = catalog;
-                    app_server.set_available_models(self.model_catalog.try_list_models()?);
+                    if self.model_catalog.is_default_provider() {
+                        app_server.set_available_models(self.model_catalog.try_list_models()?);
+                    }
                     self.sync_active_thread_service_tier_to_cached_session().await;
                 }
             }

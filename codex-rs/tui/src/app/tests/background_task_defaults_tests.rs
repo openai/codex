@@ -354,7 +354,10 @@ async fn command_center_new_reads_server_defaults_for_actual_destination() -> Re
                 .expect("server catalog model")
                 .model
                 .clone();
-            app.model_catalog = Arc::new(ModelCatalog::new(bootstrap.available_models));
+            app.model_catalog = Arc::new(ModelCatalog::new(
+                bootstrap.available_models,
+                bootstrap.catalog_provider,
+            ));
             default_model
         } else {
             expected_model.to_string()

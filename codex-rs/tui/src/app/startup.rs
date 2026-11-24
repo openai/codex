@@ -581,7 +581,7 @@ impl App {
         }
         let mut provider_writes = HashMap::new();
         let model_catalog = Arc::new(
-            ModelCatalog::new(available_models.clone())
+            ModelCatalog::new(available_models.clone(), bootstrap.catalog_provider)
                 .for_backend(app_server.backend_id(), &mut provider_writes)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );
