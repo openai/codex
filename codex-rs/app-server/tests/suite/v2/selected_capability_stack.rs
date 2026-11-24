@@ -112,9 +112,8 @@ async fn selected_plugin_mcp_startup_respects_explicit_mentions(
         fixture.environment_cwd.clone(),
     )
     .await?;
-    let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
-    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    let (mut exec_server, exec_server_url) = spawn_exec_server(fixture.codex_home.path()).await?;
+    add_environment(&mut app_server, &exec_server_url).await?;
 
     let text_input = |text| UserInput::Text {
         text,
@@ -259,9 +258,8 @@ async fn managed_plugins_requirement_disables_selected_executor_plugin_capabilit
         fixture.environment_cwd.clone(),
     )
     .await?;
-    let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
-    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    let (mut exec_server, exec_server_url) = spawn_exec_server(fixture.codex_home.path()).await?;
+    add_environment(&mut app_server, &exec_server_url).await?;
 
     run_turn(
         &mut app_server,
@@ -386,9 +384,8 @@ async fn selected_capability_stack_tracks_environment_selection_and_resume() -> 
     let initial_requests = response_mock.requests();
     assert_selected_capabilities_absent(&initial_requests[0]);
 
-    let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
-    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    let (mut exec_server, exec_server_url) = spawn_exec_server(fixture.codex_home.path()).await?;
+    add_environment(&mut app_server, &exec_server_url).await?;
 
     // The next turn selects the executor; its server mention waits for MCP startup.
     run_turn(
@@ -452,8 +449,8 @@ async fn selected_capability_stack_tracks_environment_selection_and_resume() -> 
             .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
 
-    exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
-    add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    let (mut exec_server, exec_server_url) = spawn_exec_server(fixture.codex_home.path()).await?;
+    add_environment(&mut app_server, &exec_server_url).await?;
 
     run_turn(
         &mut app_server,
@@ -508,7 +505,7 @@ struct SelectedCapabilityFixture {
     codex_home: TempDir,
     _plugin: TempDir,
     pid_file: std::path::PathBuf,
-    exec_server_url: String,
+    _unavailable_executor: std::net::TcpListener,
     selected_root: SelectedCapabilityRoot,
     environment_cwd: AbsolutePathBuf,
 }
@@ -560,11 +557,10 @@ fn selected_capability_fixture(
         AuthCredentialsStoreMode::File,
     )?;
 
-    // Reserve the URL before app-server starts. The configured environment initially fails to
-    // connect, then environment/add points the same stable ID at the same URL once it is live.
+    // Keep this endpoint unavailable for WebSocket handshakes, including after app-server restarts.
+    // Each live executor binds its own ephemeral port and replaces the same environment ID.
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
-    drop(listener);
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
@@ -629,7 +625,7 @@ fn selected_capability_fixture(
         codex_home,
         _plugin: plugin,
         pid_file,
-        exec_server_url,
+        _unavailable_executor: listener,
         selected_root,
         environment_cwd,
     })
@@ -827,9 +823,9 @@ async fn add_environment(app_server: &mut TestAppServer, exec_server_url: &str) 
     Ok(())
 }
 
-async fn spawn_exec_server(codex_home: &std::path::Path, url: &str) -> Result<Child> {
+async fn spawn_exec_server(codex_home: &std::path::Path) -> Result<(Child, String)> {
     let mut child = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
-        .args(["exec-server", "--listen", url])
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -847,8 +843,8 @@ async fn spawn_exec_server(codex_home: &std::path::Path, url: &str) -> Result<Ch
             .await
             .context("timed out waiting for exec-server URL")??
             .context("exec-server exited before printing its URL")?;
-        if line.trim() == url {
-            return Ok(child);
+        if line.starts_with("ws://") {
+            return Ok((child, line));
         }
     }
 }
