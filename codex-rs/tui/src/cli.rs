@@ -6,6 +6,13 @@ use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
+/// Permission preset and its precedence on the first resume only.
+#[derive(Clone, Debug)]
+pub struct ResumeApprovalPreset {
+    pub config: CliConfigOverrides,
+    pub overrides_root_permissions: bool,
+}
+
 #[derive(Parser, Clone, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -33,6 +40,10 @@ pub struct Cli {
     /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub resume_session_id: Option<String>,
+
+    /// Launch overrides including the approval preset, scoped to the initial resume.
+    #[clap(skip)]
+    pub resume_approval_preset: Option<ResumeApprovalPreset>,
 
     /// Internal: show all sessions (disables cwd filtering and shows CWD column).
     #[clap(skip)]

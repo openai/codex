@@ -2423,6 +2423,141 @@ async fn make_history_test_app() -> Result<(Box<App>, tempfile::TempDir)> {
 }
 
 #[tokio::test]
+async fn approve_for_me_updates_only_the_initially_resumed_thread() -> Result<()> {
+    use crate::resume_permissions::ResumePermissions;
+
+    let (mut app, _home) = make_history_test_app().await?;
+    let home = app.config.codex_home.clone();
+    let cwd = app.config.cwd.clone();
+    let requirements = home.join("requirements.toml");
+    let loader = LoaderOverrides {
+        system_requirements_path: Some(requirements.to_path_buf()),
+        ..LoaderOverrides::without_managed_config_for_tests()
+    };
+    let extra = home.join("extra");
+    std::fs::create_dir_all(extra.join(".git"))?;
+    app_test_support::MockResponsesConfig::new("http://127.0.0.1:9")
+        .with_root_config("project_doc_max_bytes = 0")
+        .with_extra_config(&format!(
+            "[windows]\nsandbox = 'elevated'\n[sandbox_workspace_write]\nwritable_roots = ['{}']",
+            extra.display()
+        ))
+        .write(&home)?;
+    app.config = app.rebuild_config_for_cwd(cwd.to_path_buf()).await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let first = create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "first")?;
+    let local = app.local_settings.clone();
+    let model = app.resume_model_settings();
+    let loaded = server
+        .resume_thread(&local, app.config.clone(), first, model)
+        .await?;
+    let permissions = |s: &ThreadSessionState| {
+        (
+            s.approval_policy,
+            s.approvals_reviewer,
+            s.permission_profile
+                .legacy_sandbox_policy_label(cwd.as_path()),
+        )
+    };
+    let defaults = permissions(&loaded.session);
+
+    let mut preset = codex_utils_cli::CliConfigOverrides::default();
+    codex_utils_cli::SharedCliOptions {
+        auto_review: true,
+        ..Default::default()
+    }
+    .take_auto_review_config_overrides(&mut preset);
+    let builder = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(home.to_path_buf())
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(loader.clone())
+        .cli_overrides(preset.parse_overrides().unwrap());
+    let overrides = ResumePermissions::PRESET;
+    let resume = async |server: &mut AppServerSession, config| {
+        server
+            .resume_thread_with_permission_overrides(&local, config, first, model, overrides)
+            .await
+    };
+
+    // Loaded threads need a settings update, not just resume overrides.
+    let scoped = builder.clone().build().await?;
+    let other_workspace = builder
+        .clone()
+        .harness_overrides(crate::legacy_core::config::ConfigOverrides {
+            default_permissions: Some(":workspace".into()),
+            additional_writable_roots: vec![extra.to_path_buf(), home.to_path_buf()],
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    assert!(resume(&mut server, other_workspace).await.is_err());
+    server.thread_settings_update_supported = false;
+    assert!(resume(&mut server, scoped.clone()).await.is_err());
+    server.thread_settings_update_supported = true;
+    let resumed = resume(&mut server, scoped).await?;
+    assert_eq!(
+        permissions(&resumed.session),
+        (
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::AutoReview,
+            "workspace-write"
+        )
+    );
+    app.enqueue_primary_thread_session(resumed.session, resumed.turns)
+        .await?;
+
+    // Neither restriction is visible in the loaded thread's sandbox summary.
+    for rule in [
+        "[permissions.network]\ndenied_domains = ['blocked.test']",
+        "[permissions.filesystem]\ndeny_read = ['private']",
+    ] {
+        std::fs::write(&requirements, rule)?;
+        let restricted = builder.clone().build().await?;
+        assert!(resume(&mut server, restricted).await.is_err(), "{rule}");
+    }
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.start_fresh_session(
+        &mut tui,
+        &mut server,
+        FreshSessionStart::PreserveCurrentView(None),
+        /*initial_user_message*/ None,
+        /*new_thread_name*/ None,
+    )
+    .await;
+    let fresh = app.primary_session_configured.as_ref().unwrap();
+    assert_eq!(permissions(fresh), defaults);
+    let other = create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "other")?;
+    let other = server
+        .resume_thread(&local, app.config.clone(), other, model)
+        .await?;
+    assert_eq!(permissions(&other.session), defaults);
+    server.shutdown().await?;
+
+    // A cold load applies the read denial. Inspect the live policy, not the wire summary.
+    #[cfg(unix)]
+    {
+        let mut server = Box::pin(crate::start_app_server_for_picker(
+            crate::backend_id::BackendId::new(),
+            &app.config,
+            &crate::AppServerTarget::Embedded,
+            Vec::new(),
+            loader,
+            /*state_db*/ None,
+            Arc::new(EnvironmentManager::default_for_tests()),
+        ))
+        .await?;
+        resume(&mut server, builder.build().await?).await?;
+        let live = server.model_preview_permissions(first).await?.unwrap();
+        let policy = live.profile.file_system_sandbox_policy();
+        assert!(!policy.can_read_local_path_with_cwd(&home.join("private"), cwd.as_path()));
+        assert!(policy.can_read_local_path_with_cwd(&home.join("public"), cwd.as_path()));
+        server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn first_prompt_counts_once_before_and_after_resume() -> Result<()> {
     use crate::app::session_lifecycle::ThreadAttachPresentation::Fresh;
     use crate::app::session_lifecycle::ThreadAttachPresentation::SessionLineage;

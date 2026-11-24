@@ -300,6 +300,7 @@ use crate::startup_hooks_review::load_startup_hooks_review_entry;
 use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
+pub use cli::ResumeApprovalPreset;
 use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
@@ -2163,6 +2164,56 @@ async fn run_ratatui_app(
     #[cfg(not(target_os = "windows"))]
     let should_prompt_windows_sandbox_nux_at_startup = false;
 
+    let initial_resume_config = if let Some(preset) = &cli.resume_approval_preset {
+        if !matches!(
+            session_selection,
+            resume_picker::SessionSelection::Resume(_)
+        ) {
+            color_eyre::eyre::bail!("No conversation selected to resume with --approve-for-me.");
+        }
+        if app_server.thread_params_mode() != ThreadParamsMode::Embedded {
+            return Err(color_eyre::eyre::eyre!(
+                "Permission overrides are not supported when resuming a remote task."
+            ));
+        }
+        // Resolve the preset under the destination's trust and managed requirements.
+        // Keep it out of the launch config used by /new and subsequent /resume commands.
+        let mut scoped_overrides = overrides.clone();
+        if preset.overrides_root_permissions {
+            scoped_overrides.sandbox_mode = None;
+            scoped_overrides.approval_policy = None;
+        }
+        let scoped_config = startup_draft
+            .run_until(
+                &mut tui,
+                load_config_with_worktree_source_policy(
+                    preset
+                        .config
+                        .parse_overrides()
+                        .map_err(color_eyre::Report::msg)?,
+                    scoped_overrides,
+                    loader_overrides.clone(),
+                    cloud_config_bundle.clone(),
+                    strict_config,
+                    Some(config.cwd.to_path_buf()),
+                    managed_worktree.as_ref(),
+                ),
+            )
+            .await??;
+        if let Some(warning) = add_dir_warning_message(
+            &cli.add_dir,
+            &scoped_config.permissions.effective_permission_profile(),
+            scoped_config.cwd.as_path(),
+        ) {
+            return Err(color_eyre::eyre::eyre!(
+                "Error adding directories: {warning}"
+            ));
+        }
+        Some(Box::new(scoped_config))
+    } else {
+        None
+    };
+
     let Cli {
         prompt,
         shared,
@@ -2341,6 +2392,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         session_selection,
+        initial_resume_config,
         feedback,
         is_first_run,
         should_prompt_windows_sandbox_nux_at_startup,

@@ -874,11 +874,14 @@ pub(super) async fn run_main_inner(
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Some(warning) = add_dir_warning_message(
-        &cli.add_dir,
-        &config.permissions.effective_permission_profile(),
-        config.cwd.as_path(),
-    ) {
+    // A resume-only preset is validated against the selected thread's config.
+    if cli.resume_approval_preset.is_none()
+        && let Some(warning) = add_dir_warning_message(
+            &cli.add_dir,
+            &config.permissions.effective_permission_profile(),
+            config.cwd.as_path(),
+        )
+    {
         #[allow(clippy::print_stderr)]
         {
             restore_terminal_before_fatal_exit();

@@ -279,6 +279,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
+        initial_resume_config: Option<Box<Config>>,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
@@ -638,6 +639,7 @@ impl App {
         let mut read_only_thread = false;
         let mut provider_error = None;
         let mut history_notice = None;
+        let confirm_preset = initial_resume_config.is_some();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh
             | SessionSelection::Exit
@@ -732,26 +734,42 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
+                let permissions = if confirm_preset {
+                    crate::resume_permissions::ResumePermissions::PRESET
+                } else {
+                    crate::resume_permissions::ResumePermissions::from_overrides(
+                        &config,
+                        &harness_overrides,
+                    )
+                };
+                // Keep post-bootstrap launch choices (e.g. --search) for the initial resume.
+                let scoped = initial_resume_config.map(|preset| {
+                    let mut scoped = Box::new(config.clone());
+                    scoped.permissions = preset.permissions;
+                    scoped.approvals_reviewer = preset.approvals_reviewer;
+                    scoped.workspace_roots = preset.workspace_roots;
+                    scoped
+                });
+                let resume_config = scoped.as_deref().unwrap_or(&config);
                 let resumed = match startup_draft
                     .run_until(
                         tui,
                         app_server.resume_thread_with_permission_overrides(
                             &local_settings,
-                            config.clone(),
+                            resume_config.clone(),
                             target_session.thread_id,
                             model_settings,
-                            crate::resume_permissions::ResumePermissions::from_overrides(
-                                &config,
-                                &harness_overrides,
-                            ),
+                            permissions,
                         ),
                     )
                     .await
                 {
                     Ok(Ok(resumed)) => Ok(resumed),
                     Ok(Err(err))
-                        if crate::app_server_session::is_active_writer_error(&err)
-                            || crate::app_server_session::model_provider_error(&err).is_some() =>
+                        if !permissions.confirm_preset
+                            && (crate::app_server_session::is_active_writer_error(&err)
+                                || crate::app_server_session::model_provider_error(&err)
+                                    .is_some()) =>
                     {
                         provider_error = crate::app_server_session::model_provider_error(&err);
                         read_only_thread = true;
@@ -795,17 +813,11 @@ impl App {
                         }
                     }
                 } else {
-                    let action = SessionStartAction::Resume(
-                        model_settings,
-                        crate::resume_permissions::ResumePermissions::from_overrides(
-                            &config,
-                            &harness_overrides,
-                        ),
-                    );
+                    let action = SessionStartAction::Resume(model_settings, permissions);
                     let resumed = complete_session_start(
                         &mut app_server,
                         SessionStartConfig {
-                            config: &config,
+                            config: resume_config,
                             local_settings: &local_settings,
                         },
                         &target_session,
@@ -1196,7 +1208,11 @@ See the Codex keymap documentation for supported actions and examples."
             // Prewarm WSL interop off the UI thread, without accessing clipboard contents.
             let _ = tui.clipboard.warm_text_reader(tui.frame_requester());
         }
-        app.remember_launch_permissions();
+        // The confirmed server settings own the first turn. Replaying a different
+        // launch profile here could undo the preset. /new reloads the launch flags.
+        if !confirm_preset {
+            app.remember_launch_permissions();
+        }
         if !tui.is_terminal_focused() {
             app.recap.note_focus_lost(Instant::now());
         }

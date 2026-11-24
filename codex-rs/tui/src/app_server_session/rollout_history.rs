@@ -277,6 +277,31 @@ impl AppServerSession {
         let metadata = Box::pin(self.thread_read(thread_id, /*include_turns*/ false))
             .await
             .ok();
+        // A fresh load applies managed rules. A loaded thread's sandbox summary
+        // cannot confirm its proxy rules or filesystem restrictions.
+        if permission_overrides.confirm_preset
+            && metadata.as_ref().is_none_or(|thread| {
+                thread.status != codex_app_server_protocol::ThreadStatus::NotLoaded
+            })
+        {
+            if config.managed_network_requirements_enabled() {
+                color_eyre::eyre::bail!(
+                    "Cannot verify managed network restrictions for --approve-for-me. Unload the conversation and retry."
+                );
+            }
+            let profile = config.permissions.permission_profile();
+            if profile.to_legacy_sandbox_policy_template().is_err() {
+                // Account for metadata protections on fixed writable roots.
+                let policy = profile.to_legacy_sandbox_policy(config.cwd.as_path())?;
+                if profile.file_system_sandbox_policy()
+                    != codex_protocol::permissions::FileSystemSandboxPolicy::from(&policy)
+                {
+                    color_eyre::eyre::bail!(
+                        "Cannot verify sandbox restrictions for --approve-for-me."
+                    );
+                }
+            }
+        }
         let known_legacy = cached_legacy
             && (!self.uses_embedded_app_server()
                 || (rollout_maintenance_guard.is_some()
@@ -287,6 +312,7 @@ impl AppServerSession {
             rollout_maintenance_guard = None;
         }
         let request_id = self.next_request_id();
+        let exclude_turns = params.exclude_turns;
         let resume_response = self
             .request_handle
             .request_typed(ClientRequest::ThreadResume {
@@ -295,7 +321,7 @@ impl AppServerSession {
             })
             .await;
         drop(rollout_maintenance_guard);
-        let response: ThreadResumeResponse = match resume_response {
+        let mut response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
             Err(TypedRequestError::Server { source, .. })
                 if params.exclude_turns && is_history_pagination_unsupported(&source) =>
@@ -317,6 +343,36 @@ impl AppServerSession {
                 ));
             }
         };
+        if permission_overrides.confirm_preset
+            && let Some(settings) =
+                crate::resume_permissions::initial_resume_update(&config, &response)?
+        {
+            // A loaded thread ignores resume overrides. Read back the effective
+            // settings after the update, before releasing the initial prompt.
+            if !self.thread_settings_update(settings).await? {
+                color_eyre::eyre::bail!(
+                    "The server cannot apply --approve-for-me to this conversation."
+                );
+            }
+            let request_id = self.next_request_id();
+            response = self
+                .request_handle
+                .request_typed(ClientRequest::ThreadResume {
+                    request_id,
+                    params: ThreadResumeParams {
+                        thread_id: thread_id.to_string(),
+                        exclude_turns: exclude_turns
+                            && self.history_support == ThreadHistorySupport::Paginated,
+                        ..Default::default()
+                    },
+                })
+                .await?;
+            if crate::resume_permissions::initial_resume_update(&config, &response)?.is_some() {
+                color_eyre::eyre::bail!(
+                    "The server did not confirm the requested permissions for --approve-for-me."
+                );
+            }
+        }
         self.finish_thread_resume(
             local_settings,
             &config,
