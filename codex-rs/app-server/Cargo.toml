@@ -136,6 +136,7 @@ codex-windows-sandbox = { workspace = true }
 
 [dev-dependencies]
 codex-message-board = { workspace = true }
+codex-message-board-mcp = { workspace = true }
 zip = { workspace = true }
 codex-uds = { workspace = true }
 app_test_support = { workspace = true }

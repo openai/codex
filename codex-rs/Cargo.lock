@@ -2147,6 +2147,7 @@ dependencies = [
  "codex-memories-extension",
  "codex-memories-write",
  "codex-message-board",
+ "codex-message-board-mcp",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",

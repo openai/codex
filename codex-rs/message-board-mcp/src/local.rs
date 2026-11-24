@@ -1,7 +1,9 @@
 //! Runner-owned HTTP lifecycle over the existing in-memory board and host interfaces.
 //! Agent-specific bindings share tree state while retaining each caller's host.
 //! Timestamps use the MCP backend's system clock, independently of the agent clock.
+//! Runners can supply app-server delivery without replacing host membership.
 
+use crate::AppServerNotifications;
 use crate::MessageBoardMcpServer;
 use crate::serve_http;
 use axum::http::HeaderValue;
@@ -17,6 +19,7 @@ use codex_message_board::PostPreview;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use rmcp::ErrorData;
@@ -31,20 +34,23 @@ use tokio_util::sync::CancellationToken;
 type BoardBinding = (Arc<dyn AgentMessageBoard>, Arc<dyn MessageBoardHost>);
 type Boards = Arc<RwLock<HashMap<(SessionId, Option<ThreadId>), BoardBinding>>>;
 
-struct BackendClockHost(Arc<dyn MessageBoardHost>);
+struct LocalHost {
+    membership: Arc<dyn MessageBoardHost>,
+    app_server: Option<Arc<AppServerNotifications>>,
+}
 
-impl MessageBoardHost for BackendClockHost {
+impl MessageBoardHost for LocalHost {
     fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, Result<AgentPath>> {
-        self.0.agent_path(caller)
+        self.membership.agent_path(caller)
     }
 
     fn resolve_agent(&self, path: AgentPath) -> BoxFuture<'_, Result<ThreadId>> {
-        self.0.resolve_agent(path)
+        self.membership.resolve_agent(path)
     }
 
     fn current_time(&self, caller: ThreadId) -> BoxFuture<'_, Result<DateTime<Utc>>> {
         Box::pin(async move {
-            self.0.agent_path(caller).await?;
+            self.membership.agent_path(caller).await?;
             Ok(Utc::now())
         })
     }
@@ -54,7 +60,19 @@ impl MessageBoardHost for BackendClockHost {
         recipient: ThreadId,
         post: PostPreview,
     ) -> BoxFuture<'_, Result<NotificationDelivery>> {
-        self.0.notify(recipient, post)
+        let Some(app_server) = &self.app_server else {
+            return self.membership.notify(recipient, post);
+        };
+        Box::pin(async move {
+            let path = match self.membership.agent_path(recipient).await {
+                Ok(path) => path,
+                Err(error) if matches!(error.details(), CodexErrorDetails::ThreadNotFound(_)) => {
+                    return Ok(NotificationDelivery::SkippedInactive);
+                }
+                Err(error) => return Err(error),
+            };
+            app_server.notify(recipient, path, post).await
+        })
     }
 }
 
@@ -66,6 +84,7 @@ pub struct LocalServer {
     authorization: HeaderValue,
     boards: Boards,
     states: InMemoryMessageBoards,
+    app_server: Option<Arc<AppServerNotifications>>,
     cancellation: CancellationToken,
     task: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -94,7 +113,10 @@ impl LocalServer {
             !boards.keys().any(|(tree, _)| *tree == identity),
             "board session already registered"
         );
-        let host: Arc<dyn MessageBoardHost> = Arc::new(BackendClockHost(host));
+        let host: Arc<dyn MessageBoardHost> = Arc::new(LocalHost {
+            membership: host,
+            app_server: self.app_server.clone(),
+        });
         boards.insert(
             (identity, None),
             (
@@ -112,7 +134,10 @@ impl LocalServer {
         caller: ThreadId,
         host: Arc<dyn MessageBoardHost>,
     ) -> anyhow::Result<()> {
-        let host: Arc<dyn MessageBoardHost> = Arc::new(BackendClockHost(host));
+        let host: Arc<dyn MessageBoardHost> = Arc::new(LocalHost {
+            membership: host,
+            app_server: self.app_server.clone(),
+        });
         let board = self.states.open(identity, host.clone()).await;
         let mut boards = self
             .boards
@@ -145,6 +170,20 @@ impl Drop for LocalServer {
 /// Binds a loopback endpoint for a local run. Register hosts before tool calls.
 /// All connections for a tree share one board; the last owner releases its state.
 pub async fn launch_in_memory() -> anyhow::Result<LocalServer> {
+    launch(/*app_server*/ None).await
+}
+
+/// Launches an in-memory board whose notifications use the runner's app-server connection.
+/// Hosts still provide membership; their notification callbacks are not used.
+/// The runner must supply the app-server that owns those agents.
+/// Delivery uses the same bounded notices as the SQLite executable.
+pub async fn launch_in_memory_with_app_server(
+    app_server: Arc<AppServerNotifications>,
+) -> anyhow::Result<LocalServer> {
+    launch(Some(app_server)).await
+}
+
+async fn launch(app_server: Option<Arc<AppServerNotifications>>) -> anyhow::Result<LocalServer> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let url = format!("http://{}/mcp", listener.local_addr()?);
     let token = uuid::Uuid::new_v4().to_string();
@@ -188,6 +227,7 @@ pub async fn launch_in_memory() -> anyhow::Result<LocalServer> {
         authorization,
         boards,
         states: InMemoryMessageBoards::default(),
+        app_server,
         cancellation,
         task: Some(task),
     })

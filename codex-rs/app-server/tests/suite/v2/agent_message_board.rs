@@ -1,4 +1,4 @@
-//! Board tools share namespace metadata; the detached SQLite server delivers native agent mail.
+//! Board tools share namespace metadata; SQLite and in-memory MCP servers deliver native agent mail.
 
 use super::connection_handling_websocket as websocket;
 use anyhow::Context;
@@ -9,15 +9,23 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
+use codex_message_board_mcp::AppServerNotifications;
+use codex_message_board_mcp::launch_in_memory_with_app_server;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_rmcp_client::RmcpClient;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::time::Duration;
 use tokio::time::timeout;
+
+#[path = "../../../../message-board/tests/common/mod.rs"]
+mod board_host;
 
 #[test_case::test_case(None, "collaboration"; "default_namespace")]
 #[test_case::test_case(Some("agents"), "agents"; "configured_namespace")]
@@ -135,6 +143,10 @@ async fn board_tools_share_multi_agent_namespace(
     .await??
     .context("board server readiness")?;
     let ready: Value = serde_json::from_str(&ready)?;
+    let in_memory = launch_in_memory_with_app_server(Arc::new(
+        AppServerNotifications::connect(format!("ws://{address}").parse()?).await?,
+    ))
+    .await?;
     // The board must reconnect before sending its first notice after a known disconnect.
     app_process.kill().await?;
     let (restarted, _) = websocket::spawn_websocket_server_with_args(
@@ -180,52 +192,102 @@ async fn board_tools_share_multi_agent_namespace(
         Some(json!({"threadId":root,"input":[{"type":"text","text":"Spawn a worker."}]})),
     )
     .await?;
+    let mut child_id = None;
     for _ in 0..2 {
         let completion = websocket::read_notification_for_method(&mut ws, "turn/completed").await?;
-        assert_eq!(
-            completion.params.context("completion params")?["turn"]["status"],
-            "completed"
-        );
+        let params = completion.params.context("completion params")?;
+        assert_eq!(params["turn"]["status"], "completed");
+        let thread_id = params["threadId"].as_str().context("completed thread")?;
+        if thread_id != root {
+            child_id = Some(ThreadId::from_string(thread_id)?);
+        }
     }
 
-    let client = RmcpClient::new_streamable_http_client(
-        "sqlite-notifications",
-        ready["url"].as_str().context("board URL")?,
-        Some("sqlite-notifications-test-token".into()),
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        codex_config::types::OAuthCredentialsStoreMode::File,
-        Default::default(),
-        codex_exec_server::Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
-    client
-        .initialize(
-            rmcp::model::InitializeRequestParams::default(),
-            /*timeout*/ None,
-            Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+    let root_id = ThreadId::from_string(&root)?;
+    let child_id = child_id.context("native child")?;
+    let host = Arc::new(board_host::Host {
+        members: [
+            (root_id, AgentPath::root()),
+            (
+                child_id,
+                AgentPath::root()
+                    .join("worker")
+                    .map_err(anyhow::Error::msg)?,
+            ),
+        ]
+        .into(),
+        clock: Default::default(),
+        fail_clock: true.into(),
+        agent_path_calls: Default::default(),
+        active: true.into(),
+        fail_notifications: false.into(),
+        notifications: Default::default(),
+    });
+    in_memory
+        .bind_agent(root_id.into(), root_id, host.clone())
+        .await?;
+    in_memory
+        .bind_agent(root_id.into(), child_id, host.clone())
+        .await?;
+
+    let mut notifications = Vec::new();
+    for (backend, url, token) in [
+        (
+            "SQLite",
+            ready["url"].as_str().context("board URL")?,
+            "sqlite-notifications-test-token",
+        ),
+        (
+            "in-memory",
+            in_memory.url(),
+            in_memory
+                .authorization()
+                .to_str()?
+                .strip_prefix("Bearer ")
+                .context("in-memory bearer token")?,
+        ),
+    ] {
+        let client = RmcpClient::new_streamable_http_client(
+            "board-notifications",
+            url,
+            Some(token.into()),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            codex_config::types::OAuthCredentialsStoreMode::File,
+            Default::default(),
+            codex_exec_server::Environment::default_for_tests().get_http_client(),
+            /*auth_provider*/ None,
         )
         .await?;
-    let posted = client
-        .call_tool(
-            "post".into(),
-            Some(json!({
-                "new_channel_name":"delivery",
-                "text":"A notice from the detached SQLite board.",
-                "agents_to_notify":["/root/worker"]
-            })),
-            |_| Ok(Some(json!({"threadId":root,"sessionId":root}))),
-            /*timeout*/ None,
-        )
-        .await?;
-    assert_ne!(posted.is_error, Some(true), "{posted:?}");
-    let post = posted.structured_content.context("posted metadata")?;
-    let notification = format!(
-        "Message Type: CHANNEL_POST\nSender: /root\nChannel: delivery\nMessage ID: {}\nThread ID: {}\nPayload:\nA notice from the detached SQLite board.",
-        post["message_id"].as_str().context("message id")?,
-        post["thread_id"].as_str().context("thread id")?,
-    );
+        client
+            .initialize(
+                rmcp::model::InitializeRequestParams::default(),
+                /*timeout*/ None,
+                Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+            )
+            .await?;
+        let text = format!("A notice from the detached {backend} board.");
+        let posted = client
+            .call_tool(
+                "post".into(),
+                Some(json!({
+                    "new_channel_name":"delivery",
+                    "text":text,
+                    "agents_to_notify":["/root/worker"]
+                })),
+                |_| Ok(Some(json!({"threadId":root,"sessionId":root}))),
+                /*timeout*/ None,
+            )
+            .await?;
+        assert_ne!(posted.is_error, Some(true), "{posted:?}");
+        let post = posted.structured_content.context("posted metadata")?;
+        notifications.push(format!(
+            "Message Type: CHANNEL_POST\nSender: /root\nChannel: delivery\nMessage ID: {}\nThread ID: {}\nPayload:\n{text}",
+            post["message_id"].as_str().context("message id")?,
+            post["thread_id"].as_str().context("thread id")?,
+        ));
+        client.shutdown().await;
+    }
 
     // Queue-only mail must be available when the parent follows up with its idle child.
     let delivered = responses::mount_sse_sequence(
@@ -274,17 +336,24 @@ async fn board_tools_share_multi_agent_namespace(
         .map(responses::strip_metadata_from_json)
         .map(responses::strip_response_item_ids_from_json)
         .collect::<Vec<_>>();
+    for notification in notifications {
+        assert_eq!(
+            delivered_items
+                .iter()
+                .filter(|item| item["content"] == json!([{"type":"input_text","text":notification}]))
+                .collect::<Vec<_>>(),
+            vec![&json!({
+                "type":"agent_message","author":"/root","recipient":"/root/worker",
+                "content":[{"type":"input_text","text":notification}]
+            })],
+        );
+    }
+    in_memory.shutdown().await?;
     assert_eq!(
-        delivered_items
-            .iter()
-            .filter(|item| item["content"] == json!([{"type":"input_text","text":notification}]))
-            .collect::<Vec<_>>(),
-        vec![&json!({
-            "type":"agent_message","author":"/root","recipient":"/root/worker",
-            "content":[{"type":"input_text","text":notification}]
-        })],
+        *host.notifications.lock().expect("host notifications"),
+        Vec::new(),
+        "app-server delivery must bypass the host callback"
     );
-    client.shutdown().await;
     board_process.kill().await?;
     app_process.kill().await?;
     Ok(())

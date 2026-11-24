@@ -12,7 +12,11 @@ use codex_app_server_remote_client::RemoteAppServerClient;
 use codex_app_server_remote_client::RemoteAppServerConnectArgs;
 use codex_app_server_remote_client::RemoteAppServerEndpoint;
 use codex_app_server_remote_client::RemoteAppServerRequestHandle;
+use codex_message_board::NotificationDelivery;
+use codex_message_board::PostPreview;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InterAgentCommunication;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -35,13 +39,16 @@ struct Connection {
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(super) struct AppServer {
+/// Shared local app-server connection for bounded, queue-only board notifications.
+/// The caller must validate the recipient's membership before delivering a notice.
+pub struct AppServerNotifications {
     url: Url,
     connection: Mutex<Arc<OnceCell<Connection>>>,
 }
 
-impl AppServer {
-    pub(super) async fn connect(url: Url) -> anyhow::Result<Self> {
+impl AppServerNotifications {
+    /// Connects to a loopback WebSocket endpoint using the shared app-server client.
+    pub async fn connect(url: Url) -> anyhow::Result<Self> {
         anyhow::ensure!(
             url.scheme() == "ws"
                 && match url.host() {
@@ -65,7 +72,28 @@ impl AppServer {
         })
     }
 
-    pub(super) async fn inject(
+    /// Delivers the existing post preview through `thread/inject_items`.
+    /// Notices retain the 1,024-byte budget and are never replayed after failure.
+    pub async fn notify(
+        &self,
+        recipient: ThreadId,
+        path: AgentPath,
+        post: PostPreview,
+    ) -> codex_protocol::error::Result<NotificationDelivery> {
+        let notice = InterAgentCommunication::new(
+            post.metadata.author.clone(),
+            path,
+            Vec::new(),
+            post.notification_text(),
+            /*trigger_turn*/ false,
+        );
+        self.inject(recipient, notice)
+            .await
+            .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?;
+        Ok(NotificationDelivery::Accepted)
+    }
+
+    async fn inject(
         &self,
         recipient: ThreadId,
         notice: InterAgentCommunication,

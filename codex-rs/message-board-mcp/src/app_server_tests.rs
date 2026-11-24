@@ -1,7 +1,7 @@
 #![cfg(test)]
 //! Exercise bounded, concurrent notification delivery and recovery without replay.
 
-use super::AppServer;
+use super::AppServerNotifications;
 use anyhow::Context;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -21,7 +21,7 @@ use tokio_tungstenite::tungstenite::Message;
 async fn bounded_concurrent_notices_recover_without_replay() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let (client, mut peer) = tokio::try_join!(
-        AppServer::connect(format!("ws://{}", listener.local_addr()?).parse()?),
+        AppServerNotifications::connect(format!("ws://{}", listener.local_addr()?).parse()?),
         accept_connection(&listener),
     )?;
     let recipient = ThreadId::new();

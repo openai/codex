@@ -1,17 +1,16 @@
 //! Reads persisted membership without starting runtimes or modifying Codex's registry.
 //! Posts use system time and optionally deliver notices through the existing app-server RPC.
 
-use crate::app_server::AppServer;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::NotificationDelivery;
 use codex_message_board::PostPreview;
+use codex_message_board_mcp::AppServerNotifications;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_protocol::protocol::InterAgentCommunication;
 use futures::future::BoxFuture;
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -19,7 +18,7 @@ use std::sync::Arc;
 pub(super) struct PersistedHost {
     pub registry: SqlitePool,
     pub root: ThreadId,
-    pub app_server: Option<Arc<AppServer>>,
+    pub app_server: Option<Arc<AppServerNotifications>>,
 }
 
 impl MessageBoardHost for PersistedHost {
@@ -99,18 +98,7 @@ LIMIT 2
                 return Ok(NotificationDelivery::SkippedInactive);
             };
             let path = self.agent_path(recipient).await?;
-            let notice = InterAgentCommunication::new(
-                post.metadata.author.clone(),
-                path,
-                Vec::new(),
-                post.notification_text(),
-                /*trigger_turn*/ false,
-            );
-            app_server
-                .inject(recipient, notice)
-                .await
-                .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?;
-            Ok(NotificationDelivery::Accepted)
+            app_server.notify(recipient, path, post).await
         })
     }
 }

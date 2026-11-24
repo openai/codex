@@ -3,6 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 exports_files(
     ["tests/common/mod.rs"],
     visibility = [
+        "//codex-rs/app-server:__pkg__",
         "//codex-rs/core:__pkg__",
         "//codex-rs/ext/guardian-v3:__pkg__",
     ],

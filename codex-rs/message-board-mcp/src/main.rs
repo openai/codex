@@ -1,6 +1,5 @@
 //! Detached HTTP entry point; endpoint configuration and process lifetime belong to the deployer.
 
-mod app_server;
 mod persisted;
 
 use clap::Parser;
@@ -8,6 +7,7 @@ use codex_message_board::LocalAgentMessageBoard;
 use codex_message_board::LocalBoardOptions;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::MessageBoardTool;
+use codex_message_board_mcp::AppServerNotifications;
 use codex_message_board_mcp::MessageBoardMcpServer;
 use codex_state::SqliteConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .open_read_only_pool(&sqlite.state_db_path(), /*busy_timeout*/ None)
         .await?;
     let app_server = match args.app_server {
-        Some(url) => Some(Arc::new(app_server::AppServer::connect(url).await?)),
+        Some(url) => Some(Arc::new(AppServerNotifications::connect(url).await?)),
         None => None,
     };
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
