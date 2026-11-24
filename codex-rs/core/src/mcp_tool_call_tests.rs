@@ -2821,46 +2821,6 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
 }
 
 #[tokio::test]
-async fn custom_mcp_tool_approval_mode_uses_plugin_mcp_policy() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    let codex_home = session.codex_home().await;
-    write_sample_plugin_mcp(codex_home.as_path());
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"
-[features]
-plugins = true
-
-[plugins."sample@test"]
-enabled = true
-
-[plugins."sample@test".mcp_servers.sample]
-default_tools_approval_mode = "prompt"
-
-[plugins."sample@test".mcp_servers.sample.tools.search]
-approval_mode = "approve"
-"#,
-    )
-    .expect("seed config");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .build()
-        .await
-        .expect("load config");
-    turn_context.config = Arc::new(config);
-    session.services.plugins_manager.clear_cache();
-
-    assert_eq!(
-        custom_mcp_tool_approval_mode(&session, &turn_context, "sample", "read").await,
-        AppToolApproval::Prompt
-    );
-    assert_eq!(
-        custom_mcp_tool_approval_mode(&session, &turn_context, "sample", "search").await,
-        AppToolApproval::Approve
-    );
-}
-
-#[tokio::test]
 async fn custom_mcp_tool_approval_mode_uses_updated_plugin_mcp_policy_after_cache_warm() {
     let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;

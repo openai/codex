@@ -1316,7 +1316,7 @@ async fn load_plugins_applies_plugin_mcp_server_policy() {
     "sample": {
       "type": "http",
       "url": "https://sample.example/mcp",
-      "default_tools_approval_mode": "prompt",
+      "default_tools_approval_mode": "writes",
       "enabled_tools": ["read", "search"],
       "tools": {
         "search": { "approval_mode": "prompt", "output_token_limit": 8000 }
@@ -1334,7 +1334,7 @@ enabled = true
 
 [plugins."sample@test".mcp_servers.sample]
 enabled = false
-default_tools_approval_mode = "approve"
+default_tools_approval_mode = "prompt"
 enabled_tools = ["search"]
 disabled_tools = ["delete"]
 
@@ -1353,7 +1353,7 @@ output_token_limit = 12000
     assert!(!server.enabled);
     assert_eq!(
         server.default_tools_approval_mode,
-        Some(AppToolApproval::Approve)
+        Some(AppToolApproval::Prompt)
     );
     assert_eq!(server.enabled_tools, Some(vec!["search".to_string()]));
     assert_eq!(server.disabled_tools, Some(vec!["delete".to_string()]));
