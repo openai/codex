@@ -457,13 +457,6 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
-    pub(super) fn stop_rate_limit_poller(&mut self) {}
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn prefetch_rate_limits(&mut self) {
-        self.stop_rate_limit_poller();
-    }
-
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn should_prefetch_rate_limits(&self) -> bool {
         self.requires_openai_auth && self.has_chatgpt_account

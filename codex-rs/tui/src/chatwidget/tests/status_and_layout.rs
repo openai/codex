@@ -822,9 +822,6 @@ async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     chat.config.model_provider.requires_openai_auth = true;
     chat.requires_openai_auth = false;
     assert!(!chat.should_prefetch_rate_limits());
-
-    chat.prefetch_rate_limits();
-    assert!(!chat.should_prefetch_rate_limits());
 }
 
 #[tokio::test]

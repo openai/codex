@@ -2142,7 +2142,6 @@ impl Drop for ChatWidget {
             self.app_event_tx
                 .send(AppEvent::StopRealtimeConversation { thread_id });
         }
-        self.stop_rate_limit_poller();
     }
 }
 
