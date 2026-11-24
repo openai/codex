@@ -1,24 +1,7 @@
 use crate::color::perceptual_distance;
-use codex_terminal_detection::TerminalName;
-use codex_terminal_detection::terminal_info;
+pub use codex_terminal_detection::StdoutColorLevel;
+pub use codex_terminal_detection::stdout_color_level;
 use ratatui::style::Color;
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum StdoutColorLevel {
-    TrueColor,
-    Ansi256,
-    Ansi16,
-    Unknown,
-}
-
-pub fn stdout_color_level() -> StdoutColorLevel {
-    match supports_color::on_cached(supports_color::Stream::Stdout) {
-        Some(level) if level.has_16m => StdoutColorLevel::TrueColor,
-        Some(level) if level.has_256 => StdoutColorLevel::Ansi256,
-        Some(_) => StdoutColorLevel::Ansi16,
-        None => StdoutColorLevel::Unknown,
-    }
-}
 
 #[allow(clippy::disallowed_methods)]
 pub fn rgb_color((r, g, b): (u8, u8, u8)) -> Color {
@@ -47,32 +30,7 @@ pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
         return StdoutColorLevel::TrueColor;
     }
 
-    stdout_color_level_for_terminal(
-        stdout_color_level(),
-        terminal_info().name,
-        std::env::var_os("WT_SESSION").is_some(),
-        std::env::var_os("FORCE_COLOR").is_some(),
-    )
-}
-
-fn stdout_color_level_for_terminal(
-    stdout_level: StdoutColorLevel,
-    terminal_name: TerminalName,
-    has_wt_session: bool,
-    has_force_color_override: bool,
-) -> StdoutColorLevel {
-    if has_wt_session && !has_force_color_override {
-        return StdoutColorLevel::TrueColor;
-    }
-
-    if stdout_level == StdoutColorLevel::Ansi16
-        && terminal_name == TerminalName::WindowsTerminal
-        && !has_force_color_override
-    {
-        StdoutColorLevel::TrueColor
-    } else {
-        stdout_level
-    }
+    codex_terminal_detection::terminal_color_level()
 }
 
 fn best_color_for_color_level(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {
@@ -511,45 +469,6 @@ mod tests {
         assert_eq!(
             best_color_for_color_level((12, 34, 56), StdoutColorLevel::Ansi16),
             Color::Reset
-        );
-    }
-
-    #[test]
-    fn windows_terminal_wt_session_promotes_to_truecolor() {
-        assert_eq!(
-            stdout_color_level_for_terminal(
-                StdoutColorLevel::Ansi16,
-                TerminalName::Unknown,
-                /*has_wt_session*/ true,
-                /*has_force_color_override*/ false,
-            ),
-            StdoutColorLevel::TrueColor
-        );
-    }
-
-    #[test]
-    fn windows_terminal_name_promotes_ansi16_to_truecolor() {
-        assert_eq!(
-            stdout_color_level_for_terminal(
-                StdoutColorLevel::Ansi16,
-                TerminalName::WindowsTerminal,
-                /*has_wt_session*/ false,
-                /*has_force_color_override*/ false,
-            ),
-            StdoutColorLevel::TrueColor
-        );
-    }
-
-    #[test]
-    fn force_color_keeps_reported_stdout_level() {
-        assert_eq!(
-            stdout_color_level_for_terminal(
-                StdoutColorLevel::Ansi16,
-                TerminalName::WindowsTerminal,
-                /*has_wt_session*/ true,
-                /*has_force_color_override*/ true,
-            ),
-            StdoutColorLevel::Ansi16
         );
     }
 }

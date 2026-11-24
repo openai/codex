@@ -5245,6 +5245,7 @@ name = "codex-terminal-detection"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
+ "supports-color 3.0.2",
  "tracing",
 ]
 
@@ -5455,7 +5456,6 @@ dependencies = [
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.28.0",
- "supports-color 3.0.2",
  "syntect",
  "tempfile",
  "textwrap 0.16.2",

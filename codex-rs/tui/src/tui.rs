@@ -813,7 +813,7 @@ impl Tui {
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
         // Cache this to avoid contention with the event reader.
-        supports_color::on_cached(supports_color::Stream::Stdout);
+        codex_terminal_detection::stdout_color_level();
         let _ = crate::terminal_palette::default_colors();
         let terminal_info = codex_terminal_detection::terminal_info();
         let scrollback = ScrollbackStrategy::detect(&terminal_info);

@@ -110,7 +110,6 @@ sha2 = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }

@@ -6,6 +6,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::terminal_palette::StdoutColorLevel;
+use crate::terminal_palette::stdout_color_level;
 use crate::text_formatting::contains_rtl_or_arabic_number;
 use crate::tui::FrameRequester;
 use ratatui::style::Stylize;
@@ -101,10 +103,7 @@ pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'sta
 
 fn animated_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
     let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
-    if supports_color::on_cached(supports_color::Stream::Stdout)
-        .map(|level| level.has_16m)
-        .unwrap_or(false)
-    {
+    if stdout_color_level() == StdoutColorLevel::TrueColor {
         shimmer_spans("•")
             .into_iter()
             .next()

@@ -6,12 +6,13 @@ use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_config::LoaderOverrides;
+use codex_terminal_detection::StdoutColorLevel;
+use codex_terminal_detection::stdout_color_level;
 use codex_tui::Cli;
 use codex_tui::ExitReason;
 use codex_tui::run_main;
 use codex_utils_cli::CliConfigOverrides;
 use std::io::Write;
-use supports_color::Stream;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -46,7 +47,7 @@ fn main() -> anyhow::Result<()> {
             ExitReason::UserRequested | ExitReason::TurnInterrupted => false,
         };
 
-        let color_enabled = supports_color::on(Stream::Stdout).is_some();
+        let color_enabled = stdout_color_level() != StdoutColorLevel::Unknown;
         for line in exit_info.format_exit_messages(color_enabled) {
             println!("{line}");
         }

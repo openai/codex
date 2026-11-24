@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+supports-color = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

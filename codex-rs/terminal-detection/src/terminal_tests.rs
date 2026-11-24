@@ -216,6 +216,40 @@ fn detects_ghostty() {
         "xterm-ghostty",
         "ghostty_term_user_agent"
     );
+    assert_eq!(color::ansi_color_level(&env), StdoutColorLevel::TrueColor);
+    for key in ["FORCE_COLOR", "CLICOLOR_FORCE"] {
+        let forced = FakeEnvironment::new()
+            .with_var("TERM", "xterm-ghostty")
+            .with_var(key, "1");
+        assert_eq!(color::ansi_color_level(&forced), StdoutColorLevel::Ansi16);
+    }
+    let generic = env
+        .with_var("TERM", "xterm")
+        .with_var("TERM_PROGRAM", "Ghostty");
+    assert_eq!(color::ansi_color_level(&generic), StdoutColorLevel::Ansi16);
+}
+
+#[test]
+fn windows_terminal_palette_respects_stdout_overrides() {
+    use StdoutColorLevel::*;
+
+    let palette = |level, env: &FakeEnvironment| {
+        color::color_level_for_terminal(level, detect_terminal_info_from_env(env).name, env)
+    };
+    let named = FakeEnvironment::new().with_var("TERM_PROGRAM", "WindowsTerminal");
+    assert_eq!(palette(Ansi16, &named), TrueColor);
+    assert_eq!(palette(Unknown, &named), Unknown);
+    assert_eq!(palette(Ansi16, &named.with_var("FORCE_COLOR", "1")), Ansi16);
+
+    let other = FakeEnvironment::new().with_var("TERM_PROGRAM", "WezTerm");
+    assert_eq!(palette(Ansi16, &other), Ansi16);
+    let session = other.with_var("WT_SESSION", "session");
+    assert_eq!(palette(Ansi16, &session), TrueColor);
+    assert_eq!(palette(Unknown, &session), TrueColor);
+    assert_eq!(
+        palette(Ansi256, &session.with_var("FORCE_COLOR", "2")),
+        Ansi256
+    );
 }
 
 #[test]

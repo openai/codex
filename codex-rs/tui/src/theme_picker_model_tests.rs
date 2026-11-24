@@ -15,7 +15,15 @@ fn model_theme_files_preview_select_and_restore() {
                 "--nocapture",
             ])
             .env("CODEX_MODEL_THEME_TEST_CHILD", "1")
-            .env("FORCE_COLOR", "3")
+            // Reproduce SSH forwarding Ghostty's TERM without COLORTERM.
+            .env("TERM", "xterm-ghostty")
+            .env("IGNORE_IS_TERMINAL", "1")
+            .env_remove("TERM_PROGRAM")
+            .env_remove("WT_SESSION")
+            .env_remove("COLORTERM")
+            .env_remove("NO_COLOR")
+            .env_remove("FORCE_COLOR")
+            .env_remove("CLICOLOR_FORCE")
             .output()
             .unwrap();
         assert!(
