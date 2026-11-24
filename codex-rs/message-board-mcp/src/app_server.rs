@@ -4,6 +4,7 @@
 
 use anyhow::Context;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::MESSAGE_BOARD_CLIENT_NAME;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_remote_client::AppServerEvent;
@@ -122,7 +123,7 @@ async fn connect(url: &Url) -> anyhow::Result<Connection> {
             websocket_url: url.to_string(),
             auth_token: None,
         },
-        client_name: "codex_message_board".into(),
+        client_name: MESSAGE_BOARD_CLIENT_NAME.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         experimental_api: true,
         mcp_server_openai_form_elicitation: false,

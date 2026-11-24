@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::DEFAULT_APP_SERVER_TEST_ARGS;
+use app_test_support::MockResponsesConfig;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
@@ -14,17 +15,20 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::MESSAGE_BOARD_CLIENT_NAME;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::config::set_project_trust_level;
+use codex_features::Feature;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpClientBuilder;
 use codex_http_client::HttpResponse;
 use codex_protocol::config_types::TrustLevel;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::sse;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -33,6 +37,7 @@ use futures::StreamExt;
 use hmac::Hmac;
 use hmac::Mac;
 use http::StatusCode;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use sha2::Sha256;
 use std::net::SocketAddr;
@@ -556,6 +561,75 @@ async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_tim
         .kill()
         .await
         .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_child_unloads_while_message_board_stays_connected() -> Result<()> {
+    let done = app_test_support::create_final_assistant_message_sse_response("Ready.")?;
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        sse(vec![
+            ev_function_call_with_namespace(
+                "spawn-worker",
+                "collaboration",
+                "spawn_agent",
+                r#"{"task_name":"worker","message":"Say ready.","fork_turns":"none"}"#,
+            ),
+            ev_completed("spawn"),
+        ]),
+        done.clone(),
+        done,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::MultiAgentV2)
+        .disable_feature(Feature::CodeMode)
+        .disable_feature(Feature::CodeModeOnly)
+        .with_root_config("thread_unload_delay_secs = 0")
+        .write(codex_home.path())?;
+    let (mut process, address) = spawn_websocket_server(codex_home.path()).await?;
+    let mut owner = connect_websocket(address).await?;
+    send_initialize_request(&mut owner, /*id*/ 1, "ws_thread_owner").await?;
+    read_response_for_id(&mut owner, /*id*/ 1).await?;
+    let parent = start_thread(&mut owner, /*id*/ 2).await?;
+    let mut board = connect_websocket(address).await?;
+    send_initialize_request(&mut board, /*id*/ 1, MESSAGE_BOARD_CLIENT_NAME).await?;
+    read_response_for_id(&mut board, /*id*/ 1).await?;
+
+    send_request(
+        &mut owner,
+        "turn/start",
+        /*id*/ 3,
+        Some(json!({"threadId": parent, "input": [{"type": "text", "text": "Spawn a worker."}]})),
+    )
+    .await?;
+    let mut child = None;
+    for _ in 0..2 {
+        let completed = read_notification_for_method(&mut owner, "turn/completed").await?;
+        let params = completed.params.context("turn completion")?;
+        assert_eq!(params["turn"]["status"], "completed");
+        if params["threadId"] != parent {
+            child = Some(params["threadId"].as_str().context("child ID")?.to_owned());
+        }
+    }
+    let child = child.context("child turn must complete")?;
+    send_request(
+        &mut owner,
+        "thread/unsubscribe",
+        /*id*/ 4,
+        Some(json!({"threadId": child})),
+    )
+    .await?;
+    let (reply, closed) =
+        read_response_and_notification_for_method(&mut owner, /*id*/ 4, "thread/closed")
+            .await
+            .context("idle child should unload with the board still connected")?;
+    assert_eq!(reply.result, json!({"status": "unsubscribed"}));
+    assert_eq!(closed.params, Some(json!({"threadId": child})));
+    // Query over the original board socket to rule out a disconnect causing the unload.
+    assert_loaded_threads(&mut board, /*id*/ 2, &[&parent]).await?;
+    process.kill().await?;
     Ok(())
 }
 

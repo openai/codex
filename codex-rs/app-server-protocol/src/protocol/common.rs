@@ -18,6 +18,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 
+/// The message board's `clientInfo.name` during app-server initialization.
+pub const MESSAGE_BOARD_CLIENT_NAME: &str = "codex_message_board";
+
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
