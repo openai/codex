@@ -2,6 +2,8 @@ use super::*;
 use crate::config::Constrained;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
+use crate::guardian_review::PendingReviewWrites;
+use crate::guardian_review::ReviewPreparationError;
 use crate::plugins::plugins_manager_for_config;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
@@ -71,6 +73,37 @@ use tempfile::tempdir;
 use test_case::test_case;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+
+#[tokio::test]
+async fn guardian_rejects_failed_append_of_forwarded_user_instructions() {
+    let (mut session, turn) = make_session_and_context().await;
+    attach_thread_persistence(&mut session).await;
+    session.live_thread().unwrap().shutdown().await.unwrap();
+    let writes = Arc::new(PendingReviewWrites::default());
+    session.pending_review_writes = Some(Arc::clone(&writes));
+    let delivery = ResponseItemEnvelope {
+        item: serde_json::from_value(json!({
+            "type": "function_call_output", "id": "delivery",
+            "name": "send_message_to_thread", "namespace": "codex_app", "output": "Inspect."
+        }))
+        .unwrap(),
+        metadata: Some(CodexHarnessMetadata {
+            sender_user_messages: Some(Box::new(codex_history::SenderUserMessages {
+                receiver_turn_id: turn.sub_id.clone(),
+                receiver_message_id: "delivery".to_owned(),
+                text: "Stop the release.".to_owned(),
+            })),
+            ..Default::default()
+        }),
+    };
+    session
+        .record_prepared_conversation_items(&turn, turn.model_info(), vec![delivery], Vec::new())
+        .await;
+    assert_eq!(
+        writes.wait().await,
+        Err(ReviewPreparationError::HistoryWriteUnconfirmed)
+    );
+}
 
 fn expect_text_output<T>(output: &T) -> String
 where

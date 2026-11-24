@@ -10,12 +10,14 @@ use std::sync::Weak;
 use anyhow::Context;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::guardian_review::PendingReviewWrites;
 use codex_core::guardian_review::ReviewRetrieval;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadReadyInput;
+use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnLifecycleContributor;
@@ -131,6 +133,10 @@ impl Host {
                 "in-memory Guardian evidence requires a fresh root"
             );
         }
+        let writes = input
+            .thread_store
+            .get::<PendingReviewWrites>()
+            .context("Guardian write tracker missing at thread startup")?;
         let history = self
             .manager
             .upgrade()
@@ -172,7 +178,7 @@ impl Host {
         {
             let _ = wake.try_send(());
         }
-        let (queue, mut captures) = RootEvidence::new(lifetime.clone(), history, saved);
+        let (queue, mut captures) = RootEvidence::new(lifetime.clone(), history, saved, writes);
         lifetime
             .tasks
             .spawn(queue.clone().capture_on_activity(wakes));
@@ -235,6 +241,20 @@ impl Host {
 }
 
 impl ThreadLifecycleContributor<Config> for Host {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        // Track writes before the manager publishes the root to concurrent callers.
+        if !input.config.ephemeral
+            && !input.session_source.is_internal()
+            && input.thread_store.level_id() == input.session_store.level_id()
+        {
+            input.thread_store.get_or_init(PendingReviewWrites::default);
+        }
+        Box::pin(std::future::ready(()))
+    }
+
     fn on_thread_ready<'a>(
         &'a self,
         input: ThreadReadyInput<'a, Config>,

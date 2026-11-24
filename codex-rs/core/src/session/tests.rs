@@ -4777,7 +4777,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
         .expect("thread should have rollout path")
 }
 
-async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+pub(super) async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let rollout_path = open_thread_persistence(session).await;
     session
         .ensure_rollout_materialized(PersistContext::Standard)
@@ -6844,6 +6844,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         context_ids,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         outcome_reporting: None,
+        pending_review_writes: None,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         parent_observer_event_tx: OnceLock::new(),
@@ -9212,6 +9213,7 @@ where
         context_ids,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         outcome_reporting: None,
+        pending_review_writes: None,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         parent_observer_event_tx: OnceLock::new(),

@@ -7,6 +7,8 @@ use pretty_assertions::assert_eq;
 use test_case::test_case;
 
 use super::thread_settings;
+use crate::guardian_review::PendingReviewWrites;
+use crate::session::tests::attach_thread_persistence;
 use crate::session::tests::make_session_and_context;
 
 fn delivered_message() -> RetainedUserMessage {
@@ -18,6 +20,23 @@ fn delivered_message() -> RetainedUserMessage {
         complete: true,
         phase: None,
     }
+}
+
+#[tokio::test]
+async fn guardian_waits_for_detached_confirmed_delivery() {
+    let (mut session, _) = make_session_and_context().await;
+    attach_thread_persistence(&mut session).await;
+    let writes = Arc::new(PendingReviewWrites::default());
+    session.pending_review_writes = Some(Arc::clone(&writes));
+    let session = Arc::new(session);
+    let checkpoint = thread_settings::acquire_persistence_lock(&session).await;
+    let (recording, _) = session.record_delivered_assistant_message(delivered_message());
+    let waiting = writes.wait();
+    tokio::pin!(waiting);
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    drop(checkpoint);
+    waiting.await.expect("confirmed delivery appended");
+    recording.await.expect("delivery task finished");
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ use std::task::Poll;
 
 use crate::context::ContextualUserFragment;
 use crate::context::UserGoalUpdate;
+use crate::guardian_review::ReviewWrite;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
@@ -159,14 +160,16 @@ impl Session {
         // Share the checkpoint persistence lock so a fact cannot land on the wrong side
         // of the checkpoint/suffix boundary. Ephemeral threads use the same live state.
         let _guard = thread_settings::acquire_persistence_lock(self).await;
-        if self
-            .state
-            .lock()
-            .await
-            .history
-            .record_retained_context_for_persistence(&mut event)
-        {
-            self.persist_rollout_items(&[RolloutItem::RetainedContext(event)])
+        let (recorded, write) = {
+            let mut state = self.state.lock().await;
+            ReviewWrite::record(
+                self.pending_review_writes.as_deref(),
+                &mut state.history,
+                |history| history.record_retained_context_for_persistence(&mut event),
+            )
+        };
+        if recorded {
+            self.persist_rollout_items_with_ack(&[RolloutItem::RetainedContext(event)], write)
                 .await;
         }
     }
@@ -225,9 +228,11 @@ impl Session {
                 retained_source: None,
                 acceptance_order: state.history.reserve_input_order(),
             };
-            state
-                .history
-                .record_retained_context_for_persistence(&mut event);
+            let (_, write) = ReviewWrite::record(
+                session.pending_review_writes.as_deref(),
+                &mut state.history,
+                |history| history.record_retained_context_for_persistence(&mut event),
+            );
             let mut pending = session
                 .code_mode_message_tasks
                 .pending_persistence
@@ -235,7 +240,7 @@ impl Session {
                 .unwrap_or_else(PoisonError::into_inner);
             pending.retain(|recording| recording.has_changed().is_ok());
             pending.push(pending_recording);
-            (event, boundary)
+            (event, boundary, write)
         });
         // Poll while still at the confirmed MCP response boundary. A free state lock
         // reserves the order now; a busy lock queues this reservation ahead of a
@@ -248,14 +253,14 @@ impl Session {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .spawn(async move {
-                let (event, _boundary) = match reservation {
+                let (event, _boundary, write) = match reservation {
                     Poll::Ready(reservation) => reservation,
                     Poll::Pending => reserve.await,
                 };
                 let _guard = thread_settings::acquire_persistence_lock(&persistence_session).await;
                 // A distinct delivery still belongs in the rollout when the live window is full.
                 persistence_session
-                    .persist_rollout_items(&[RolloutItem::RetainedContext(event)])
+                    .persist_rollout_items_with_ack(&[RolloutItem::RetainedContext(event)], write)
                     .await;
                 drop(recorded);
             });

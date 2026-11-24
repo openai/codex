@@ -3,7 +3,11 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -16,10 +20,54 @@ use tempfile::TempDir;
 use super::*;
 use crate::CreateThreadParams;
 use crate::LiveThread;
+use crate::OriginalHistoryRequest;
 use crate::PersistContext;
 use crate::ThreadPersistenceMetadata;
 use crate::UpdateThreadMetadataParams;
 use crate::local::test_support::test_config;
+
+#[tokio::test]
+async fn acknowledged_history_is_readable_after_metadata_failure() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live = LiveThread::create(store.clone(), params)
+        .await
+        .expect("create live thread");
+    // Keep the canonical writer open while SQLite metadata updates fail.
+    runtime.close().await;
+
+    let message = ResponseItem::from(ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![input_text("Stop the release.")],
+        phase: None,
+    });
+    let items = [RolloutItem::ResponseItem(message.clone().into())];
+    let mut acknowledged = false;
+    let error = live
+        .append_items_with_ack(&items, || acknowledged = true)
+        .await
+        .expect_err("surface the metadata failure");
+    assert!(error.to_string().contains("failed to read thread metadata"));
+    assert!(acknowledged);
+    store.flush_thread(thread_id).await.expect("flush history");
+    let start = HistoryPosition {
+        thread_id,
+        end_ordinal_exclusive: 0,
+        end_byte_offset: 0,
+    };
+    let history = store
+        .read_original_history(thread_id, OriginalHistoryRequest::After(start))
+        .await
+        .expect("read committed history");
+    let RolloutItem::ResponseItem(saved) = &history.items.last().expect("saved instruction").item
+    else {
+        panic!("expected appended user message");
+    };
+    assert_eq!(saved.item, message);
+    live.discard().await.expect("remove writer");
+}
 
 #[tokio::test]
 async fn paginated_metadata_write_failure_stays_pending_until_retry() {

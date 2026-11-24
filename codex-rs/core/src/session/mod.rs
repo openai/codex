@@ -339,6 +339,7 @@ mod rollout_reconstruction_tests;
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::guardian_review::ReviewWrite;
 use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpManager;
 use crate::mcp::McpThreadIdentity;
@@ -4208,6 +4209,7 @@ impl Session {
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>();
+        let mut review_write = None;
         {
             let mut state = self.state.lock().await;
             let pending_orders = turn_context
@@ -4291,7 +4293,11 @@ impl Session {
                 state
                     .pending_audio_duration_ids
                     .extend(file_audio::file_ids(&items).cloned());
-                state.history.record_annotated_items(&mut items, policy);
+                (_, review_write) = ReviewWrite::record(
+                    self.pending_review_writes.as_deref(),
+                    &mut state.history,
+                    |history| history.record_annotated_items(&mut items, policy),
+                );
             }
             state
                 .current_time_reminder
@@ -4332,7 +4338,8 @@ impl Session {
                 .map(RolloutItem::EventMsg)
                 .chain(items.into_iter().map(RolloutItem::ResponseItem))
                 .collect::<Vec<_>>();
-            self.persist_rollout_items(&rollout_items).await;
+            self.persist_rollout_items_with_ack(&rollout_items, review_write)
+                .await;
             drop(settings_guard);
         }
         drop(realtime_settings_guard);
@@ -5544,10 +5551,25 @@ impl Session {
         (updates, snapshot)
     }
 
-    #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) -> bool {
+        self.persist_rollout_items_with_ack(items, /*write*/ None)
+            .await
+    }
+
+    #[tracing::instrument(name = "persist_rollout_items", level = "trace", skip_all, fields(item_count = items.len()))]
+    async fn persist_rollout_items_with_ack(
+        &self,
+        items: &[RolloutItem],
+        write: Option<ReviewWrite>,
+    ) -> bool {
         if let Some(live_thread) = self.live_thread()
-            && let Err(e) = live_thread.append_items(items).await
+            && let Err(e) = live_thread
+                .append_items_with_ack(items, move || {
+                    if let Some(write) = write {
+                        write.confirm();
+                    }
+                })
+                .await
         {
             error!("failed to record rollout items: {e:#}");
             if self

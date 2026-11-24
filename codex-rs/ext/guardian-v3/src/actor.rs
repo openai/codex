@@ -352,9 +352,7 @@ impl codex_core::guardian_review::ReviewerPreparation for BoundActorReview {
                     .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
                 let initial = self.initial.lock().await.take();
                 let cutoff = if let Some(initial) = initial {
-                    let initial = initial
-                        .await
-                        .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
+                    let initial = initial.await.map_err(|_| evidence.cutoff_error())?;
                     if !Arc::ptr_eq(&initial.evidence, &evidence) {
                         return Err(ReviewPreparationError::EvidenceUnavailable);
                     }
@@ -366,7 +364,7 @@ impl codex_core::guardian_review::ReviewerPreparation for BoundActorReview {
                 let ready = evidence
                     .request_through(cutoff)
                     .await
-                    .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
+                    .map_err(|_| evidence.cutoff_error())?;
                 ready
                     .await
                     .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;

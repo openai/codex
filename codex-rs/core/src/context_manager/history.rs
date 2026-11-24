@@ -351,6 +351,13 @@ impl ContextManager {
         }
     }
 
+    pub(crate) fn guardian_revisions(&self) -> (u64, u64) {
+        (
+            self.user_message_revision,
+            self.guardian_review_context_revision,
+        )
+    }
+
     pub(crate) fn conversation_history_snapshot(&self) -> Arc<dyn ConversationHistorySnapshot> {
         Arc::new(SharedConversationHistory {
             items: Arc::clone(&self.items),

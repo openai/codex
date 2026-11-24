@@ -35,6 +35,7 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
@@ -422,6 +423,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    thread_extension_init: ExtensionDataInit,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -594,6 +596,12 @@ impl TestCodexBuilder {
 
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
+        self
+    }
+
+    /// Supply an attachment when starting the initial test thread.
+    pub fn with_thread_extension<T: Send + Sync + 'static>(mut self, value: T) -> Self {
+        self.thread_extension_init.insert(value);
         self
     }
 
@@ -1006,6 +1014,7 @@ impl TestCodexBuilder {
                 Box::pin(thread_manager.start_thread(StartThreadOptions {
                     request_country: self.request_country.clone(),
                     history_mode: self.history_mode,
+                    thread_extension_init: std::mem::take(&mut self.thread_extension_init),
                     client_mcp_extensions: client_mcp_extensions(),
                     environments: environment_requests,
                     ..StartThreadOptions::new(config.clone())
@@ -1616,6 +1625,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        thread_extension_init: ExtensionDataInit::default(),
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
         external_time_provider: None,

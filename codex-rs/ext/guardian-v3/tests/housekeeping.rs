@@ -9,6 +9,7 @@ use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::GuardianInferenceProvider;
 use codex_core::guardian_review::AttachedReviewer;
+use codex_core::guardian_review::PendingReviewWrites;
 use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::prepare_review_prewarm;
 use codex_extension_api::ExtensionData;
@@ -640,6 +641,7 @@ async fn root_shutdown_waits_for_the_accepted_evidence_append() -> anyhow::Resul
     .await;
     let release_401 = server.gate_response_event(&unauthorized);
     let test = test_codex()
+        .with_thread_extension(PendingReviewWrites::default())
         .with_home(Arc::clone(&home))
         .with_auth_manager(auth)
         .with_history_mode(ThreadHistoryMode::Paginated)
@@ -926,6 +928,7 @@ async fn reviewer_fixture(
     let named = matches!(kind, ChildKind::Named);
     let url = prewarm.map(|server| format!("{}/v1", server.uri()));
     let builder = test_codex()
+        .with_thread_extension(PendingReviewWrites::default())
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
@@ -1059,6 +1062,9 @@ impl ReviewerFixture {
         let test = self.harness.test();
         let root = test.session_configured.thread_id;
         let mut resume = test.start_thread_options().await;
+        resume
+            .thread_extension_init
+            .insert(PendingReviewWrites::default());
         test.thread_manager
             .remove_thread(&root)
             .await

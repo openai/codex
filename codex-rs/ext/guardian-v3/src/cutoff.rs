@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use anyhow::Context;
+use codex_core::guardian_review::PendingReviewWrites;
 use codex_core::guardian_review::ReviewPreparationError;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_protocol::ThreadId;
@@ -38,6 +39,7 @@ pub struct RootEvidence {
     lifetime: Arc<ReviewerTasks>,
     history: Arc<dyn ThreadStore>,
     cutoffs: mpsc::UnboundedSender<CutoffRequest>,
+    cutoff_failure: Arc<OnceLock<ReviewPreparationError>>,
     // Advances on enqueue. The housekeeper independently tracks successful routing.
     enqueued: Mutex<EvidenceCursor>,
     // A rejected durable record keeps its reason for subsequent reviews of this root.
@@ -54,6 +56,8 @@ pub(super) struct Capture {
 async fn capture_cutoffs(
     root: ThreadId,
     history: Arc<dyn ThreadStore>,
+    writes: Arc<PendingReviewWrites>,
+    failure: Arc<OnceLock<ReviewPreparationError>>,
     mut requests: mpsc::UnboundedReceiver<CutoffRequest>,
 ) {
     loop {
@@ -90,7 +94,18 @@ async fn capture_cutoffs(
         let result = tokio::select! {
             biased;
             () = cancelled => continue,
-            result = capture => result,
+            result = async {
+                // One wait covers everyone already in this group.
+                if let Err(error) = writes.wait().await {
+                    // Publish the reason before closing the current and queued replies.
+                    let _ = failure.set(error);
+                    return None;
+                }
+                Some(capture.await)
+            } => result,
+        };
+        let Some(result) = result else {
+            return;
         };
         for request in batch {
             let _ = request.reply.send(result.clone());
@@ -149,11 +164,19 @@ impl RootEvidence {
         lifetime: Arc<ReviewerTasks>,
         history: Arc<dyn ThreadStore>,
         cursor: EvidenceCursor,
+        writes: Arc<PendingReviewWrites>,
     ) -> (Arc<Self>, mpsc::Receiver<Capture>) {
         let (pending, requests) = mpsc::channel(1);
         let routed = watch::Sender::new(cursor.position());
         let (cutoffs, readers) = mpsc::unbounded_channel();
-        let capture = capture_cutoffs(cursor.thread_id(), Arc::clone(&history), readers);
+        let cutoff_failure = Arc::new(OnceLock::new());
+        let capture = capture_cutoffs(
+            cursor.thread_id(),
+            Arc::clone(&history),
+            writes,
+            Arc::clone(&cutoff_failure),
+            readers,
+        );
         let cancel = lifetime.cancellation.clone();
         lifetime.tasks.spawn(async move {
             let _ = cancel.run_until_cancelled(capture).await;
@@ -163,6 +186,7 @@ impl RootEvidence {
                 lifetime,
                 history,
                 cutoffs,
+                cutoff_failure,
                 enqueued: Mutex::new(cursor),
                 rejection: OnceLock::new(),
                 pending,
@@ -281,15 +305,20 @@ impl RootEvidence {
             .context("Guardian binding requires a history position")
     }
 
+    pub(super) fn cutoff_error(&self) -> ReviewPreparationError {
+        self.cutoff_failure
+            .get()
+            .copied()
+            .unwrap_or(ReviewPreparationError::EvidenceUnavailable)
+    }
+
     async fn request_cutoff(&self, kind: CutoffKind) -> anyhow::Result<Option<HistoryPosition>> {
         self.ensure_active()?;
         let (reply, position) = oneshot::channel();
         self.cutoffs
             .send(CutoffRequest { kind, reply })
-            .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
-        Ok(position
-            .await
-            .map_err(|_| ReviewPreparationError::EvidenceUnavailable)??)
+            .map_err(|_| self.cutoff_error())?;
+        Ok(position.await.map_err(|_| self.cutoff_error())??)
     }
 
     /// Submit a catch-up through the current durable tail and return its delivery acknowledgement.
