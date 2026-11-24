@@ -30,6 +30,15 @@ use tokio::sync::oneshot;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_rechecks_unsandboxed_retry_after_sandboxed_approval() -> Result<()> {
+    check_guardian_retry(/*allow_retry*/ false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_approved_retry_runs_without_the_sandbox() -> Result<()> {
+    check_guardian_retry(/*allow_retry*/ true).await
+}
+
+async fn check_guardian_retry(allow_retry: bool) -> Result<()> {
     let server = start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
@@ -120,7 +129,11 @@ async fn guardian_rechecks_unsandboxed_retry_after_sandboxed_approval() -> Resul
             sse(vec![
                 ev_assistant_message(
                     "retry-review",
-                    r#"{"outcome":"deny","rationale":"The unsandboxed retry is not authorized."}"#,
+                    if allow_retry {
+                        r#"{"outcome":"allow"}"#
+                    } else {
+                        r#"{"outcome":"deny","rationale":"The unsandboxed retry is not authorized."}"#
+                    },
                 ),
                 ev_completed("retry-review"),
             ]),
@@ -167,11 +180,16 @@ async fn guardian_rechecks_unsandboxed_retry_after_sandboxed_approval() -> Resul
     let output = responses
         .function_call_output_text("sandbox-retry")
         .context("tool result")?;
-    assert_eq!(
-        starts.len(),
-        1,
-        "the denied retry must not reach the executor: {output}"
-    );
+    if allow_retry {
+        assert_eq!(starts.len(), 2, "{output}");
+        assert_eq!(starts[1]["sandbox"], Value::Null);
+    } else {
+        assert_eq!(starts.len(), 1, "{output}");
+        assert!(
+            output.contains("The unsandboxed retry is not authorized."),
+            "{output}"
+        );
+    }
     assert!(
         starts[0]["sandbox"].is_object(),
         "the first attempt must be sandboxed"
@@ -201,9 +219,5 @@ async fn guardian_rechecks_unsandboxed_retry_after_sandboxed_approval() -> Resul
     let mut retry = action.clone();
     retry["sandbox_permissions"] = json!("require_escalated");
     assert_eq!(actions, vec![action, retry]);
-    assert!(
-        output.contains("The unsandboxed retry is not authorized."),
-        "{output}"
-    );
     Ok(())
 }

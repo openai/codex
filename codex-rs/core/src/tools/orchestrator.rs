@@ -83,25 +83,13 @@ impl ToolOrchestrator {
             tool_name: tool_ctx.tool_name.clone(),
         };
         let attempt_with_network_approval = SandboxAttempt {
-            sandbox_override: attempt.sandbox_override,
-            local_selection: attempt.local_selection,
-            sandbox_requested: attempt.sandbox_requested,
-            permissions: attempt.permissions,
-            exec_server_permissions: attempt.exec_server_permissions,
-            enforce_managed_network: attempt.enforce_managed_network,
-            manager: attempt.manager,
-            sandbox_cwd: attempt.sandbox_cwd,
-            workspace_roots: attempt.workspace_roots,
-            sandbox_exe: attempt.sandbox_exe,
-            use_legacy_landlock: attempt.use_legacy_landlock,
-            windows_sandbox_type: attempt.windows_sandbox_type,
-            windows_sandbox_level: attempt.windows_sandbox_level,
             network_denial_cancellation_token: network_approval
                 .as_ref()
                 .map(ActiveNetworkApproval::cancellation_token),
             network_proxy: network_approval
                 .as_ref()
                 .map(ActiveNetworkApproval::execution_proxy),
+            ..*attempt
         };
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
@@ -503,32 +491,48 @@ impl ToolOrchestrator {
                     && !strict_auto_review
                     && tool.should_bypass_approval(approval_policy, retry_preapproved)
                     && network_approval_context.is_none();
-                if !bypass_retry_approval {
+                let mut retry_action = if bypass_retry_approval {
+                    None
+                } else {
+                    Some(
+                        tool.approval_action(req, &tool_ctx.call_id)
+                            .map_err(|err| {
+                                ToolError::Rejected(format!(
+                                    "could not prepare approval action: {err}"
+                                ))
+                            })?,
+                    )
+                };
+
+                let retry_attempt = if unsandboxed_allowed {
+                    // Review and cache the same escalation that the executor will run.
+                    if let Some(ApprovalAction::ExecCommand {
+                        sandbox_permissions,
+                        additional_permissions,
+                        ..
+                    }) = &mut retry_action
+                    {
+                        *sandbox_permissions = SandboxPermissions::RequireEscalated;
+                        *additional_permissions = None;
+                    }
+                    SandboxAttempt {
+                        local_selection: SandboxSelection::Explicit(SandboxType::None),
+                        sandbox_requested: false,
+                        sandbox_exe: None,
+                        ..initial_attempt
+                    }
+                } else {
+                    // A network retry must preserve the sandbox enforcing denied reads.
+                    initial_attempt
+                };
+
+                if let Some(action) = retry_action {
                     let approval_reason = match &requirement {
                         ExecApprovalRequirement::NeedsApproval { reason, .. }
                         | ExecApprovalRequirement::NeedsHumanApproval { reason } => reason.clone(),
                         ExecApprovalRequirement::Skip { .. }
                         | ExecApprovalRequirement::Forbidden { .. } => None,
                     };
-                    let mut action =
-                        tool.approval_action(req, &tool_ctx.call_id)
-                            .map_err(|err| {
-                                ToolError::Rejected(format!(
-                                    "could not prepare approval action: {err}"
-                                ))
-                            })?;
-                    if unsandboxed_allowed
-                        && let ApprovalAction::ExecCommand {
-                            sandbox_permissions,
-                            additional_permissions,
-                            ..
-                        } = &mut action
-                    {
-                        // Review and cache the authority of the actual retry, not
-                        // the narrower permissions requested for the first attempt.
-                        *sandbox_permissions = SandboxPermissions::RequireEscalated;
-                        *additional_permissions = None;
-                    }
                     let approval_ctx = ApprovalContext {
                         exec_requirement: Some(requirement.clone()),
                         review_context: GuardianReviewContext::from(&tool_ctx.step_context),
@@ -556,37 +560,6 @@ impl ToolOrchestrator {
                         .await
                         .result?;
                 }
-
-                let retry_sandbox_requested = !unsandboxed_allowed && policy_requires_sandbox;
-                let local_selection = if retry_sandbox_requested {
-                    platform_selection
-                } else {
-                    SandboxSelection::Explicit(SandboxType::None)
-                };
-                let retry_sandbox_exe = if unsandboxed_allowed {
-                    None
-                } else {
-                    codex_sandbox_exe
-                };
-                let retry_attempt = SandboxAttempt {
-                    sandbox_override,
-                    local_selection,
-                    sandbox_requested: retry_sandbox_requested,
-                    permissions: initial_permissions,
-                    exec_server_permissions: escalated_profile
-                        .as_ref()
-                        .unwrap_or(permission_profile),
-                    enforce_managed_network: managed_network_active,
-                    manager: &sandbox_manager,
-                    sandbox_cwd: &sandbox_policy_cwd,
-                    workspace_roots,
-                    sandbox_exe: retry_sandbox_exe,
-                    use_legacy_landlock: sandbox_config.use_legacy_landlock,
-                    windows_sandbox_type,
-                    windows_sandbox_level: sandbox_config.windows_sandbox_level,
-                    network_denial_cancellation_token: None,
-                    network_proxy: None,
-                };
 
                 // Second attempt.
                 let network_approval_spec = tool.network_approval_spec(req, tool_ctx);
