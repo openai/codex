@@ -1130,7 +1130,7 @@ generatedImage(result);
 
 #[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gif_edit_from_code_mode_preserves_animation_and_api_defaults() -> Result<()> {
+async fn deferred_gif_edit_from_code_mode_preserves_animation_and_api_defaults() -> Result<()> {
     let call_id = "code-mode-gif-edit";
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
@@ -1152,13 +1152,15 @@ async fn gif_edit_from_code_mode_preserves_animation_and_api_defaults() -> Resul
                     call_id,
                     "exec",
                     r#"
-const result = await tools.image_gen__imagegen({
+const imagegen = ALL_TOOLS.find(tool => tool.name === "image_gen__imagegen");
+const result = await tools[imagegen.name]({
   prompt: "animate the attached image",
   gif: {},
   num_last_images_to_include: 1,
 });
 text(result.image_url);
 generatedImage(result);
+text(imagegen.description);
 "#,
                 ),
                 responses::ev_completed("resp-1"),
@@ -1190,11 +1192,12 @@ generatedImage(result);
     start_turn(
         &mut mcp,
         ThreadStartParams {
+            model: Some("gpt-5.5".into()),
             config: Some(
-                [(
-                    "features.image_generation_animation".to_string(),
-                    json!(true),
-                )]
+                [
+                    ("features.image_generation_animation".into(), json!(true)),
+                    ("features.defer_image_generation".into(), json!(true)),
+                ]
                 .into(),
             ),
             ..Default::default()
@@ -1274,7 +1277,8 @@ generatedImage(result);
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert!(requests[0].body_contains_text("gif?:"));
+    assert!(!requests[0].body_contains_text("image_gen__imagegen(args:"));
+    assert!(requests[1].body_contains_text("gif?:"));
     let output = requests[1].custom_tool_call_output(call_id);
     assert_eq!(
         output["output"][1],
@@ -1295,7 +1299,7 @@ generatedImage(result);
             .as_str()
             .is_some_and(|hint| hint.contains(&saved_path.display().to_string()))
     );
-    assert_eq!(output["output"].as_array().map(Vec::len), Some(4));
+    assert_eq!(output["output"].as_array().map(Vec::len), Some(5));
     Ok(())
 }
 

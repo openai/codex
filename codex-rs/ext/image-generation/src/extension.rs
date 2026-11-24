@@ -14,8 +14,10 @@ use codex_extension_api::ToolExecutor;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_tools::ToolExposure;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::IMAGE_GEN_NAMESPACE;
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
 
@@ -31,6 +33,7 @@ type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync
 struct ImageGenerationExtensionConfig {
     available: bool,
     gif_enabled: bool,
+    defer_image_generation: bool,
     http_client_factory: HttpClientFactory,
     provider: ModelProviderInfo,
     save_root: Option<AbsolutePathBuf>,
@@ -44,6 +47,12 @@ impl ImageGenerationExtensionConfig {
                 || config.model_provider.requires_openai_auth
                 || config.model_provider.uses_openai_actor_authorization(),
             gif_enabled: config.features.image_generation_animation_enabled(),
+            defer_image_generation: config.features.defer_image_generation_enabled()
+                && !config
+                    .code_mode
+                    .excluded_tool_namespaces
+                    .iter()
+                    .any(|namespace| namespace == IMAGE_GEN_NAMESPACE),
             http_client_factory: config.http_client_factory(),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
@@ -106,6 +115,11 @@ impl ToolContributor for ImageGenerationExtension {
                 })
             });
 
+        let exposure = if config.defer_image_generation {
+            ToolExposure::Deferred
+        } else {
+            ToolExposure::Direct
+        };
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
                 auth.model_provider(config.provider.clone()),
@@ -117,6 +131,7 @@ impl ToolContributor for ImageGenerationExtension {
             config.save_root.clone(),
             thread_store.level_id().to_string(),
             config.gif_enabled,
+            exposure,
         ))]
     }
 }

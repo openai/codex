@@ -1015,6 +1015,9 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "defer_image_generation": {
+              "type": "boolean"
+            },
             "defer_mailbox_preemption": {
               "type": "boolean"
             },
@@ -8423,6 +8426,9 @@
           "type": "boolean"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "defer_image_generation": {
           "type": "boolean"
         },
         "defer_mailbox_preemption": {

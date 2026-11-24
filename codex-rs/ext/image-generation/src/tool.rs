@@ -81,6 +81,7 @@ pub(crate) struct ImageGenerationTool {
     save_root: Option<AbsolutePathBuf>,
     thread_id: String,
     gif_enabled: bool,
+    exposure: ToolExposure,
 }
 
 impl ImageGenerationTool {
@@ -90,12 +91,14 @@ impl ImageGenerationTool {
         save_root: Option<AbsolutePathBuf>,
         thread_id: String,
         gif_enabled: bool,
+        exposure: ToolExposure,
     ) -> Self {
         Self {
             backend,
             save_root,
             thread_id,
             gif_enabled,
+            exposure,
         }
     }
 }
@@ -148,9 +151,8 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
         imagegen_tool_spec(self.gif_enabled)
     }
 
-    /// Exposes image generation directly and through the nested code-mode tool surface.
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::Direct
+        self.exposure
     }
 
     /// Executes the selected image operation and returns the completed image result.
