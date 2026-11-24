@@ -15,6 +15,10 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_otel::EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_COUNT_METRIC;
+use codex_otel::EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_TOTAL_METRIC;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ModeKind;
@@ -61,6 +65,9 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -2096,8 +2103,21 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
 
     let mut builder = test_codex().with_model("gpt-5.5").with_config(|config| {
         config.tool_output_token_limit = Some(50);
+        config
+            .features
+            .enable(Feature::ShellSnapshotV2)
+            .expect("test config should allow ShellSnapshotV2");
     });
-    let test = builder.build_with_auto_env(&server).await?;
+    let mut test = builder.build_with_auto_env(&server).await?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
+    let mut options = test.start_thread_options().await;
+    options.thread_extension_init.insert(metrics.clone());
+    let thread = test.thread_manager.start_thread(options).await?;
+    test.codex.shutdown_and_wait().await?;
+    test.codex = thread.thread;
+    test.session_configured = thread.session_configured;
 
     let start_call_id = "uexec-stdin-clamp-start";
     let start_args = serde_json::json!({
@@ -2167,6 +2187,44 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    // The initial call waits for the first yield. The later write_stdin must not count again.
+    let snapshot = metrics.snapshot()?;
+    let counter = |name: &str| {
+        let metric = snapshot
+            .scope_metrics()
+            .flat_map(ScopeMetrics::metrics)
+            .find(|metric| metric.name() == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+            panic!("expected counter {name}");
+        };
+        let mut points = sum.data_points();
+        let point = points.next().expect("one counter series");
+        assert!(
+            points.next().is_none(),
+            "unexpected extra series for {name}"
+        );
+        let tags = point
+            .attributes()
+            .map(|tag| (tag.key.as_str(), tag.value.to_string()))
+            .collect::<HashMap<_, _>>();
+        (tags, point.value())
+    };
+    let (tags, total_ms) = counter(EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_TOTAL_METRIC);
+    assert_eq!(tags["shell_snapshot_mode"], "v2");
+    assert_eq!(
+        counter(EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_COUNT_METRIC),
+        (tags, 1)
+    );
+    assert!(total_ms > 0);
+    // The counter truncates to whole milliseconds and the response rounds to 0.1 ms.
+    let recorded = Duration::from_millis(total_ms);
+    let reported = Duration::from_secs_f64(start_output.wall_time_seconds);
+    assert!(
+        recorded.abs_diff(reported) <= Duration::from_millis(1),
+        "recorded {recorded:?}, reported {reported:?}"
+    );
 
     Ok(())
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
+use crate::session::session::Session;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
@@ -27,6 +28,8 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::output::CapturedStream;
 use codex_features::Feature;
+use codex_otel::EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_COUNT_METRIC;
+use codex_otel::EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_TOTAL_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_tools::JsonSchema;
@@ -232,7 +235,20 @@ impl ExecCommandHandler {
             None => manager.exec_command(request, &context).await,
         };
         match result {
-            Ok(response) => Ok(boxed_tool_output(response)),
+            Ok(response) => {
+                let tags = [shell_snapshot_mode_tag(&session)];
+                step_context.session_telemetry.counter(
+                    EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_TOTAL_METRIC,
+                    response.wall_time.as_millis().min(i64::MAX as u128) as i64,
+                    &tags,
+                );
+                step_context.session_telemetry.counter(
+                    EXEC_COMMAND_INITIAL_OUTPUT_COLLECTION_COUNT_METRIC,
+                    /*inc*/ 1,
+                    &tags,
+                );
+                Ok(boxed_tool_output(response))
+            }
             Err(UnifiedExecError::SandboxDenied {
                 output,
                 original_token_count,
@@ -305,16 +321,8 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
 
 impl CoreToolRuntime for ExecCommandHandler {
     fn telemetry_tags(&self, invocation: &ToolInvocation) -> ToolTelemetryTags {
-        // Record the configured mode so fallback calls remain in their rollout cohort.
-        // This does not indicate whether the command actually used a snapshot.
-        let mode = if invocation.session.enabled(Feature::ShellSnapshotV2) {
-            "v2"
-        } else if invocation.session.enabled(Feature::ShellSnapshot) {
-            "v1"
-        } else {
-            "disabled"
-        };
-        vec![("shell_snapshot_mode", mode.to_string())]
+        let (key, mode) = shell_snapshot_mode_tag(&invocation.session);
+        vec![(key, mode.to_string())]
     }
 
     fn environments_for_input(
@@ -387,6 +395,19 @@ impl CoreToolRuntime for ExecCommandHandler {
     ) -> Option<PostToolUsePayload> {
         post_unified_exec_tool_use_payload(invocation, result)
     }
+}
+
+fn shell_snapshot_mode_tag(session: &Session) -> (&'static str, &'static str) {
+    // Record the configured mode so fallback calls remain in their rollout cohort.
+    // This does not indicate whether the command actually used a snapshot.
+    let mode = if session.enabled(Feature::ShellSnapshotV2) {
+        "v2"
+    } else if session.enabled(Feature::ShellSnapshot) {
+        "v1"
+    } else {
+        "disabled"
+    };
+    ("shell_snapshot_mode", mode)
 }
 
 fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool) {
