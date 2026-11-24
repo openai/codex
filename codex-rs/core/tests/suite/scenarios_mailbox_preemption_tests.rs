@@ -244,13 +244,20 @@ async fn mailbox_preemption_drains_websocket(scenario: MailboxDrain) -> anyhow::
                     "output": "aborted before dispatch",
                 }),
             );
+            // A deferred item must keep its ID even if the completion omits it.
+            let mut buffered =
+                responses::ev_reasoning_item("buffered", &["Already completed"], &[]);
+            buffered["item"]
+                .as_object_mut()
+                .expect("reasoning item")
+                .remove("id");
             vec![
                 json!({"type": "response.interrupt.accepted", "response_id": "first"}),
                 responses::ev_reasoning_item_added("buffered", &[]),
-                responses::ev_reasoning_item("buffered", &["Already completed"], &[]),
+                buffered,
                 call,
                 responses::ev_reasoning_item_added("discarded", &[]),
-                responses::ev_reasoning_summary_text_delta("Unfinished reasoning"),
+                responses::ev_reasoning_text_delta("Unfinished reasoning"),
                 json!({"type": "response.output_item.interrupted", "item_id": "discarded", "output_index": 3}),
                 completed,
             ]
@@ -309,7 +316,16 @@ async fn mailbox_preemption_drains_websocket(scenario: MailboxDrain) -> anyhow::
         );
         release_drain.send(()).expect("release mailbox drain");
     }
-    finish_mailbox_preemption(test).await?;
+    let completed_ids = finish_mailbox_preemption(test).await?;
+    if matches!(
+        scenario,
+        MailboxDrain::BufferedItems | MailboxDrain::UserSteering
+    ) {
+        assert_eq!(
+            completed_ids.iter().filter(|id| *id == "buffered").count(),
+            1
+        );
+    }
 
     let requests = server.single_connection();
     assert_eq!(requests[0].body_json()["generate"], false);
@@ -658,7 +674,7 @@ async fn start_mailbox_preemption(
     Ok(test)
 }
 
-async fn finish_mailbox_preemption(test: TestCodex) -> anyhow::Result<()> {
+async fn finish_mailbox_preemption(test: TestCodex) -> anyhow::Result<Vec<String>> {
     let mut started_items = Vec::new();
     let mut completed_items = Vec::new();
     wait_for_event(&test.codex, |event| {
@@ -673,7 +689,7 @@ async fn finish_mailbox_preemption(test: TestCodex) -> anyhow::Result<()> {
         match event {
             EventMsg::ItemStarted(item) => started_items.push(item.item.id()),
             EventMsg::ItemCompleted(item) => completed_items.push(item.item.id()),
-            EventMsg::ReasoningContentDelta(delta) => assert_ne!(delta.item_id, "discarded"),
+            EventMsg::ReasoningRawContentDelta(delta) => assert_ne!(delta.item_id, "discarded"),
             _ => {}
         }
         matches!(event, EventMsg::TurnComplete(_))
@@ -683,5 +699,5 @@ async fn finish_mailbox_preemption(test: TestCodex) -> anyhow::Result<()> {
     completed_items.retain(|id| id != "boundary");
     assert_eq!(started_items, completed_items);
     test.codex.shutdown_and_wait().await?;
-    Ok(())
+    Ok(completed_items)
 }
