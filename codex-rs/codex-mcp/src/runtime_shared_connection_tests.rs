@@ -39,6 +39,7 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
                 &*launch,
             )
             .await
+            .result
         }
         .boxed()
         .shared()
@@ -120,9 +121,10 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
     )
     .await
     .expect("forced refresh must not wait for the old startup")
+    .result
     .unwrap();
     release.notify_one();
-    let other = other.await.unwrap();
+    let other = other.await.result.unwrap();
     other
         .call_tool(
             "test".to_string(),
@@ -145,6 +147,7 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
             &*launch,
         )
         .await
+        .result
         .unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 2);
 

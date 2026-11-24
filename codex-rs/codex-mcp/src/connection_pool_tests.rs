@@ -11,6 +11,7 @@ use crate::runtime::McpRuntimeContext;
 use codex_config::McpServerConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::McpStartupStatus;
 use codex_rmcp_client::Elicitation;
 use codex_rmcp_client::InProcessTransportFactory;
 use codex_rmcp_client::RmcpClient;
@@ -312,7 +313,7 @@ impl LeasePeer {
         }
     }
 
-    fn attach(&self) -> tokio::task::JoinHandle<Result<ManagedClient, StartupOutcomeError>> {
+    fn attach(&self) -> tokio::task::JoinHandle<ConnectionAttempt> {
         let pool = self.pool.clone();
         let key = self.key.clone();
         let transport = self.transport.clone();
@@ -354,7 +355,7 @@ impl LeasePeer {
         let open = self.next("codex/connection/open").await;
         open.reply(json!({}));
         (
-            attach.await.unwrap().unwrap(),
+            attach.await.unwrap().result.unwrap(),
             open.message["params"]["leaseId"].clone(),
         )
     }
@@ -416,13 +417,33 @@ async fn dropping_lease_outside_runtime_releases_it() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn failed_lease_open_on_a_new_connection_is_timed() {
+    let mut peer = LeasePeer::new();
+    let attach = peer.attach();
+    let _open = peer.next("codex/connection/open").await;
+    tokio::time::advance(LEASE_REQUEST_TIMEOUT).await;
+    let attempt = attach.await.unwrap();
+    let Err(StartupOutcomeError::Failed { error, .. }) = attempt.result else {
+        panic!("expected lease open to fail");
+    };
+    let status = McpStartupStatus::Failed {
+        error,
+        reason: None,
+    };
+    let measurement = attempt.measurement.unwrap();
+    assert!(measurement.duration_ms_for(&status).is_some());
+}
+
+#[tokio::test(start_paused = true)]
 async fn timed_out_open_is_released_after_the_server_acknowledges_it() {
     let mut peer = LeasePeer::new();
     let (_other, _) = peer.chat().await;
     let attach = peer.attach();
     let open = peer.next("codex/connection/open").await;
     tokio::time::advance(LEASE_REQUEST_TIMEOUT).await;
-    assert!(attach.await.unwrap().is_err());
+    let attempt = attach.await.unwrap();
+    assert!(attempt.result.is_err());
+    assert!(attempt.measurement.is_none());
     assert!(
         tokio::time::timeout(Duration::from_secs(1), peer.frames.recv())
             .await
@@ -474,9 +495,12 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
     assert!(futures::poll!(&mut second).is_pending());
     started.notified().await;
     first_cancel.cancel();
-    assert!(matches!(first.await, Err(StartupOutcomeError::Cancelled)));
+    assert!(matches!(
+        first.await.result,
+        Err(StartupOutcomeError::Cancelled)
+    ));
     release.notify_one();
-    let client = second.await.unwrap();
+    let client = second.await.result.unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     assert!(!client.client.is_closed().await);
 
@@ -490,6 +514,7 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
             &launch,
         )
         .await
+        .result
         .unwrap();
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     config.server_permissions.insert(
@@ -667,6 +692,7 @@ async fn callback_during_startup_releases_waiting_chats_without_sharing_authorit
     })
     .await
     .expect("the joining chat must start before the first finishes")
+    .result
     .unwrap();
     first
         .call_tool(
@@ -685,7 +711,12 @@ async fn callback_during_startup_releases_waiting_chats_without_sharing_authorit
     assert!(first.client.is_closed().await);
 
     release_second.notify_one();
-    let second = second.await.unwrap();
+    let attempt = second.await;
+    assert!(
+        attempt.measurement.is_some(),
+        "private startup should be timed"
+    );
+    let second = attempt.result.unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 2);
     assert_eq!(*callbacks.lock().unwrap(), ["first", "second"]);
     second
@@ -738,6 +769,7 @@ async fn new_chat_relists_tools_without_invalidating_or_waiting_for_existing_cal
             &launch,
         )
         .await
+        .result
         .unwrap();
     let before = first.tool_catalog.read(|snapshot| snapshot).await;
     let release_call = Notify::new();
@@ -761,6 +793,7 @@ async fn new_chat_relists_tools_without_invalidating_or_waiting_for_existing_cal
         )
         .await
         .expect("new chats must not wait for existing calls")
+        .result
         .unwrap();
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -803,7 +836,7 @@ async fn new_chat_relists_tools_without_invalidating_or_waiting_for_existing_cal
             &launch,
         )
         .await;
-    assert!(failed.is_err());
+    assert!(failed.result.is_err());
     let _cancelled =
         tokio::time::timeout(Duration::from_secs(1), server.cancelled_listings.acquire())
             .await

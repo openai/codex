@@ -32,6 +32,7 @@ use crate::client_tool_catalog::ClientToolCatalog;
 use crate::client_tool_catalog::ToolCatalogSnapshot;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::ManagedClientFuture;
+use crate::rmcp_client::StartupMeasurement;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::server::McpServerConnectionIdentity;
@@ -128,7 +129,7 @@ struct LeaseOwners;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AcquisitionRole {
-    Creator,
+    Creator(Instant),
     Joiner,
 }
 
@@ -148,7 +149,7 @@ impl Entry {
         cache_context: Option<&McpToolCatalogCacheContext>,
     ) -> Result<Arc<ClientToolCatalog>, StartupOutcomeError> {
         // Listing must not update another chat's catalog or wait for its calls.
-        let listed = if role == AcquisitionRole::Creator {
+        let listed = if matches!(role, AcquisitionRole::Creator(_)) {
             client.tool_catalog.read(|snapshot| snapshot).await
         } else {
             let fetch_ticket = cache_context.map(|context| (context, context.begin_fetch()));
@@ -204,8 +205,6 @@ pub(crate) struct ConnectionLease {
 pub(crate) struct ConnectionSlot {
     state: Mutex<SlotState>,
     shutdown_tasks: OnceLock<TaskTracker>,
-    /// Set only if this acquisition started the selected connection.
-    pub(crate) started_at: OnceLock<Instant>,
 }
 
 #[derive(Default)]
@@ -257,6 +256,12 @@ impl ConnectionSharing {
     }
 }
 
+pub(crate) struct ConnectionAttempt {
+    pub(crate) result: Result<ManagedClient, StartupOutcomeError>,
+    /// Only new connections are timed, through lease registration even if it fails.
+    pub(crate) measurement: Option<StartupMeasurement>,
+}
+
 impl McpConnectionPool {
     pub(crate) async fn connect(
         &self,
@@ -266,71 +271,82 @@ impl McpConnectionPool {
         tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
         cancellation: CancellationToken,
         start: impl Fn(CancellationToken, Option<CancellationToken>) -> ManagedClientFuture + Sync,
-    ) -> Result<ManagedClient, StartupOutcomeError> {
-        let (lease, role) = self
-            .acquire(key, &slot, Arc::clone(&capabilities), &cancellation, &start)
-            .or_cancel(&cancellation)
-            .await
-            .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
-        let outcome = tokio::select! {
-            outcome = lease.entry.client.clone() => Some(outcome),
-            () = lease.entry.sharing_declined.cancelled(), if role == AcquisitionRole::Joiner => None,
-            () = cancellation.cancelled() => return Err(StartupOutcomeError::Cancelled),
-        };
-        match outcome {
-            Some(Ok(mut client))
-                if role == AcquisitionRole::Creator
-                    || matches!(client.connection_sharing, ConnectionSharing::Negotiated) =>
-            {
-                let shared_capabilities = lease
-                    .entry
-                    .capabilities
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                let server_tracks_leases = shared_capabilities
-                    .as_ref()
-                    .and_then(|caps| caps.get("extensions"))
-                    .and_then(|caps| caps.get(LEASE_CAPABILITY))
-                    .is_some();
-                *capabilities
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = shared_capabilities;
-                client.connection_sharing =
-                    if matches!(client.connection_sharing, ConnectionSharing::Negotiated) {
-                        client.client.enable_request_cancellation();
-                        client.tool_catalog = lease
-                            .entry
-                            .tool_catalog_for_chat(
-                                &client,
-                                role,
-                                tool_catalog_cache_context.as_ref(),
-                            )
+    ) -> ConnectionAttempt {
+        let mut started_at = None;
+        let result = async {
+            let (lease, role) = self
+                .acquire(key, &slot, Arc::clone(&capabilities), &cancellation, &start)
+                .or_cancel(&cancellation)
+                .await
+                .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
+            let outcome = tokio::select! {
+                outcome = lease.entry.client.clone() => Some(outcome),
+                () = lease.entry.sharing_declined.cancelled(), if role == AcquisitionRole::Joiner => None,
+                () = cancellation.cancelled() => return Err(StartupOutcomeError::Cancelled),
+            };
+            let mut client = match (role, outcome) {
+                (AcquisitionRole::Creator(start), Some(result)) => {
+                    started_at = Some(start);
+                    result?
+                }
+                (AcquisitionRole::Joiner, Some(Ok(client)))
+                    if matches!(client.connection_sharing, ConnectionSharing::Negotiated) =>
+                {
+                    client
+                }
+                _ => {
+                    // Older or failed servers leave other chats to initialize privately
+                    // with their own elicitation authority.
+                    drop(lease);
+                    started_at = Some(Instant::now());
+                    return start(cancellation, /*sharing_declined*/ None).await;
+                }
+            };
+            let shared_capabilities = lease
+                .entry
+                .capabilities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let server_tracks_leases = shared_capabilities
+                .as_ref()
+                .and_then(|caps| caps.get("extensions"))
+                .and_then(|caps| caps.get(LEASE_CAPABILITY))
+                .is_some();
+            *capabilities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = shared_capabilities;
+            client.connection_sharing =
+                if matches!(client.connection_sharing, ConnectionSharing::Negotiated) {
+                    client.client.enable_request_cancellation();
+                    client.tool_catalog = lease
+                        .entry
+                        .tool_catalog_for_chat(
+                            &client,
+                            role,
+                            tool_catalog_cache_context.as_ref(),
+                        )
+                        .or_cancel(&cancellation)
+                        .await
+                        .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
+                    if server_tracks_leases {
+                        lease
+                            .open_on_server(Arc::clone(&client.client))
                             .or_cancel(&cancellation)
                             .await
                             .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
-                        if server_tracks_leases {
-                            lease
-                                .open_on_server(Arc::clone(&client.client))
-                                .or_cancel(&cancellation)
-                                .await
-                                .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
-                        }
-                        ConnectionSharing::Shared(lease)
-                    } else {
-                        lease.entry.remove_from_pool();
-                        ConnectionSharing::Owned(lease)
-                    };
-                Ok(client)
-            }
-            Some(Err(error)) if role == AcquisitionRole::Creator => Err(error),
-            _ => {
-                // Older or failed servers leave other chats to initialize privately
-                // with their own elicitation authority.
-                drop(lease);
-                let _ = slot.started_at.set(Instant::now());
-                start(cancellation, /*sharing_declined*/ None).await
-            }
+                    }
+                    ConnectionSharing::Shared(lease)
+                } else {
+                    lease.entry.remove_from_pool();
+                    ConnectionSharing::Owned(lease)
+                };
+            Ok(client)
+        }
+        .await;
+        ConnectionAttempt {
+            measurement: started_at.map(|start| StartupMeasurement::new(start, &result)),
+            result,
         }
     }
 
@@ -343,7 +359,6 @@ impl McpConnectionPool {
         start: impl Fn(CancellationToken, Option<CancellationToken>) -> ManagedClientFuture,
     ) -> Result<(Arc<ConnectionLease>, AcquisitionRole), StartupOutcomeError> {
         loop {
-            let mut started_at = None;
             let (lease, role) = {
                 let mut state = slot
                     .state
@@ -379,7 +394,7 @@ impl McpConnectionPool {
                 } else {
                     let startup_cancellation = CancellationToken::new();
                     let sharing_declined = CancellationToken::new();
-                    started_at = Some(Instant::now());
+                    let started_at = Instant::now();
                     let client =
                         start(startup_cancellation.clone(), Some(sharing_declined.clone()));
                     // Startup belongs to the connection, including if its first chat is cancelled.
@@ -397,7 +412,7 @@ impl McpConnectionPool {
                         pool: Arc::downgrade(&self.entries),
                     });
                     entries.push(Arc::downgrade(&entry));
-                    (entry, owner, AcquisitionRole::Creator)
+                    (entry, owner, AcquisitionRole::Creator(started_at))
                 };
                 let lease = Arc::new(ConnectionLease {
                     entry,
@@ -415,9 +430,6 @@ impl McpConnectionPool {
                 lease.entry.remove_from_pool();
                 lease.release();
                 continue;
-            }
-            if let Some(started_at) = started_at {
-                let _ = slot.started_at.set(started_at);
             }
             return Ok((lease, role));
         }

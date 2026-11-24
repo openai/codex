@@ -283,7 +283,10 @@ pub(crate) struct StartupMeasurement {
 }
 
 impl StartupMeasurement {
-    fn new(started_at: Instant, outcome: &Result<ManagedClient, StartupOutcomeError>) -> Self {
+    pub(crate) fn new(
+        started_at: Instant,
+        outcome: &Result<ManagedClient, StartupOutcomeError>,
+    ) -> Self {
         Self {
             duration_ms: elapsed_ms(started_at),
             succeeded: outcome.is_ok(),
@@ -651,9 +654,9 @@ impl AsyncManagedClient {
             let startup_complete = Arc::clone(&startup_complete);
             let server_capabilities = Arc::clone(&server_capabilities);
             let client = async move {
-                let outcome = pool
+                let attempt = pool
                     .connect(
-                        Arc::clone(&slot),
+                        slot,
                         key,
                         server_capabilities,
                         pool_catalog,
@@ -667,22 +670,21 @@ impl AsyncManagedClient {
                                 .shared()
                         },
                     )
-                    .await
-                    .map(|mut client| {
-                        if matches!(client.connection_sharing, ConnectionSharing::Shared(_)) {
-                            client.shared_elicitation =
-                                Some(Arc::new(startup.elicitation_requests.make_sender(
-                                    startup.server_key.clone(),
-                                    startup.server_key.name().to_owned(),
-                                    startup.tx_event.clone(),
-                                    &startup.client_mcp_extensions,
-                                )));
-                        }
-                        client
-                    });
-                // Include lease registration, but don't count joining an existing connection.
-                if let Some(&started_at) = slot.started_at.get() {
-                    let _ = initial_measurement.set(StartupMeasurement::new(started_at, &outcome));
+                    .await;
+                let outcome = attempt.result.map(|mut client| {
+                    if matches!(client.connection_sharing, ConnectionSharing::Shared(_)) {
+                        client.shared_elicitation =
+                            Some(Arc::new(startup.elicitation_requests.make_sender(
+                                startup.server_key.clone(),
+                                startup.server_key.name().to_owned(),
+                                startup.tx_event.clone(),
+                                &startup.client_mcp_extensions,
+                            )));
+                    }
+                    client
+                });
+                if let Some(measurement) = attempt.measurement {
+                    let _ = initial_measurement.set(measurement);
                 }
                 startup_complete.store(true, Ordering::Release);
                 outcome
