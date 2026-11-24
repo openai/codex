@@ -280,7 +280,7 @@ impl GoalService {
         };
 
         if let Some(runtime) = runtime.as_ref() {
-            runtime.clear_pending_turn_start_options().await;
+            runtime.reset_goal_continuation(Some(&goal.goal_id)).await;
         }
 
         if objective.is_some() {
@@ -330,7 +330,9 @@ impl GoalService {
             })?;
         let cleared = cleared_goal.is_some();
         if cleared && let Some(runtime) = runtime.as_ref() {
-            runtime.clear_pending_turn_start_options().await;
+            runtime
+                .reset_goal_continuation(/*remaining_goal_id*/ None)
+                .await;
         }
         drop(goal_state_permit);
         drop(runtime);

@@ -8,6 +8,8 @@ use codex_protocol::error::Result;
 use codex_protocol::turn_input::CyberAccessProgram;
 use std::sync::Arc;
 
+pub use crate::session::turn_context::ContinuationCyberAccessProgram;
+
 /// Host requirement for every model request issued by this thread.
 ///
 /// Install in thread extension data before startup and reapply on cold resume.

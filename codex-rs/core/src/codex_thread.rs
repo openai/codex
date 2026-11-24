@@ -4,6 +4,7 @@ use crate::agent::api::AgentControl;
 use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
+use crate::cyber_access_program::ContinuationCyberAccessProgram;
 use crate::elicitation::ElicitationRegistration;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
@@ -944,6 +945,19 @@ impl CodexThread {
             return None;
         }
         task.turn_context.turn_metadata_state.root_turn_id()
+    }
+
+    /// Returns the explicit program captured for continuations of the named active turn.
+    pub async fn active_turn_continuation_program(
+        &self,
+        expected_turn_id: &str,
+    ) -> Option<Arc<ContinuationCyberAccessProgram>> {
+        let active = self.session.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        if task.turn_context.sub_id != expected_turn_id {
+            return None;
+        }
+        task.turn_context.extension_data.get()
     }
 
     pub async fn set_app_server_client_info(

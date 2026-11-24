@@ -23,6 +23,7 @@ use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
 use crate::runtime::GoalRuntimeHandle;
+use crate::runtime::ToolCreatedGoalProgram;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -47,7 +48,10 @@ pub(crate) struct GoalToolExecutor {
 #[derive(Clone)]
 enum GoalToolKind {
     Get,
-    Create(Weak<ThreadManager>),
+    Create {
+        thread_manager: Weak<ThreadManager>,
+        runtime: GoalRuntimeHandle,
+    },
     Update,
 }
 
@@ -110,7 +114,10 @@ impl GoalToolExecutor {
         max_goal_token_budget: Option<i64>,
     ) -> Self {
         Self {
-            kind: GoalToolKind::Create(thread_manager),
+            kind: GoalToolKind::Create {
+                thread_manager,
+                runtime: runtime.clone(),
+            },
             execution_allowed: true,
             thread_id: runtime.thread_id(),
             state_db,
@@ -148,7 +155,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(match self.kind {
             GoalToolKind::Get => GET_GOAL_TOOL_NAME,
-            GoalToolKind::Create(_) => CREATE_GOAL_TOOL_NAME,
+            GoalToolKind::Create { .. } => CREATE_GOAL_TOOL_NAME,
             GoalToolKind::Update => UPDATE_GOAL_TOOL_NAME,
         })
     }
@@ -160,7 +167,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
     fn spec(&self) -> ToolSpec {
         match self.kind {
             GoalToolKind::Get => create_get_goal_tool(),
-            GoalToolKind::Create(_) => create_create_goal_tool(),
+            GoalToolKind::Create { .. } => create_create_goal_tool(),
             GoalToolKind::Update => create_update_goal_tool(),
         }
     }
@@ -180,8 +187,12 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
             }
             match &self.kind {
                 GoalToolKind::Get => self.handle_get(invocation).await,
-                GoalToolKind::Create(thread_manager) => {
-                    self.handle_create(invocation, thread_manager).await
+                GoalToolKind::Create {
+                    thread_manager,
+                    runtime,
+                } => {
+                    self.handle_create(invocation, thread_manager, runtime)
+                        .await
                 }
                 GoalToolKind::Update => self.handle_update(invocation).await,
             }
@@ -211,6 +222,7 @@ impl GoalToolExecutor {
         &self,
         invocation: ToolCall<'_>,
         thread_manager: &Weak<ThreadManager>,
+        runtime: &GoalRuntimeHandle,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let mut request: CreateGoalRequest = parse_arguments(invocation.function_arguments()?)?;
         request.objective = request.objective.trim().to_string();
@@ -220,6 +232,11 @@ impl GoalToolExecutor {
         validate_goal_budget(request.token_budget, self.max_goal_token_budget)
             .map_err(FunctionCallError::RespondToModel)?;
 
+        // Keep the captured program in sync with goal creation and external goal mutations.
+        let _goal_state_permit = runtime
+            .goal_state_permit()
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         let goal = self
             .state_db
             .thread_goals()
@@ -244,6 +261,18 @@ impl GoalToolExecutor {
         if let Some(manager) = thread_manager.upgrade()
             && let Ok(thread) = manager.get_thread(self.thread_id).await
         {
+            let thread_store = thread.thread_extension_data();
+            if let Some(program) = thread
+                .active_turn_continuation_program(&invocation.turn_id)
+                .await
+            {
+                thread_store.insert(ToolCreatedGoalProgram {
+                    goal_id: goal.goal_id.clone(),
+                    program,
+                });
+            } else {
+                thread_store.remove::<ToolCreatedGoalProgram>();
+            }
             thread
                 .inject_untrusted_context_for_turn(
                     &invocation.turn_id,

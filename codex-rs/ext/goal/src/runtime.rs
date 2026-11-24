@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnStartOptions;
+use codex_core::cyber_access_program::ContinuationCyberAccessProgram;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -60,6 +61,12 @@ struct GoalRuntimeInner {
 pub(crate) struct AccountedGoalProgress {
     pub(crate) goal: ThreadGoal,
     pub(crate) goal_id: String,
+}
+
+/// The live goal keeps this choice across changes to its continuation's turn lineage.
+pub(crate) struct ToolCreatedGoalProgram {
+    pub(crate) goal_id: String,
+    pub(crate) program: Arc<ContinuationCyberAccessProgram>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,14 +148,21 @@ impl GoalRuntimeHandle {
         self.inner.root_accounting_state.clone()
     }
 
-    pub(crate) async fn clear_pending_turn_start_options(&self) {
+    pub(crate) async fn reset_goal_continuation(&self, remaining_goal_id: Option<&str>) {
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             return;
         };
         let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
             return;
         };
-        thread.thread_extension_data().remove::<TurnStartOptions>();
+        let thread_store = thread.thread_extension_data();
+        thread_store.remove::<TurnStartOptions>();
+        if thread_store
+            .get::<ToolCreatedGoalProgram>()
+            .is_some_and(|captured| Some(captured.goal_id.as_str()) != remaining_goal_id)
+        {
+            thread_store.remove::<ToolCreatedGoalProgram>();
+        }
     }
 
     pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
@@ -478,16 +492,21 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
-        let start_options = thread
-            .thread_extension_data()
-            .get::<TurnStartOptions>()
-            .map(|options| options.as_ref().clone())
-            .unwrap_or_default();
+        let thread_store = thread.thread_extension_data();
+        let captured_program = thread_store
+            .get::<ToolCreatedGoalProgram>()
+            .filter(|captured| captured.goal_id == goal.goal_id);
         let request = continuation_request(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
         );
-
+        let mut start_options = thread_store
+            .get::<TurnStartOptions>()
+            .map(|options| options.as_ref().clone())
+            .unwrap_or_default();
+        if let Some(captured) = captured_program {
+            start_options.cyber_access_program = captured.program.for_thread(&thread).await;
+        }
         match thread
             .start_turn_if_idle(request.on_start(TurnStartOptions {
                 turn_trigger: Some("goal".to_string()),

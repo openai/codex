@@ -26,6 +26,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CyberAccessProgram;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -3945,6 +3946,15 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 
 #[tokio::test]
 async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Result<()> {
+    check_thread_goal_continuation_program(/*enrolled*/ true).await
+}
+
+#[tokio::test]
+async fn thread_goal_continuation_respects_daybreak_opt_out() -> Result<()> {
+    check_thread_goal_continuation_program(/*enrolled*/ false).await
+}
+
+async fn check_thread_goal_continuation_program(enrolled: bool) -> Result<()> {
     let (release_original_turn, original_turn_gate) = oneshot::channel();
     let (release_edited_turn, edited_turn_gate) = oneshot::channel();
     let (server, _response_completions) = start_streaming_sse_server(vec![
@@ -3982,19 +3992,52 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
                 /*total_tokens*/ 100,
             ),
         ])),
+        ungated_goal_response(responses::sse(vec![
+            responses::ev_response_created("replacement-goal-continuation"),
+            responses::ev_completed_with_tokens(
+                "replacement-goal-continuation",
+                /*total_tokens*/ 100,
+            ),
+        ])),
     ])
     .await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(server.uri())
-        .enable_feature(Feature::Goals)
-        .enable_feature(Feature::UntrustedAsToolOutput)
-        .write(codex_home.path())?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "gpt-5.4"
+approval_policy = "never"
+openai_base_url = "{}/v1"
+cli_auth_credentials_store = "file"
+
+[features]
+goals = true
+untrusted_as_tool_output = true
+daybreak_program_propagation = true
+enable_request_compression = false
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-test-token").plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_managed_config()
         .build_initialized()
         .await?;
-    let thread = mcp.start_thread(ThreadStartParams::default()).await?.thread;
+    let thread = mcp
+        .start_thread(ThreadStartParams {
+            daybreak_program_propagation_enrolled: Some(enrolled),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    assert_eq!(thread.daybreak_program_propagation_enrolled, Some(enrolled));
 
     let start_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -4003,6 +4046,7 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
                 text: "create the original goal".to_string(),
                 text_elements: Vec::new(),
             }],
+            cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
             ..Default::default()
         })
         .await?;
@@ -4101,8 +4145,58 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
         .await??;
     }
 
+    let clear_id = mcp
+        .send_raw_request("thread/goal/clear", Some(json!({"threadId": thread.id})))
+        .await?;
+    let clear: ThreadGoalClearResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(clear_id)).await??;
+    assert!(clear.cleared);
+
+    let replacement_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "a different goal",
+                "tokenBudget": 100,
+            })),
+        )
+        .await?;
+    let replacement: ThreadGoalSetResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(replacement_id)).await??;
+    assert_eq!(replacement.goal.objective, "a different goal");
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     let requests = server.requests().await;
-    assert_eq!(requests.len(), 8);
+    assert_eq!(requests.len(), 9);
+    // Explicit requests retain their program regardless of enrollment; automatic goal turns
+    // propagate it only for enrolled threads, including after an objective edit.
+    let programs = requests
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(request)?;
+            Ok(body["access_programs"]["cyber"].as_str().map(str::to_owned))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let continuation_program = enrolled.then_some("daybreak_blue");
+    assert_eq!(
+        programs.iter().map(Option::as_deref).collect::<Vec<_>>(),
+        [
+            Some("daybreak_blue"),
+            Some("daybreak_blue"),
+            Some("daybreak_blue"),
+            None,
+            continuation_program,
+            continuation_program,
+            continuation_program,
+            continuation_program,
+            None,
+        ]
+    );
     let reopened_original_request = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
     assert_eq!(
         reopened_original_request["client_metadata"]["turn_id"].as_str(),
@@ -4132,7 +4226,9 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
             .contains(objective)
     );
     let mut wire_item = objective.as_object().expect("goal context item").clone();
-    wire_item.remove("id"); // Generated for each run.
+    // The snapshot covers the tool output. These fields carry per-run identifiers and timing.
+    wire_item.remove("id");
+    wire_item.remove("internal_chat_message_metadata_passthrough");
     wire_item.sort_keys();
     insta::assert_snapshot!(
         "model_written_goal_as_untrusted_tool_output",

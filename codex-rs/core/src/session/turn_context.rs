@@ -1,3 +1,7 @@
+mod continuation_cyber_access_program;
+
+pub use continuation_cyber_access_program::ContinuationCyberAccessProgram;
+
 use super::step_settings::ResolvedStepSettings;
 use super::token_budget::has_explicit_settings;
 use super::token_budget::resolve_token_budget;
@@ -1520,6 +1524,9 @@ impl Session {
         turn_context.prompt_cache_ttl = options.prompt_cache_ttl;
         turn_context.cyber_access_program =
             cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
+        if let Some(program) = ContinuationCyberAccessProgram::capture(self, &turn_context) {
+            turn_context.extension_data.insert(program);
+        }
         if let Some(admission) = options.helper_admission {
             admission.capture_intent(self, &mut turn_context).await;
         }
