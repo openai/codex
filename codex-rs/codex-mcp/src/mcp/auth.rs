@@ -221,8 +221,18 @@ where
             StreamableHttpRedirectMode::Legacy
         };
         let config = server.config().clone();
+        let has_request_auth_provider = server.request_auth_provider().is_some();
         let runtime_context = runtime_context.clone();
         async move {
+            if has_request_auth_provider {
+                return (
+                    name,
+                    McpAuthStatusEntry {
+                        config: Some(config),
+                        auth_state: McpAuthState::Unsupported,
+                    },
+                );
+            }
             let auth_state = match compute_auth_status(
                 name.name(),
                 &config,

@@ -429,6 +429,21 @@ impl McpManager {
                             .with_protocol_mode(protocol_mode),
                         )));
                     }
+                    McpServerContribution::SetWithAuthProvider {
+                        name,
+                        config,
+                        auth_provider,
+                    } => {
+                        overlays.push(OrderedMcpOverlay::Set(Box::new(
+                            McpServerRegistration::from_extension(
+                                name,
+                                contributor.id(),
+                                contribution_order,
+                                *config,
+                            )
+                            .with_request_auth_provider(auth_provider),
+                        )));
+                    }
                     McpServerContribution::HostedApps {
                         config,
                         protocol_mode,

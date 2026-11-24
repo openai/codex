@@ -201,3 +201,67 @@ async fn deferred_connection_keeps_runtime_source_and_captured_account_policy() 
     }
     Ok(())
 }
+
+struct ChangingOwner(std::sync::Mutex<Option<&'static str>>);
+
+impl McpRequestAuth for ChangingOwner {
+    fn owner_key(&self) -> Result<String, AuthError> {
+        self.0
+            .lock()
+            .expect("test owner lock should be available")
+            .map(str::to_owned)
+            .ok_or_else(|| AuthError::Build("test owner is unavailable".to_owned()))
+    }
+
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<String, AuthError> {
+        let owner = self.owner_key()?;
+        headers.insert(
+            "x-test-actor",
+            http::HeaderValue::from_str(&owner).expect("test owner should be a valid header"),
+        );
+        Ok(owner)
+    }
+}
+
+/// The credential snapshot can switch owners after a session's reuse check.
+#[tokio::test]
+async fn request_auth_rejects_a_new_owner_on_an_existing_session() {
+    let provider = Arc::new(ChangingOwner(std::sync::Mutex::new(Some("alice"))));
+    let session = McpRequestAuthProvider::new(provider.clone()).bind();
+    assert!(!session.needs_owner_refresh());
+
+    *provider
+        .0
+        .lock()
+        .expect("test owner lock should be available") = Some("bob");
+    assert!(matches!(
+        session.apply_auth_headers(HeaderMap::new()).await,
+        Err(AuthError::Build(message)) if message == "MCP request auth owner changed"
+    ));
+}
+
+/// A provider that gains an owner needs a fresh session before it can send credentials.
+#[tokio::test]
+async fn request_auth_requires_a_bound_owner() -> anyhow::Result<()> {
+    let provider = Arc::new(ChangingOwner(std::sync::Mutex::new(None)));
+    let provider_handle = McpRequestAuthProvider::new(provider.clone());
+    let session = provider_handle.clone().bind();
+    assert!(!session.needs_owner_refresh());
+
+    *provider
+        .0
+        .lock()
+        .expect("test owner lock should be available") = Some("alice");
+    assert!(session.needs_owner_refresh());
+    assert!(matches!(
+        session.apply_auth_headers(HeaderMap::new()).await,
+        Err(AuthError::Build(message)) if message == "test owner is unavailable"
+    ));
+
+    let headers = provider_handle
+        .bind()
+        .apply_auth_headers(HeaderMap::new())
+        .await?;
+    assert_eq!(headers["x-test-actor"], "alice");
+    Ok(())
+}

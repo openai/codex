@@ -28,6 +28,8 @@ pub use catalog_refresh::CatalogRefreshBackoff;
 pub use codex_context_fragments::ContextualUserFragment;
 pub use codex_history::HistoryInitialization;
 pub use codex_mcp::McpProtocolMode;
+pub use codex_mcp::McpRequestAuth;
+pub use codex_mcp::McpRequestAuthProvider;
 pub use codex_mcp::ToolInfo as McpToolInfo;
 pub use codex_protocol::models::ContentItem;
 pub use codex_protocol::models::ContentItemKind;

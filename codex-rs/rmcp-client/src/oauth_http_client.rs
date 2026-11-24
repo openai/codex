@@ -403,8 +403,9 @@ fn oauth_redirect_policy(
     has_configured_headers: bool,
     requested_policy: HttpRedirectPolicy,
 ) -> HttpRedirectPolicy {
-    if mode == StreamableHttpRedirectMode::AgentPluginV1
-        && (has_configured_headers || headers.contains_key(AUTHORIZATION))
+    if mode == StreamableHttpRedirectMode::Disabled
+        || (mode == StreamableHttpRedirectMode::AgentPluginV1
+            && (has_configured_headers || headers.contains_key(AUTHORIZATION)))
     {
         HttpRedirectPolicy::Stop
     } else {

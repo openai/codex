@@ -1,3 +1,5 @@
+pub use auth::McpRequestAuth;
+pub use auth::McpRequestAuthProvider;
 pub use binding::McpBinding;
 pub use binding::McpPermissionSource;
 pub use binding::PreparedMcpCall;

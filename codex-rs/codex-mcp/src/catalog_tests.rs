@@ -2,6 +2,7 @@ use crate::McpServerExposure;
 use crate::McpServerKey;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use codex_config::AppToolApproval;
@@ -18,6 +19,7 @@ use pretty_assertions::assert_eq;
 
 use crate::CODEX_APPS_MCP_SERVER_NAME;
 use crate::McpProtocolMode;
+use crate::McpRequestAuthProvider;
 use crate::server::McpCredentialPolicy;
 
 use super::McpEnvironmentAuthority;
@@ -447,6 +449,7 @@ fn disabled_winner_remains_a_veto_when_the_catalog_is_extended() {
             config: expected,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
 }
@@ -503,6 +506,7 @@ fn disabled_discovered_plugin_remains_a_veto_for_runtime_overlays() {
             config: expected,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
 }
@@ -584,6 +588,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
             config: selected,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
     assert_eq!(
@@ -613,6 +618,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
             config: refreshed,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
 
@@ -632,6 +638,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
             config: configured,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
 
@@ -754,6 +761,7 @@ fn disabled_selected_plugin_does_not_veto_runtime_overlays() {
             config: extension,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
 }
@@ -782,6 +790,7 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
             config: server("https://second.example/mcp"),
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
+            request_auth_provider: None,
         })
     );
     let mut builder = catalog.to_builder();
@@ -855,6 +864,61 @@ fn extension_protocol_mode_follows_the_winner_through_materialization() {
             config: refreshed,
             credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: Some(McpProtocolMode::Legacy),
+            request_auth_provider: None,
+        })
+    );
+}
+
+/// Refreshing another entry must preserve the request auth provider without allowing it to follow a changed transport.
+#[test]
+fn request_auth_provider_survives_materialization_for_the_same_transport() {
+    struct TestAuth;
+    impl crate::McpRequestAuth for TestAuth {
+        fn owner_key(&self) -> Result<String, codex_api::AuthError> {
+            Ok("test-owner".to_owned())
+        }
+
+        fn add_auth_headers(
+            &self,
+            _headers: &mut http::HeaderMap,
+        ) -> Result<String, codex_api::AuthError> {
+            self.owner_key()
+        }
+    }
+
+    let name = "host-auth";
+    let key = McpServerKey::unscoped(name);
+    let config = server("https://host.example/mcp");
+    let provider = McpRequestAuthProvider::new(Arc::new(TestAuth));
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(
+        McpServerRegistration::from_extension(
+            name.to_owned(),
+            "host",
+            /*contribution_order*/ 0,
+            config,
+        )
+        .with_request_auth_provider(provider.clone()),
+    );
+    let catalog = builder.build();
+
+    let rebuilt = catalog.with_materialized_servers(catalog.configured_servers());
+    assert_eq!(rebuilt.server(&key), catalog.server(&key));
+    assert_eq!(
+        rebuilt
+            .server(&key)
+            .and_then(ResolvedMcpServer::request_auth_provider),
+        Some(&provider)
+    );
+
+    let changed_url = server("https://host.example/other");
+    let retargeted =
+        catalog.with_materialized_servers(HashMap::from([(name.to_owned(), changed_url.clone())]));
+    assert_eq!(
+        retargeted.server(&key).map(ResolvedMcpServer::config),
+        Some(&McpServerConfig {
+            enabled: false,
+            ..changed_url
         })
     );
 }

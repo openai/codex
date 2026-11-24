@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Error returned while applying authentication to an outbound request.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum AuthError {
     #[error(transparent)]
     Policy(#[from] NetworkPolicyDenied),

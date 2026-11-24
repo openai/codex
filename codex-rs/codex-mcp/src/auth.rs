@@ -1,8 +1,10 @@
 //! Authentication shared by requests on an MCP connection.
 
+use std::fmt;
 use std::sync::Arc;
 
 use codex_api::AuthError;
+use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_exec_server::RouteAwareHttpClient;
 use codex_features::RuntimeAuthMode;
@@ -16,6 +18,90 @@ use http::HeaderMap;
 use tokio::sync::OnceCell;
 
 use crate::McpRuntimeContext;
+
+/// Supplies credentials for host-local MCP HTTP requests.
+pub trait McpRequestAuth: Send + Sync {
+    /// Returns the active owner without building request headers.
+    /// The key must distinguish owners within this provider and stay stable
+    /// across credential refreshes. Return an error if there is no active owner.
+    fn owner_key(&self) -> Result<String, AuthError>;
+
+    /// Adds auth headers and returns the owner from the same identity snapshot.
+    /// Core checks this key before sending on the MCP session.
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<String, AuthError>;
+}
+
+/// Identifies an in-process MCP credential source without exposing credential values.
+#[derive(Clone)]
+pub struct McpRequestAuthProvider(Arc<dyn McpRequestAuth>);
+
+impl McpRequestAuthProvider {
+    pub fn new(provider: Arc<dyn McpRequestAuth>) -> Self {
+        Self(provider)
+    }
+
+    pub(crate) fn bind(self) -> McpRequestAuthSession {
+        McpRequestAuthSession {
+            // Preserve a failed lookup so startup can report it without using fallback auth.
+            owner: self.0.owner_key(),
+            provider: self,
+        }
+    }
+}
+
+impl fmt::Debug for McpRequestAuthProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("McpRequestAuthProvider")
+    }
+}
+
+impl PartialEq for McpRequestAuthProvider {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// Captures the owner lookup for a connection attempt.
+#[derive(Clone)]
+pub(crate) struct McpRequestAuthSession {
+    provider: McpRequestAuthProvider,
+    owner: Result<String, AuthError>,
+}
+
+impl PartialEq for McpRequestAuthSession {
+    fn eq(&self, other: &Self) -> bool {
+        self.provider == other.provider && self.owner.as_ref().ok() == other.owner.as_ref().ok()
+    }
+}
+
+impl fmt::Debug for McpRequestAuthSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpRequestAuthSession")
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
+}
+
+impl McpRequestAuthSession {
+    pub(crate) fn needs_owner_refresh(&self) -> bool {
+        // Repeated failures leave this server unavailable. A change in availability
+        // or owner needs a new connection attempt.
+        self.provider.0.owner_key().as_ref().ok() != self.owner.as_ref().ok()
+    }
+}
+
+impl AuthProvider for McpRequestAuthSession {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        let session_owner = self.owner.as_ref().map_err(Clone::clone)?;
+        let request_owner = self.provider.0.add_auth_headers(headers)?;
+        if &request_owner != session_owner {
+            return Err(AuthError::Build(
+                "MCP request auth owner changed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// A connection keeps its credential source across retries and reconnects. Initial runtime
 /// selection happens inside the startup deadline; each HTTP request then selects fresh auth.

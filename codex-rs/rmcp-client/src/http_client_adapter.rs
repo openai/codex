@@ -76,6 +76,7 @@ const EVENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum StreamableHttpRedirectMode {
     Legacy,
     AgentPluginV1,
+    Disabled,
 }
 
 #[derive(Clone)]
@@ -900,7 +901,8 @@ fn mcp_redirect_policy(
     headers: &HeaderMap,
     has_configured_headers: bool,
 ) -> HttpRedirectPolicy {
-    if headers.contains_key("x-openai-agent-assertion")
+    if mode == StreamableHttpRedirectMode::Disabled
+        || headers.contains_key("x-openai-agent-assertion")
         || headers
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())

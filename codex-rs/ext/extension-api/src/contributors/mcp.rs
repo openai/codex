@@ -249,6 +249,12 @@ pub enum McpServerContribution {
         config: Box<McpServerConfig>,
         protocol_mode: crate::McpProtocolMode,
     },
+    /// Adds an HTTP server whose auth provider runs in process on the Core host.
+    SetWithAuthProvider {
+        name: String,
+        config: Box<McpServerConfig>,
+        auth_provider: crate::McpRequestAuthProvider,
+    },
     /// Registers the controller-owned Apps server under its reserved name.
     HostedApps {
         config: Box<McpServerConfig>,

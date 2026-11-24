@@ -17,6 +17,7 @@ use codex_utils_path_uri::PathUri;
 
 use crate::CODEX_APPS_MCP_SERVER_NAME;
 use crate::McpProtocolMode;
+use crate::McpRequestAuthProvider;
 use crate::McpServerKey;
 use crate::server::McpCredentialPolicy;
 
@@ -167,6 +168,7 @@ pub struct McpServerRegistration {
     credential_policy: McpCredentialPolicy,
     protocol_mode: Option<McpProtocolMode>,
     precedence: RegistrationPrecedence,
+    request_auth_provider: Option<McpRequestAuthProvider>,
 }
 
 impl McpServerRegistration {
@@ -280,6 +282,12 @@ impl McpServerRegistration {
         self
     }
 
+    /// Carries the provider only if this registration wins server resolution.
+    pub fn with_request_auth_provider(mut self, auth: McpRequestAuthProvider) -> Self {
+        self.request_auth_provider = Some(auth);
+        self
+    }
+
     /// Registers the controller-owned Apps server contributed by a host extension.
     pub fn from_hosted_apps(
         id: impl Into<String>,
@@ -324,6 +332,7 @@ impl McpServerRegistration {
             credential_policy,
             protocol_mode: None,
             precedence,
+            request_auth_provider: None,
         }
     }
 }
@@ -684,6 +693,7 @@ impl McpCatalogBuilder {
                             config: registration.config,
                             credential_policy: registration.credential_policy,
                             protocol_mode: registration.protocol_mode,
+                            request_auth_provider: registration.request_auth_provider,
                         },
                     ))
                 }
@@ -711,6 +721,7 @@ pub struct ResolvedMcpServer {
     config: McpServerConfig,
     credential_policy: McpCredentialPolicy,
     protocol_mode: Option<McpProtocolMode>,
+    request_auth_provider: Option<McpRequestAuthProvider>,
 }
 
 impl ResolvedMcpServer {
@@ -732,6 +743,10 @@ impl ResolvedMcpServer {
 
     pub(crate) fn credential_policy(&self) -> McpCredentialPolicy {
         self.credential_policy
+    }
+
+    pub(crate) fn request_auth_provider(&self) -> Option<&McpRequestAuthProvider> {
+        self.request_auth_provider.as_ref()
     }
 
     pub fn protocol_mode(&self) -> Option<McpProtocolMode> {
@@ -877,6 +892,14 @@ impl ResolvedMcpCatalog {
                 registration = registration.with_environment_scope();
             }
             registration.protocol_mode = previous.protocol_mode();
+            if let Some(auth) = previous.request_auth_provider() {
+                // A materialized registration cannot retarget in-process credentials.
+                if registration.config.transport != previous.config().transport {
+                    registration.config.enabled = false;
+                } else {
+                    registration.request_auth_provider = Some(auth.clone());
+                }
+            }
             builder.register(registration);
         }
         builder.build()

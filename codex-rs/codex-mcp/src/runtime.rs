@@ -664,7 +664,8 @@ impl McpRuntime {
 
     /// Returns whether the published snapshot still belongs to the current credentials.
     pub fn current_auth_matches(&self, auth: Option<&CodexAuth>) -> bool {
-        self.current.load().auth_matches(auth)
+        let current = self.current.load();
+        current.auth_matches(auth) && !current.connections.needs_request_auth_refresh()
     }
 
     pub(crate) fn auth_cache_key_for_server(

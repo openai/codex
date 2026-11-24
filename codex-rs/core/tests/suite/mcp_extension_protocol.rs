@@ -1,24 +1,37 @@
-//! Verifies protocol selection and request metadata for extension-contributed MCP servers.
+//! Verifies protocol selection, request auth, and metadata for extension-contributed MCP servers.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_api::AuthError;
 use codex_config::McpServerConfig;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpProtocolMode;
+use codex_extension_api::McpRequestAuth;
+use codex_extension_api::McpRequestAuthProvider;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpServerExposure;
+use codex_mcp::McpServerKey;
+use codex_mcp::McpServerRegistration;
 use codex_mcp::McpServerSource;
+use codex_mcp::McpSnapshotDetail;
 use codex_mcp::McpToolRequestMetaHook;
 use codex_mcp::McpToolRequestMetaProvider;
+use codex_mcp::ReadResourceRequestParams;
+use codex_mcp::ResolvedMcpCatalog;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -27,6 +40,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
@@ -35,6 +49,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use http::HeaderMap;
+use http::HeaderValue;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -460,5 +476,546 @@ async fn hosted_apps_protocol_override_preserves_native_verification() -> anyhow
     );
     thread.shutdown_and_wait().await?;
     fixture.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+const ACTOR_HEADER: &str = "x-test-mcp-actor";
+
+struct RequestAuth(Mutex<Option<(&'static str, &'static str)>>);
+
+impl RequestAuth {
+    fn identity(&self) -> Result<(&'static str, &'static str), AuthError> {
+        self.0
+            .lock()
+            .expect("test auth lock should be available")
+            .ok_or_else(|| AuthError::Build("test owner is unavailable".to_owned()))
+    }
+}
+
+impl McpRequestAuth for RequestAuth {
+    fn owner_key(&self) -> Result<String, AuthError> {
+        Ok(self.identity()?.0.to_owned())
+    }
+
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<String, AuthError> {
+        let (owner, actor) = self.identity()?;
+        headers.insert(ACTOR_HEADER, HeaderValue::from_static(actor));
+        Ok(owner.to_owned())
+    }
+}
+
+async fn mount_session_mcp(server: &MockServer) {
+    let sessions = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            let body: Value = request.body_json().expect("expected an MCP JSON body");
+            if body.get("id").is_none() {
+                return ResponseTemplate::new(202);
+            }
+            let mut response = ResponseTemplate::new(200);
+            let result = match body["method"].as_str().expect("expected an MCP method") {
+                "initialize" => {
+                    let session = sessions.fetch_add(1, Ordering::Relaxed) + 1;
+                    response =
+                        response.insert_header("mcp-session-id", format!("session-{session}"));
+                    json!({
+                        "protocolVersion": body["params"]["protocolVersion"],
+                        "capabilities": {"tools": {}, "resources": {}},
+                        "serverInfo": {"name": "owned-tools", "version": "1"}
+                    })
+                }
+                "tools/list" => {
+                    let actor = request
+                        .headers
+                        .get(ACTOR_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("public");
+                    json!({"tools": [{
+                        "name": "check", "description": format!("Visible to {actor}"),
+                        "inputSchema": {"type": "object"}
+                    }]})
+                }
+                "tools/call" => json!({"content": [{"type": "text", "text": "ok"}]}),
+                "resources/read" => json!({"contents": [{"uri": "test://owner", "text": "ok"}]}),
+                other => panic!("unexpected MCP method: {other}"),
+            };
+            response.set_body_json(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}))
+        })
+        .mount(server)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_request_auth_rejects_chatgpt_auth_on_untrusted_origins() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let endpoint = responses::start_mock_server().await;
+    let config = serde_json::from_value(json!({
+        "url": format!("{}/mcp", endpoint.uri()),
+        "auth": "chatgpt",
+    }))?;
+    let provider = Arc::new(RequestAuth(Mutex::new(Some(("alice", "alice")))));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(ExtensionServers(vec![
+        McpServerContribution::SetWithAuthProvider {
+            name: "owned".into(),
+            config: Box::new(config),
+            auth_provider: McpRequestAuthProvider::new(provider),
+        },
+    ])));
+    let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&model)
+        .await?;
+
+    let startup = wait_for_mcp_server(&fixture.codex, "owned").await;
+    let requests = endpoint.received_requests().await.expect("record requests");
+    assert_eq!(requests.len(), 0);
+    let error = startup.expect_err("conflicting auth settings must fail MCP startup");
+    assert!(
+        error.to_string().contains("no other credentials"),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// A scoped endpoint can be configured again without regaining a previous endpoint's auth.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_request_auth_stays_dropped_after_transport_rebuilds() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let destination = responses::start_mock_server().await;
+    mount_session_mcp(&destination).await;
+    let fixture = test_codex().build_with_auto_env(&model).await?;
+    let server = "owned";
+    let original: McpServerConfig = serde_json::from_value(json!({
+        "url": format!("{}/original", destination.uri())
+    }))?;
+    let replacement: McpServerConfig = serde_json::from_value(json!({
+        "url": format!("{}/mcp", destination.uri())
+    }))?;
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.set_exposure(McpServerExposure::EnvironmentQualified);
+    builder.register(
+        McpServerRegistration::from_extension(
+            server.into(),
+            "test",
+            /*contribution_order*/ 0,
+            original,
+        )
+        .with_environment_scope()
+        .with_request_auth_provider(McpRequestAuthProvider::new(Arc::new(RequestAuth(
+            Mutex::new(Some(("original-owner", "original-owner"))),
+        )))),
+    );
+    let mut catalog = builder.build();
+    let replacements = HashMap::from([(server.to_owned(), replacement)]);
+    catalog = catalog.with_materialized_servers(replacements.clone());
+    assert!(
+        !catalog
+            .server_by_name(server)
+            .expect("expected the rebuilt registration")
+            .config()
+            .enabled
+    );
+    catalog = catalog.with_materialized_servers(replacements);
+    let (config, context) = fixture.codex.current_mcp_config_and_runtime_context().await;
+    let mut config = (*config).clone();
+    config.mcp_server_catalog = catalog;
+    let manager = fixture.codex.mcp_manager();
+    let resource = codex_mcp::read_mcp_resource(
+        &config,
+        /*auth*/ None,
+        /*runtime_auth*/ None,
+        context,
+        manager.codex_apps_tools_cache(),
+        manager.tool_catalog_cache(),
+        server,
+        /*environment_id*/ None,
+        ReadResourceRequestParams::new("test://owner"),
+    )
+    .await?;
+    assert_eq!(resource.contents.len(), 1);
+    let requests = destination
+        .received_requests()
+        .await
+        .expect("expected captured MCP requests");
+    assert!(!requests.is_empty());
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key(ACTOR_HEADER))
+    );
+    Ok(())
+}
+
+/// A chat with different credentials cannot see tools cached by an earlier chat during startup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_request_auth_skips_the_shared_startup_catalog() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let endpoint = responses::start_mock_server().await;
+    let (mcp, startup) = AppsTestServer::mount_with_startup_control(&endpoint).await?;
+    let config = serde_json::from_value(json!({
+        "url": format!("{}/api/codex/ps/mcp", mcp.chatgpt_base_url),
+        "enabled_tools": ["calendar_create_event"],
+        "startup_readiness": "catalog",
+        "startup_timeout_sec": 60
+    }))?;
+    let provider = Arc::new(RequestAuth(Mutex::new(Some(("alice", "alice")))));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(ExtensionServers(vec![
+        McpServerContribution::SetWithAuthProvider {
+            name: "owned".into(),
+            config: Box::new(config),
+            auth_provider: McpRequestAuthProvider::new(provider.clone()),
+        },
+    ])));
+    let response = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("resp"),
+            responses::ev_assistant_message("msg", "done"),
+            responses::ev_completed("resp"),
+        ]),
+    )
+    .await;
+    let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
+        .with_config(|config| {
+            config.mcp_optional_startup_grace = Duration::from_millis(50);
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("disable built-in Apps");
+            config
+                .features
+                .disable(Feature::Mcp20260728)
+                .expect("use the fixture’s legacy MCP protocol");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, "owned").await?;
+    let release_bob = startup.hold_next_successful_initialize();
+    *provider
+        .0
+        .lock()
+        .expect("test auth lock should be available") = Some(("bob", "bob"));
+    let bob = fixture
+        .thread_manager
+        .start_thread(fixture.start_thread_options().await)
+        .await?
+        .thread;
+    timeout(Duration::from_secs(5), async {
+        while startup.initialize_attempts() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    bob.start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "Show available tools".into(),
+        text_elements: Vec::new(),
+    }]))
+    .await?;
+    timeout(
+        Duration::from_secs(5),
+        wait_for_event(&bob, |event| matches!(event, EventMsg::TurnComplete(_))),
+    )
+    .await?;
+    assert!(
+        responses::namespace_child_tool(
+            &response.single_request().body_json(),
+            "mcp__owned",
+            "calendar_create_event",
+        )
+        .is_none()
+    );
+    release_bob
+        .send(())
+        .expect("Bob’s initialization should still be pending");
+    let requests = endpoint
+        .received_requests()
+        .await
+        .expect("expected captured MCP requests");
+    assert!(requests.iter().any(|request| {
+        request
+            .headers
+            .get(ACTOR_HEADER)
+            .is_some_and(|value| value == "alice")
+    }));
+    assert!(requests.iter().any(|request| {
+        request
+            .headers
+            .get(ACTOR_HEADER)
+            .is_some_and(|value| value == "bob")
+    }));
+    bob.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Session reuse follows the owner, and an unavailable owner cannot stall the thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_request_auth_session_follows_owner_key() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let endpoint = responses::start_mock_server().await;
+    mount_session_mcp(&endpoint).await;
+    let config = serde_json::from_value(json!({"url": format!("{}/mcp", endpoint.uri())}))?;
+    let provider = Arc::new(RequestAuth(Mutex::new(None)));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(ExtensionServers(vec![
+        McpServerContribution::SetWithAuthProvider {
+            name: "owned".into(),
+            config: Box::new(config),
+            auth_provider: McpRequestAuthProvider::new(provider.clone()),
+        },
+    ])));
+    let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("disable built-in Apps");
+            config
+                .features
+                .disable(Feature::Mcp20260728)
+                .expect("use the fixture’s legacy MCP protocol");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+
+    let response = responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("resp"),
+            responses::ev_assistant_message("msg", "done"),
+            responses::ev_completed("resp"),
+        ]),
+    )
+    .await;
+    fixture
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Continue while MCP is unavailable".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    timeout(
+        Duration::from_secs(5),
+        wait_for_event(&fixture.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        }),
+    )
+    .await?;
+    assert!(
+        responses::namespace_child_tool(
+            &response.single_request().body_json(),
+            "mcp__owned",
+            "check",
+        )
+        .is_none()
+    );
+
+    let server = McpServerKey::unscoped("owned");
+    for identities in [
+        &[None][..],
+        &[Some(("alice", "alice"))],
+        &[Some(("alice", "alice-refreshed"))],
+        &[Some(("bob", "bob")), Some(("alice", "alice-returned"))],
+        &[Some(("bob", "bob"))],
+        &[None],
+        &[Some(("bob", "bob-recovered"))],
+    ] {
+        for &identity in identities {
+            *provider
+                .0
+                .lock()
+                .expect("test auth lock should be available") = identity;
+        }
+        if matches!(identities.last(), Some(None)) {
+            let (_, snapshot) = timeout(
+                Duration::from_secs(5),
+                fixture.codex.mcp_server_status_snapshot(
+                    "owned",
+                    /*environment_id*/ None,
+                    McpSnapshotDetail::ToolsAndAuthOnly,
+                    /*expected_registration*/ None,
+                ),
+            )
+            .await??;
+            assert!(snapshot.tools_errors[&server].contains("test owner is unavailable"));
+            assert!(!snapshot.tools_by_server.contains_key(&server));
+            continue;
+        }
+
+        fixture
+            .codex
+            .call_mcp_tool(
+                "owned", /*environment_id*/ None, "check", /*arguments*/ None,
+                /*meta*/ None,
+            )
+            .await?;
+    }
+
+    let requests = endpoint
+        .received_requests()
+        .await
+        .expect("expected captured MCP requests");
+    let calls = requests
+        .iter()
+        .filter_map(|request| {
+            let body: Value = request.body_json().ok()?;
+            (body["method"] == "tools/call").then(|| {
+                (
+                    request.headers[ACTOR_HEADER]
+                        .to_str()
+                        .expect("expected an ASCII test header"),
+                    request.headers["mcp-session-id"]
+                        .to_str()
+                        .expect("expected an ASCII test header"),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls,
+        vec![
+            ("alice", "session-1"),
+            ("alice-refreshed", "session-1"),
+            ("alice-returned", "session-1"),
+            ("bob", "session-2"),
+            ("bob-recovered", "session-3"),
+        ]
+    );
+    let discovered = requests
+        .iter()
+        .filter_map(|request| {
+            let body: Value = request.body_json().ok()?;
+            (body["method"] == "tools/list").then(|| {
+                request.headers[ACTOR_HEADER]
+                    .to_str()
+                    .expect("expected an ASCII test header")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(discovered, vec!["alice", "bob", "bob-recovered"]);
+    Ok(())
+}
+
+/// The status list can reuse a public catalog, while an account switch requires fresh auth discovery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_status_list_rediscovers_tools_for_the_current_request_auth_owner() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let endpoint = responses::start_mock_server().await;
+    mount_session_mcp(&endpoint).await;
+    let url = format!("{}/mcp", endpoint.uri());
+    let config = serde_json::from_value(json!({"url": url}))?;
+    let public_config = serde_json::from_value(json!({
+        "url": url,
+        "http_headers": {"Authorization": "Bearer public-fixture"}
+    }))?;
+    let provider = Arc::new(RequestAuth(Mutex::new(Some(("alice", "alice")))));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(ExtensionServers(vec![
+        McpServerContribution::SetWithAuthProvider {
+            name: "owned".into(),
+            config: Box::new(config),
+            auth_provider: McpRequestAuthProvider::new(provider.clone()),
+        },
+        McpServerContribution::Set {
+            name: "public".into(),
+            config: Box::new(public_config),
+        },
+    ])));
+    let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("disable built-in Apps");
+            config
+                .features
+                .disable(Feature::Mcp20260728)
+                .expect("use the fixture’s legacy MCP protocol");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+
+    let owned = McpServerKey::unscoped("owned");
+    let public = McpServerKey::unscoped("public");
+    for (server, description) in [(&owned, "Visible to alice"), (&public, "Visible to public")] {
+        let (_, snapshot) = fixture
+            .codex
+            .mcp_server_status_snapshot(
+                server.name(),
+                /*environment_id*/ None,
+                McpSnapshotDetail::ToolsAndAuthOnly,
+                /*expected_registration*/ None,
+            )
+            .await?;
+        assert_eq!(
+            snapshot.tools_by_server[server]["check"]
+                .description
+                .as_deref(),
+            Some(description)
+        );
+    }
+
+    *provider
+        .0
+        .lock()
+        .expect("test auth lock should be available") = Some(("bob", "bob"));
+    let config = fixture.codex.config().await;
+    let (status_config, context) = fixture.codex.mcp_status_config_and_context(&config).await;
+    let manager = fixture.codex.mcp_manager();
+    let auth_manager = manager.auth_manager();
+    let auth = auth_manager.auth().await;
+    let page = HashSet::from([owned.clone(), public.clone()]);
+    let mut snapshot = fixture
+        .codex
+        .matching_mcp_status_snapshot(&status_config, auth.as_ref(), &page, &context)
+        .await;
+    assert_eq!(snapshot.server_keys, HashSet::from([public.clone()]));
+
+    let mut remaining = codex_mcp::effective_mcp_servers(&status_config, auth.as_ref());
+    remaining.retain(|key, _| page.contains(key) && !snapshot.server_keys.contains(key));
+    snapshot.extend(
+        codex_mcp::collect_mcp_server_status_snapshot_with_detail(
+            &status_config,
+            auth.as_ref(),
+            Some(&auth_manager),
+            /*runtime_auth*/ None,
+            context,
+            manager.codex_apps_tools_cache(),
+            manager.tool_catalog_cache(),
+            McpSnapshotDetail::ToolsAndAuthOnly,
+            remaining,
+        )
+        .await,
+    );
+
+    assert_eq!(
+        snapshot.tools_by_server[&public]["check"]
+            .description
+            .as_deref(),
+        Some("Visible to public")
+    );
+    assert_eq!(
+        snapshot.tools_by_server[&owned]["check"]
+            .description
+            .as_deref(),
+        Some("Visible to bob")
+    );
     Ok(())
 }

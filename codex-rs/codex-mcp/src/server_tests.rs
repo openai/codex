@@ -119,6 +119,42 @@ fn connection_identity_does_not_reuse_connections_across_credential_policies() {
     assert!(!executor_identity.has_same_connection_config(&host_identity));
 }
 
+/// Replacing in-process credentials must discard a cached connection to the same URL.
+#[test]
+fn connection_identity_tracks_the_request_auth_provider() -> anyhow::Result<()> {
+    struct TestAuth;
+    impl crate::McpRequestAuth for TestAuth {
+        fn owner_key(&self) -> Result<String, codex_api::AuthError> {
+            Ok("test-owner".to_owned())
+        }
+
+        fn add_auth_headers(
+            &self,
+            _headers: &mut http::HeaderMap,
+        ) -> Result<String, codex_api::AuthError> {
+            self.owner_key()
+        }
+    }
+
+    let context = runtime_context();
+    let config = serde_json::from_value(serde_json::json!({"url": "https://example.com/mcp"}))?;
+    let server = EffectiveMcpServer::from_host_config(config);
+    let provider = crate::McpRequestAuthProvider::new(Arc::new(TestAuth));
+    let with_provider = server
+        .clone()
+        .with_request_auth_provider(Some(provider.clone()));
+    let same_provider = server.clone().with_request_auth_provider(Some(provider));
+    let different_provider = server
+        .clone()
+        .with_request_auth_provider(Some(crate::McpRequestAuthProvider::new(Arc::new(TestAuth))));
+    let identity = connection_identity(&with_provider, &context);
+
+    assert!(identity == connection_identity(&same_provider, &context));
+    assert!(identity != connection_identity(&different_provider, &context));
+    assert!(identity != connection_identity(&server, &context));
+    Ok(())
+}
+
 #[test]
 fn executor_connection_identity_does_not_capture_host_environment_values() {
     let runtime_context = runtime_context();

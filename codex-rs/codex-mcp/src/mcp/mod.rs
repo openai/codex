@@ -471,14 +471,18 @@ pub(crate) fn effective_mcp_server(
         return None;
     }
     let mut server = registration.config().clone();
-    if matches!(server.auth, McpServerAuth::ChatGpt)
+    let request_auth_provider = registration.request_auth_provider();
+    // Preserve the original auth mode so startup can reject conflicts with a request auth provider.
+    if request_auth_provider.is_none()
+        && matches!(server.auth, McpServerAuth::ChatGpt)
         && !is_trusted_chatgpt_mcp_server(&server.transport, &config.client.chatgpt_base_url)
     {
         server.auth = McpServerAuth::OAuth;
     }
     Some(
         EffectiveMcpServer::from_config_with_policy(server, registration.credential_policy())
-            .with_agent_plugin(registration.source().is_agent_plugin()),
+            .with_agent_plugin(registration.source().is_agent_plugin())
+            .with_request_auth_provider(request_auth_provider.cloned()),
     )
 }
 

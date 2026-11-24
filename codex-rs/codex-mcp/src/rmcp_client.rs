@@ -1518,6 +1518,36 @@ pub(crate) async fn make_rmcp_client(
             )));
         }
     }
+    let has_request_auth_provider = server.request_auth_provider().is_some();
+    if has_request_auth_provider {
+        let authorized_transport = matches!(
+            &config.transport,
+            McpServerTransportConfig::StreamableHttp {
+                bearer_token_env_var: None,
+                http_headers,
+                env_http_headers,
+                http_headers_helper: None,
+                ..
+            } if [http_headers, env_http_headers].into_iter().all(|headers| {
+                headers.as_ref().is_none_or(|headers| {
+                    !headers.keys().any(|name| name.eq_ignore_ascii_case("authorization"))
+                })
+            })
+        );
+        if !authorized_transport
+            || !config.is_local_environment()
+            || resolved_environment
+                .as_ref()
+                .is_ok_and(|env| env.as_ref().is_some_and(|env| env.is_remote()))
+            || !matches!(config.auth, McpServerAuth::OAuth)
+            || config.oauth.is_some()
+            || runtime_auth_provider.is_none()
+        {
+            return Err(StartupOutcomeError::from(anyhow!(
+                "in-process authentication for MCP server `{server_name}` requires host-local HTTP and no other credentials"
+            )));
+        }
+    }
     if matches!(config.auth, McpServerAuth::EmaAuth) {
         let auth = ema_auth.ok_or_else(|| {
             StartupOutcomeError::from(anyhow!(
@@ -1682,7 +1712,9 @@ pub(crate) async fn make_rmcp_client(
                 .map(StreamableHttpBearerToken::Resolved);
                 (http_client, token)
             };
-            let redirect_mode = if server.is_agent_plugin() {
+            let redirect_mode = if has_request_auth_provider {
+                StreamableHttpRedirectMode::Disabled
+            } else if server.is_agent_plugin() {
                 StreamableHttpRedirectMode::AgentPluginV1
             } else {
                 StreamableHttpRedirectMode::Legacy

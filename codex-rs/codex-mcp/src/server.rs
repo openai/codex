@@ -4,8 +4,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::McpRequestAuthProvider;
 use crate::McpServerKey;
 use crate::auth::McpAuthProvider;
+use crate::auth::McpRequestAuthSession;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::McpRuntimeContext;
 use codex_config::AppToolApproval;
@@ -41,6 +43,7 @@ pub(crate) enum McpCredentialPolicy {
 #[derive(Debug, Clone)]
 pub struct EffectiveMcpServer {
     config: McpServerConfig,
+    request_auth_provider: Option<McpRequestAuthSession>,
     credential_policy: McpCredentialPolicy,
     agent_plugin: bool,
     requires_read_only_mcp_tools: bool,
@@ -58,6 +61,7 @@ impl EffectiveMcpServer {
     ) -> Self {
         Self {
             config,
+            request_auth_provider: None,
             credential_policy,
             agent_plugin: false,
             requires_read_only_mcp_tools: false,
@@ -66,6 +70,18 @@ impl EffectiveMcpServer {
 
     pub(crate) fn credential_policy(&self) -> McpCredentialPolicy {
         self.credential_policy
+    }
+
+    pub(crate) fn with_request_auth_provider(
+        mut self,
+        request_auth_provider: Option<McpRequestAuthProvider>,
+    ) -> Self {
+        self.request_auth_provider = request_auth_provider.map(McpRequestAuthProvider::bind);
+        self
+    }
+
+    pub(crate) fn request_auth_provider(&self) -> Option<&McpRequestAuthSession> {
+        self.request_auth_provider.as_ref()
     }
 
     pub fn with_agent_plugin(mut self, agent_plugin: bool) -> Self {
@@ -179,6 +195,7 @@ pub(crate) struct McpServerConnectionIdentity {
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
     runtime_auth: Option<CodexAuth>,
     runtime_auth_token: Option<String>,
+    request_auth_provider: Option<McpRequestAuthSession>,
     runtime_auth_mode: Option<codex_features::RuntimeAuthMode>,
     codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
     client_elicitation_capability: ElicitationCapability,
@@ -283,7 +300,12 @@ impl McpServerConnectionIdentity {
             McpCredentialPolicy::HostFallbackAllowed => referenced_environment_variables(config),
             McpCredentialPolicy::ExecutorOnly => Vec::new(),
         };
-        let runtime_auth = runtime_auth_provider.and(auth).cloned();
+        let runtime_auth = if server.request_auth_provider().is_none() {
+            runtime_auth_provider.and(auth).cloned()
+        } else {
+            // The in-process provider owns refresh and is part of the connection identity.
+            None
+        };
         let runtime_auth_token = runtime_auth.as_ref().and_then(|auth| auth.get_token().ok());
         let oauth_store_was_contended = oauth_credentials
             .as_ref()
@@ -309,6 +331,7 @@ impl McpServerConnectionIdentity {
             referenced_environment_variables,
             runtime_auth,
             runtime_auth_token,
+            request_auth_provider: server.request_auth_provider().cloned(),
             runtime_auth_mode,
             codex_apps_cache_identity,
             client_elicitation_capability,
@@ -316,6 +339,12 @@ impl McpServerConnectionIdentity {
             agent_plugin: server.is_agent_plugin(),
             requires_read_only_mcp_tools: server.requires_read_only_mcp_tools(),
         }
+    }
+
+    pub(crate) fn needs_request_auth_refresh(&self) -> bool {
+        self.request_auth_provider
+            .as_ref()
+            .is_some_and(McpRequestAuthSession::needs_owner_refresh)
     }
 
     pub(crate) fn has_same_connection_config(&self, other: &Self) -> bool {
@@ -349,6 +378,7 @@ impl McpServerConnectionIdentity {
             && self.referenced_environment_variables == other.referenced_environment_variables
             && same_runtime_auth
             && self.runtime_auth_token == other.runtime_auth_token
+            && self.request_auth_provider == other.request_auth_provider
             && self.runtime_auth_mode == other.runtime_auth_mode
             && self.codex_apps_cache_identity == other.codex_apps_cache_identity
             && self.client_elicitation_capability == other.client_elicitation_capability
@@ -357,9 +387,10 @@ impl McpServerConnectionIdentity {
             && self.requires_read_only_mcp_tools == other.requires_read_only_mcp_tools
     }
 
-    /// Runtime auth, stored OAuth and dynamic headers may change independently of a registration.
+    /// Credentials can change independently of the registration.
     pub(crate) fn has_fixed_status_credentials(&self) -> bool {
-        if self.runtime_auth.is_some()
+        if self.request_auth_provider.is_some()
+            || self.runtime_auth.is_some()
             || self.oauth_store.is_some()
             || matches!(self.auth, McpServerAuth::EmaAuth)
         {
