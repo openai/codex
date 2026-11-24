@@ -264,22 +264,6 @@ impl HttpClientBuilder {
         self
     }
 
-    /// Builds a client using the transport's default proxy behavior.
-    ///
-    /// # Legacy compatibility only
-    ///
-    /// This bypasses [`HttpClientFactory`] and therefore does not honor its configured outbound
-    /// proxy policy. New product traffic must use [`Self::build_respecting_outbound_proxy_policy`]
-    /// or [`HttpClientFactory::build_client`].
-    #[deprecated(
-        note = "legacy compatibility only; use HttpClientFactory::build_client or build_respecting_outbound_proxy_policy"
-    )]
-    pub fn build_with_transport_default_proxy(
-        self,
-    ) -> Result<HttpClient, BuildCustomCaTransportError> {
-        self.build_with_proxy_routing(ProxyRouting::TransportDefault)
-    }
-
     /// Builds a client that connects directly without using a proxy.
     ///
     /// # Exceptional use only
@@ -289,8 +273,11 @@ impl HttpClientBuilder {
     /// sandbox traffic whose egress routing is handled separately. Ordinary outbound product
     /// traffic must use [`Self::build_respecting_outbound_proxy_policy`] or
     /// [`HttpClientFactory::build_client`].
-    pub fn build_direct(self) -> Result<HttpClient, BuildCustomCaTransportError> {
-        self.build_with_proxy_routing(ProxyRouting::Direct)
+    pub fn build_direct(mut self) -> Result<HttpClient, BuildCustomCaTransportError> {
+        let request_logging = self.request_logging;
+        let default_headers = self.default_headers.take().unwrap_or_default();
+        build_reqwest_client_with_custom_ca(self.reqwest_builder(ProxyRouting::Direct))
+            .map(|inner| HttpClient::from_parts(inner, request_logging, default_headers))
     }
 
     /// Builds a transport-default client while preserving the legacy custom-CA fallback.
@@ -326,16 +313,6 @@ impl HttpClientBuilder {
                 self.build_with_custom_ca_fallback(ProxyRouting::Direct),
             ),
         }
-    }
-
-    fn build_with_proxy_routing(
-        mut self,
-        proxy_routing: ProxyRouting,
-    ) -> Result<HttpClient, BuildCustomCaTransportError> {
-        let request_logging = self.request_logging;
-        let default_headers = self.default_headers.take().unwrap_or_default();
-        build_reqwest_client_with_custom_ca(self.reqwest_builder(proxy_routing))
-            .map(|inner| HttpClient::from_parts(inner, request_logging, default_headers))
     }
 
     pub(crate) fn build_with_custom_ca_fallback(

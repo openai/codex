@@ -262,11 +262,6 @@ impl HttpClientFactory {
         self
     }
 
-    /// Returns whether ChatGPT cookie-store clients have additional configured cookies.
-    pub fn has_chatgpt_cookies(&self) -> bool {
-        self.chatgpt_cookie_store.is_some()
-    }
-
     pub(crate) fn chatgpt_cookie_store(&self) -> Option<Arc<ChatGptCookieStore>> {
         self.chatgpt_cookie_store.clone()
     }
