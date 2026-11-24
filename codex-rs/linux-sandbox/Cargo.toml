@@ -26,7 +26,7 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-etherparse = { version = "=0.21.0", default-features = false }
+etherparse = { version = "=0.21.1", default-features = false }
 hickory-proto = "=0.26.3"
 ignore = { workspace = true }
 indexmap = { workspace = true }
