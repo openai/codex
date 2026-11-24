@@ -156,6 +156,7 @@ impl PreparedTurnInputSettings {
         kind: TurnStartKind,
     ) -> CodexResult<Option<Arc<TurnContext>>> {
         let TurnStartOptions {
+            inferred_workspace_kind,
             turn_trigger,
             final_output_json_schema,
             direct_only_tool_namespaces,
@@ -215,6 +216,11 @@ impl PreparedTurnInputSettings {
                 replacement: Some(inherited_client_metadata),
                 ..Default::default()
             });
+        if let Some(kind) = inferred_workspace_kind {
+            turn_context
+                .turn_metadata_state
+                .set_inferred_workspace_kind(kind);
+        }
         if let Some(turn_trigger) = turn_trigger {
             turn_context
                 .turn_metadata_state

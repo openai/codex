@@ -192,6 +192,8 @@ pub(crate) struct TurnMetadataState {
     node_repl_disabled: bool,
     git_enrichment: Mutex<TurnGitEnrichment>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
+    /// Kept separate from client metadata, which tools and child agents inherit.
+    inferred_workspace_kind: OnceLock<String>,
     responses_api_metadata: RwLock<BTreeMap<String, String>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
     user_input_requested_during_turn: AtomicBool,
@@ -275,6 +277,7 @@ impl TurnMetadataState {
             node_repl_disabled: model_info.node_repl_disabled,
             git_enrichment: Mutex::default(),
             turn_started_at_unix_ms: RwLock::new(None),
+            inferred_workspace_kind: OnceLock::new(),
             responses_api_metadata: RwLock::new(BTreeMap::new()),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
             user_input_requested_during_turn: AtomicBool::new(false),
@@ -344,6 +347,12 @@ impl TurnMetadataState {
         request_kind: CodexResponsesRequestKind,
     ) -> CodexResponsesMetadata {
         let mut metadata = self.responses_metadata_template();
+        if let Some(kind) = self.inferred_workspace_kind.get() {
+            metadata
+                .extra
+                .entry(WORKSPACE_KIND_KEY.to_owned())
+                .or_insert_with(|| kind.clone());
+        }
         if matches!(request_kind, CodexResponsesRequestKind::Compaction(_))
             && metadata
                 .extra
@@ -471,11 +480,16 @@ impl TurnMetadataState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = metadata;
     }
 
+    pub(crate) fn set_inferred_workspace_kind(&self, kind: String) {
+        let _ = self.inferred_workspace_kind.set(kind);
+    }
+
     pub(crate) fn workspace_kind(&self) -> Option<String> {
         self.responsesapi_client_metadata
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(WORKSPACE_KIND_KEY)
+            .or_else(|| self.inferred_workspace_kind.get())
             .cloned()
     }
 

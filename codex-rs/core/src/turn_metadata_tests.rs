@@ -831,6 +831,28 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
 }
 
 #[tokio::test]
+async fn inferred_workspace_kind_stays_with_the_originating_turn() {
+    let (_, turn) = make_session_and_context().await;
+    let state = &turn.turn_metadata_state;
+    state.set_inferred_workspace_kind("project".into());
+
+    assert_eq!(state.workspace_kind().as_deref(), Some("project"));
+    let mcp = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("MCP metadata");
+    let extension = state
+        .current_meta_value_for_extension_request(test_mcp_turn_metadata_context())
+        .expect("extension metadata");
+    assert!(mcp.get(WORKSPACE_KIND_KEY).is_none());
+    assert!(extension.get(WORKSPACE_KIND_KEY).is_none());
+    assert!(
+        !state
+            .client_metadata_for_child()
+            .contains_key(WORKSPACE_KIND_KEY)
+    );
+}
+
+#[tokio::test]
 async fn child_metadata_snapshot_excludes_parent_review_and_routing_fields() {
     let (_, turn) = make_session_and_context().await;
     let state = &turn.turn_metadata_state;
@@ -1003,6 +1025,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     state.set_parent_turn_id("parent-turn-a".to_string());
     state.set_root_turn_id("root-turn-a".to_string());
     state.set_turn_trigger("goal".to_string());
+    state.set_inferred_workspace_kind("project".into());
     let client_metadata = HashMap::from([
         (
             "codex_security_surface".to_string(),
@@ -1124,6 +1147,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let model_request_json: Value =
         serde_json::from_str(&model_request_header).expect("model request json");
     assert_eq!(model_request_json["request_kind"].as_str(), Some("turn"));
+    assert_eq!(
+        model_request_json["workspace_kind"].as_str(),
+        Some("projectless")
+    );
     assert_eq!(
         model_request_json[ROOT_TURN_ID_KEY].as_str(),
         Some("root-turn-a")

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use codex_protocol::ThreadId;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -23,6 +24,24 @@ const PROJECT_SELECT: &str = "SELECT projects.*,
     FROM projects";
 
 impl StateRuntime {
+    /// Use the staged project only until the thread has a row in SQLite.
+    pub async fn thread_has_project(
+        &self,
+        thread_id: ThreadId,
+        staged_project_id: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT COALESCE(
+                (SELECT project_id IS NOT NULL FROM threads WHERE id = ?),
+                EXISTS (SELECT 1 FROM projects WHERE id = ?)
+            )",
+        )
+        .bind(thread_id.to_string())
+        .bind(staged_project_id)
+        .fetch_one(self.pool.as_ref())
+        .await?)
+    }
+
     pub async fn set_thread_project(
         &self,
         thread_id: &str,

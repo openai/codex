@@ -291,6 +291,8 @@ pub enum PromptCacheTtl {
 /// child input, Core also compares root lineage to detect ambiguity.
 #[derive(Clone, Debug, Default)]
 pub struct TurnStartOptions {
+    /// Fallback workspace kind for the new turn's model requests and analytics.
+    pub inferred_workspace_kind: Option<String>,
     /// Source classification for this request. Recorded on new turns and captured
     /// as input provenance when steering, without changing the active turn's trigger.
     pub turn_trigger: Option<String>,
