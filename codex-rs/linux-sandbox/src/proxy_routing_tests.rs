@@ -109,7 +109,7 @@ fn ignores_non_loopback_proxy_endpoint() {
 }
 
 #[test]
-fn plan_proxy_routes_only_includes_valid_loopback_endpoints() {
+fn plan_proxy_routes_only_includes_permitted_loopback_endpoints() -> std::io::Result<()> {
     let mut env = HashMap::new();
     env.insert(
         "HTTP_PROXY".to_string(),
@@ -125,7 +125,8 @@ fn plan_proxy_routes_only_includes_valid_loopback_endpoints() {
     );
     env.insert("PATH".to_string(), "/usr/bin".to_string());
 
-    let plan = plan_proxy_routes(&env);
+    assert!(plan_proxy_routes(&env, &[])?.routes.is_empty());
+    let plan = plan_proxy_routes(&env, &[43128])?;
     assert_eq!(plan.has_proxy_config, true);
     assert_eq!(plan.routes.len(), 1);
     assert_eq!(plan.routes[0].env_key, "HTTP_PROXY");
@@ -135,6 +136,14 @@ fn plan_proxy_routes_only_includes_valid_loopback_endpoints() {
             .parse::<SocketAddr>()
             .expect("valid socket")
     );
+    env.insert("ALL_PROXY".into(), "http://127.0.0.1:32102".into());
+    assert_eq!(
+        plan_proxy_routes(&env, &[43128])
+            .expect_err("a recognized ungranted endpoint must reject the entire plan")
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    Ok(())
 }
 
 #[test]
@@ -149,7 +158,8 @@ fn attribution_token_is_extracted_before_proxy_route_planning() {
         "exec-token".to_string(),
     );
 
-    let (attribution_token, plan) = extract_attribution_token_and_plan(env);
+    let (attribution_token, plan) =
+        extract_attribution_token_and_plan(env, &[43128]).expect("authorized route");
 
     assert_eq!(attribution_token.as_deref(), Some("exec-token"));
     assert_eq!(

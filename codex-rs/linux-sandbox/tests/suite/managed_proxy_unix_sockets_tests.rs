@@ -66,12 +66,17 @@ async fn managed_proxy_allow_all_unix_sockets_preserves_network_isolation() {
     let _tcp_control = TcpStream::connect(tcp_addr).expect("host TCP control connection");
     let _tcp_peer = tcp_listener.accept().expect("accept host TCP control");
 
+    let proxy_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("host proxy listener");
+    let proxy_addr = proxy_listener.local_addr().expect("host proxy address");
+
     listener
         .set_nonblocking(true)
         .expect("nonblocking listener");
     let server = std::thread::spawn(move || {
         let deadline = Instant::now() + OPERATION_TIMEOUT * 2;
-        loop {
+        // The two allow-all cases below exercise this socket with and without a TCP proxy route.
+        let mut requests = 0;
+        while requests < 2 {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream
@@ -81,7 +86,7 @@ async fn managed_proxy_allow_all_unix_sockets_preserves_network_isolation() {
                     stream.read_exact(&mut request).expect("read Unix request");
                     assert_eq!(request, *b"ping");
                     stream.write_all(b"pong").expect("write Unix response");
-                    break;
+                    requests += 1;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     assert!(Instant::now() < deadline, "Unix request timed out");
@@ -93,24 +98,42 @@ async fn managed_proxy_allow_all_unix_sockets_preserves_network_isolation() {
     });
 
     let probe = r#"
-import errno, socket, sys
-path, port, mode = sys.argv[1:]
+import errno, os, socket, sys
+path, port, proxy_port, mode, attribution_key = sys.argv[1:]
+assert attribution_key not in os.environ
 try:
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-except OSError as error:
-    assert mode == 'deny' and error.errno == errno.EPERM, error
-else:
-    assert mode == 'allow', 'Unix socket unexpectedly allowed'
-    with client:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        # With no network grants, seccomp can deny connect rather than socket creation.
+        assert mode != 'deny', 'Unix socket unexpectedly allowed'
         client.settimeout(2)
         client.connect(path)
+        assert mode == 'allow', 'Unix connection unexpectedly allowed'
         client.sendall(b'ping')
         assert client.recv(4, socket.MSG_WAITALL) == b'pong'
-for address in [('127.0.0.2', int(port)), ('192.0.2.1', 80)]:
+except OSError as error:
+    assert mode != 'allow' and error.errno == errno.EPERM, error
+unreachable = [('127.0.0.2', int(port)), ('192.0.2.1', 80)]
+if mode == 'local-bind':
+    # Local binding grants no route to the prepared HTTP proxy on the host.
+    assert os.environ['HTTP_PROXY'] == f'http://127.0.0.1:{proxy_port}'
+    unreachable.append(('127.0.0.1', int(proxy_port)))
+    # The host already owns this address. The private listener must handle its own client
+    # while the proxy URL that names the host listener stays unbridged.
+    address = ('127.0.0.2', int(port))
+    assert os.environ['ALL_PROXY'] == f'http://127.0.0.2:{port}'
+    with socket.socket() as listener:
+        listener.bind(address)
+        listener.listen(1)
+        with socket.create_connection(address, timeout=2) as client:
+            with listener.accept()[0] as peer:
+                client.sendall(b'local')
+                assert peer.recv(5, socket.MSG_WAITALL) == b'local'
+for address in unreachable:
     try:
         connection = socket.create_connection(address, timeout=0.5)
-    except OSError:
-        pass
+    except OSError as error:
+        if mode == 'deny-all':
+            assert error.errno == errno.EPERM, (address, error)
     else:
         connection.close()
         raise AssertionError(('direct network unexpectedly allowed', address))
@@ -122,18 +145,35 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
     else:
         unexpected.close()
         raise AssertionError(('socket family unexpectedly allowed', family))
+print('socket policy verified')
 "#;
     let cwd = std::env::current_dir().expect("current directory");
-    for (label, dangerously_allow_all_unix_sockets, allow_path) in [
-        ("default denial", false, false),
-        ("path grant stays restricted", false, true),
-        ("explicit allow-all", true, false),
+    for (label, dangerously_allow_all_unix_sockets, allow_path, no_tcp_ports, local_binding) in [
+        ("default denial", false, false, false, false),
+        ("path grant stays restricted", false, true, false, false),
+        ("explicit allow-all", true, false, false, false),
+        (
+            "explicit allow-all without a TCP proxy",
+            true,
+            false,
+            true,
+            false,
+        ),
+        ("empty managed network policy", false, false, true, false),
+        (
+            "private loopback without a host route",
+            false,
+            false,
+            true,
+            true,
+        ),
     ] {
         let mut env = create_env_from_core_vars();
         strip_proxy_env(&mut env);
         let mut config = NetworkProxyConfig {
             enabled: true,
-            proxy_url: "http://127.0.0.1:9".to_string(),
+            proxy_url: format!("http://{proxy_addr}"),
+            allow_local_binding: Some(local_binding),
             dangerously_allow_all_unix_sockets: Some(dangerously_allow_all_unix_sockets),
             ..Default::default()
         };
@@ -155,9 +195,12 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
             .build()
             .await
             .expect("build managed network proxy");
-        let prepared = network
+        let mut prepared = network
             .prepare_for_optional_environment(env, /*environment_id*/ None)
             .expect("prepare managed network policy");
+        if no_tcp_ports {
+            prepared.sandbox_context.portable.loopback_ports.clear();
+        }
         let mut command = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
         command
             .arg("--sandbox-policy-cwd")
@@ -169,14 +212,24 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
             .args(["--", "python3", "-c", probe])
             .arg(&socket_path)
             .arg(tcp_addr.port().to_string())
+            .arg(proxy_addr.port().to_string())
             .arg(if dangerously_allow_all_unix_sockets {
                 "allow"
+            } else if local_binding {
+                "local-bind"
+            } else if no_tcp_ports {
+                "deny-all"
             } else {
                 "deny"
             })
+            .arg(PROXY_ATTRIBUTION_TOKEN_ENV_KEY)
             .env_clear()
             .envs(prepared.env)
+            .env(PROXY_ATTRIBUTION_TOKEN_ENV_KEY, "unix-socket-test")
             .kill_on_drop(true);
+        if local_binding {
+            command.env("ALL_PROXY", format!("http://{tcp_addr}"));
+        }
         let output = tokio::time::timeout(OPERATION_TIMEOUT, command.output())
             .await
             .expect("Unix socket probe timed out")
@@ -186,6 +239,7 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
             "{label}; stderr={}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert_eq!(output.stdout, b"socket policy verified\n", "{label}");
     }
     server.join().expect("Unix server should finish");
 }

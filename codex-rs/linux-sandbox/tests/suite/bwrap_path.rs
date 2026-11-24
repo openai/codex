@@ -108,7 +108,12 @@ fn full_disk_write_with_managed_network_does_not_probe_writable_bwrap() {
             .arg(&cwd)
             .arg("--permission-profile")
             .arg(serde_json::to_string(profile).unwrap())
-            .args(["--managed-network", "{}", "--", "/bin/true"])
+            .args([
+                "--managed-network",
+                r#"{"loopbackPorts":[9]}"#,
+                "--",
+                "/bin/true",
+            ])
             .current_dir(&cwd)
             .env_clear()
             .env("PATH", &bin)

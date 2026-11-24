@@ -29,7 +29,7 @@ fn managed_command(cwd: &Path, profile: &PermissionProfile) -> Command {
     let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);
     env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
-    linux_sandbox_launcher(cwd, profile, Some("{}"), env)
+    linux_sandbox_launcher(cwd, profile, /*managed_network*/ None, env)
 }
 
 impl LiveProxy {
@@ -50,7 +50,16 @@ while :; do
     esac
 done
 "#;
+        let context = ManagedNetworkSandboxContext {
+            loopback_ports: vec![
+                listener.local_addr()?.port(),
+                socks_listener.local_addr()?.port(),
+            ],
+            ..Default::default()
+        };
         let child = command
+            .arg("--managed-network")
+            .arg(serde_json::to_string(&context)?)
             .env("HTTP_PROXY", format!("http://{}", listener.local_addr()?))
             .env(
                 "ALL_PROXY",

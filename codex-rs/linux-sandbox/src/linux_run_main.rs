@@ -199,14 +199,20 @@ pub fn run_main() -> ! {
             panic!("Linux sandbox retained effective or permitted capabilities");
         }
 
-        let socks_bridge = if allow_network_for_proxy {
+        let (socks_bridge, proxy_routing) = if let Some(context) = &managed_network {
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
-            activate_proxy_routes_in_netns(spec)
-                .unwrap_or_else(|err| panic!("error activating Linux proxy routing bridge: {err}"))
+            let socks_bridge = activate_proxy_routes_in_netns(spec, context)
+                .unwrap_or_else(|err| panic!("error activating Linux proxy routing bridge: {err}"));
+            // An older controller can require managed networking without supplying any grants.
+            // Keep that context so seccomp denies network access even under a full-access profile.
+            let use_proxy_seccomp = context.allow_local_binding
+                || !context.loopback_ports.is_empty()
+                || context.dangerously_allow_all_unix_sockets;
+            (socks_bridge, use_proxy_seccomp.then_some(routing))
         } else {
-            None
+            (None, None)
         };
         if let Err(e) = apply_sandbox_policies_to_current_thread(
             &file_system_sandbox_policy,
@@ -214,7 +220,7 @@ pub fn run_main() -> ! {
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             managed_network.as_ref(),
-            allow_network_for_proxy.then_some(routing),
+            proxy_routing,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -336,12 +342,8 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let (proxy_route_spec, proxy_bridges) = if let Some(context) = managed_network.as_ref() {
-            // Older explicit-proxy callers may omit ports. The new transparent
-            // switch always requires the executor's trusted ingress port list.
-            let ports = (transparent_tcp || !context.loopback_ports.is_empty())
-                .then_some(context.loopback_ports.as_slice());
-            let (proxy_route_spec, bridges) = prepare_host_proxy_route_spec(ports, routing)
+        let (proxy_route_spec, proxy_bridges) = if let Some(context) = &managed_network {
+            let (proxy_route_spec, bridges) = prepare_host_proxy_route_spec(context, routing)
                 .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
             (Some(proxy_route_spec), bridges)
         } else {
@@ -520,9 +522,13 @@ fn run_bwrap_with_proc_fallback(
         options,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
-    if !proxy_bridges.is_empty() && bwrap_args.synthetic_mount_targets.is_empty() {
-        // This launcher would otherwise exec bubblewrap directly. Preserve
-        // --die-with-parent now that it stays alive to serve the proxy.
+    if matches!(
+        options.network_mode,
+        BwrapNetworkMode::ProxyOnly | BwrapNetworkMode::PreparedProxy
+    ) && bwrap_args.synthetic_mount_targets.is_empty()
+    {
+        // The caller can exit during the procfs probe, even when no ports were
+        // granted and there are no bridges to supervise.
         kill_on_parent_death(caller_pid);
     }
     // Host bridge threads must stay in the host network namespace. Only the

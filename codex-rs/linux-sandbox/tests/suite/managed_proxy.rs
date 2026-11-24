@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::exec_env::create_env;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -103,7 +104,7 @@ async fn should_skip_bwrap_tests_with_env(mut env: HashMap<String, String>) -> b
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
         &PermissionProfile::read_only(),
-        /*allow_network_for_proxy*/ false,
+        /*loopback_ports*/ None,
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -134,7 +135,7 @@ async fn managed_proxy_skip_reason_with_env(mut env: HashMap<String, String>) ->
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -157,12 +158,11 @@ async fn managed_proxy_skip_reason_with_env(mut env: HashMap<String, String>) ->
 async fn run_linux_sandbox_direct(
     command: &[&str],
     permission_profile: &PermissionProfile,
-    allow_network_for_proxy: bool,
+    loopback_ports: Option<&[u16]>,
     env: HashMap<String, String>,
     timeout_ms: u64,
 ) -> Output {
-    let mut command =
-        linux_sandbox_command(command, permission_profile, allow_network_for_proxy, env);
+    let mut command = linux_sandbox_command(command, permission_profile, loopback_ports, env);
     tokio::time::timeout(Duration::from_millis(timeout_ms), command.output())
         .await
         .expect("sandbox command should not time out")
@@ -172,16 +172,17 @@ async fn run_linux_sandbox_direct(
 fn linux_sandbox_command(
     command: &[&str],
     permission_profile: &PermissionProfile,
-    allow_network_for_proxy: bool,
+    loopback_ports: Option<&[u16]>,
     env: HashMap<String, String>,
 ) -> Command {
-    linux_sandbox_command_with_options(
-        command,
-        permission_profile,
-        allow_network_for_proxy.then_some("{}"),
-        env,
-        &[],
-    )
+    let context = loopback_ports.map(|ports| {
+        serde_json::to_string(&ManagedNetworkSandboxContext {
+            loopback_ports: ports.to_vec(),
+            ..Default::default()
+        })
+        .expect("serialize managed network")
+    });
+    linux_sandbox_command_with_options(command, permission_profile, context.as_deref(), env, &[])
 }
 
 fn linux_sandbox_command_with_options(
@@ -235,7 +236,7 @@ async fn sandboxed_commands_have_a_seccomp_filtered_namespace_reaper() {
 
     assert_seccomp_filtered_namespace_reaper(
         &PermissionProfile::read_only(),
-        /*allow_network_for_proxy*/ false,
+        /*loopback_ports*/ None,
         env,
     )
     .await;
@@ -253,18 +254,14 @@ async fn managed_proxy_commands_have_a_seccomp_filtered_namespace_reaper() {
     env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
 
     for permission_profile in [PermissionProfile::read_only(), PermissionProfile::Disabled] {
-        assert_seccomp_filtered_namespace_reaper(
-            &permission_profile,
-            /*allow_network_for_proxy*/ true,
-            env.clone(),
-        )
-        .await;
+        assert_seccomp_filtered_namespace_reaper(&permission_profile, Some(&[9]), env.clone())
+            .await;
     }
 }
 
 async fn assert_seccomp_filtered_namespace_reaper(
     permission_profile: &PermissionProfile,
-    allow_network_for_proxy: bool,
+    loopback_ports: Option<&[u16]>,
     env: HashMap<String, String>,
 ) {
     let inherited_seccomp_filters = std::fs::read_to_string("/proc/self/status")
@@ -281,7 +278,7 @@ async fn assert_seccomp_filtered_namespace_reaper(
             "if [ ! -r /proc/self/status ] || [ ! -r /proc/1/status ] || [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; printf '%s\\n' \"$PPID\"; awk '$1 == \"Seccomp:\" && FNR == NR { print $2 } $1 == \"Seccomp_filters:\" { print $2 }' /proc/1/status /proc/self/status",
         ],
         permission_profile,
-        allow_network_for_proxy,
+        loopback_ports,
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -321,7 +318,7 @@ async fn namespace_reaper_collects_orphaned_descendants() {
             "if [ ! -r /proc/self/status ] || [ ! -r /proc/1/status ] || [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; orphan=$(bash -c 'sleep 0.05 </dev/null >/dev/null 2>&1 & printf \"%s\\n\" \"$!\"'); for _ in $(seq 1 100); do if [ ! -e \"/proc/$orphan\" ]; then printf 'orphan reaped\\n'; exit 0; fi; sleep 0.01; done; exit 1",
         ],
         &PermissionProfile::read_only(),
-        /*allow_network_for_proxy*/ false,
+        /*loopback_ports*/ None,
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -629,7 +626,7 @@ async fn managed_proxy_full_filesystem_uses_minimal_dev_nodes() {
             ),
         ],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -668,7 +665,7 @@ async fn managed_proxy_bridges_release_command_output_after_exit() {
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "printf 'bridge output closed\\n'"],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -724,7 +721,7 @@ async fn approved_command_with_denied_reads_preserves_standard_devices() {
             "if cat \"$CODEX_TEST_DENIED\" >\"$CODEX_TEST_OUTPUT\" 2>&1; then exit 1; fi; ",
             "grep -q 'Permission denied' \"$CODEX_TEST_OUTPUT\"",
         )],
-        &profile, /*allow_network_for_proxy*/ false, env, NETWORK_TIMEOUT_MS,
+        &profile, /*loopback_ports*/ None, env, NETWORK_TIMEOUT_MS,
     ).await;
     assert_eq!(
         output.status.code(),
@@ -748,7 +745,7 @@ async fn managed_proxy_readiness_survives_closed_standard_descriptors() {
     let mut command = linux_sandbox_command(
         &["bash", "-c", "true"],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
     );
     unsafe {
@@ -785,7 +782,7 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -871,7 +868,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
             "proxy=\"${WSS_PROXY#*://}\"; host=\"${proxy%%:*}\"; port=\"${proxy##*:}\"; exec 3<>/dev/tcp/${host}/${port}; printf 'GET http://example.com/ HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s\\n' \"$line\"",
         ],
         &permission_profile,
-        /*allow_network_for_proxy*/ true,
+        Some(&[proxy_port]),
         env.clone(),
         NETWORK_TIMEOUT_MS,
     )
@@ -902,7 +899,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
     let direct_egress_output = run_linux_sandbox_direct(
         &["bash", "-c", "echo hi > /dev/tcp/192.0.2.1/80"],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[proxy_port]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -940,7 +937,7 @@ async fn managed_proxy_mode_denies_af_unix_socket_but_allows_socketpair() {
             "import socket,sys\ntry:\n    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\nexcept PermissionError:\n    pass\nexcept OSError:\n    sys.exit(2)\nelse:\n    sys.exit(1)\nleft,right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)\nleft.sendall(b'ok')\nif right.recv(2) != b'ok':\n    sys.exit(3)\n",
         ],
         &PermissionProfile::Disabled,
-        /*allow_network_for_proxy*/ true,
+        Some(&[9]),
         env,
         NETWORK_TIMEOUT_MS,
     )
@@ -1026,7 +1023,7 @@ fn handoff_client() {
     println!("handoff routes verified for {label}");
 }
 
-/// Both filesystem policies must preserve route identity across concurrent launches.
+/// Concurrent launches must reach only their bound host ports, with the right attribution.
 #[tokio::test]
 async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors() {
     if let Some(reason) = managed_proxy_skip_reason().await {
@@ -1060,6 +1057,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
             "CODEX_TEST_HANDOFF_SHARED".to_string(),
             shared.path().to_string_lossy().into_owned(),
         );
+        let mut loopback_ports = Vec::new();
 
         for (routes, keys) in [
             (&["http", "https"][..], &["HTTP_PROXY", "HTTPS_PROXY"][..]),
@@ -1068,6 +1066,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
             let listener =
                 TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("local proxy listener");
             let endpoint = listener.local_addr().expect("proxy endpoint");
+            loopback_ports.push(endpoint.port());
             for key in keys {
                 env.insert((*key).to_string(), format!("http://{endpoint}"));
             }
@@ -1120,7 +1119,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
                 "--test-threads=1",
             ],
             &profile,
-            /*allow_network_for_proxy*/ true,
+            Some(&loopback_ports),
             env,
         );
         command.kill_on_drop(true);

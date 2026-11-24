@@ -6,6 +6,7 @@ use crate::proxy_lifecycle::receive_listener;
 use crate::proxy_lifecycle::send_listener;
 use crate::seccomp::ProxyRouting;
 use async_lock::Semaphore;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
 use serde::Deserialize;
@@ -130,38 +131,32 @@ pub(crate) fn start_host_proxy_bridges(bridges: Vec<HostProxyBridge>) {
 }
 
 pub(crate) fn prepare_host_proxy_route_spec(
-    port_allowlist: Option<&[u16]>,
+    context: &ManagedNetworkSandboxContext,
     routing: ProxyRouting,
 ) -> io::Result<(String, Vec<HostProxyBridge>)> {
     // The outer supervisor holds the upstream credential and host sockets.
     codex_process_hardening::disable_process_dumping()?;
-    let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
+    let plan =
+        extract_attribution_token_and_plan(std::env::vars().collect(), &context.loopback_ports);
     // SAFETY: bubblewrap and the host bridge threads have not been started yet.
     unsafe {
         std::env::remove_var(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
     }
 
-    if plan.routes.is_empty() {
+    let (attribution_token, plan) = plan?;
+    if routing == ProxyRouting::TransparentTcp && context.loopback_ports.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "transparent TCP proxy endpoint is outside the managed sandbox context",
+        ));
+    }
+    if plan.routes.is_empty() && !context.loopback_ports.is_empty() {
         let message = if plan.has_proxy_config {
-            "managed proxy mode requires parseable loopback proxy endpoints"
+            "managed proxy mode requires a proxy endpoint on an allowed loopback port"
         } else {
             "managed proxy mode requires proxy environment variables"
         };
         return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
-    }
-
-    // Validate the entire plan before starting any host-side workers or sending
-    // attribution. An empty enforced list grants no routes.
-    if let Some(ports) = port_allowlist
-        && plan
-            .routes
-            .iter()
-            .any(|route| !ports.contains(&route.endpoint.port()))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "proxy endpoint is outside the managed sandbox context",
-        ));
     }
 
     let mut bridges = BTreeMap::new();
@@ -192,21 +187,23 @@ pub(crate) fn prepare_host_proxy_route_spec(
 
 fn extract_attribution_token_and_plan(
     mut env: HashMap<String, String>,
-) -> (Option<String>, ProxyRoutePlan) {
+    loopback_ports: &[u16],
+) -> io::Result<(Option<String>, ProxyRoutePlan)> {
     let attribution_token = env.remove(PROXY_ATTRIBUTION_TOKEN_ENV_KEY);
-    let plan = plan_proxy_routes(&env);
-    (attribution_token, plan)
+    let plan = plan_proxy_routes(&env, loopback_ports)?;
+    Ok((attribution_token, plan))
 }
 
 pub(crate) fn activate_proxy_routes_in_netns(
     serialized_spec: &str,
+    context: &ManagedNetworkSandboxContext,
 ) -> io::Result<Option<SocketAddr>> {
     let spec: ProxyRouteSpec = serde_json::from_str(serialized_spec).map_err(io::Error::other)?;
 
-    if spec.routes.is_empty() {
+    if spec.routes.is_empty() != context.loopback_ports.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "proxy routing spec contained no routes",
+            "proxy routes do not match the managed loopback port policy",
         ));
     }
 
@@ -283,7 +280,10 @@ pub(crate) fn activate_proxy_routes_in_netns(
     Ok(socks_bridge)
 }
 
-fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
+fn plan_proxy_routes(
+    env: &HashMap<String, String>,
+    loopback_ports: &[u16],
+) -> io::Result<ProxyRoutePlan> {
     let mut routes = Vec::new();
     let mut has_proxy_config = false;
 
@@ -301,6 +301,17 @@ fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
         let Some(endpoint) = parse_loopback_proxy_endpoint(trimmed) else {
             continue;
         };
+        // Only the managed policy can authorize a bridge to this host port. An older controller
+        // that supplied no port grants must fail closed even when the environment names a proxy.
+        if loopback_ports.is_empty() {
+            continue;
+        }
+        if !loopback_ports.contains(&endpoint.port()) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "proxy endpoint is outside the managed sandbox context",
+            ));
+        }
         routes.push(PlannedProxyRoute {
             env_key: key.clone(),
             endpoint,
@@ -308,10 +319,10 @@ fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
     }
 
     routes.sort_by(|left, right| left.env_key.cmp(&right.env_key));
-    ProxyRoutePlan {
+    Ok(ProxyRoutePlan {
         routes,
         has_proxy_config,
-    }
+    })
 }
 
 fn is_proxy_env_key(key: &str) -> bool {
