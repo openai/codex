@@ -12,6 +12,8 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::HttpRedirectPolicy;
+use codex_exec_server::HttpRequestParams;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::McpProtocolMode;
@@ -28,6 +30,7 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_remote_client;
@@ -99,12 +102,36 @@ async fn stalled_handshake_unblocks_remote_executor(
         Implementation::new("codex-test", "0.0.0-test"),
     )
     .with_protocol_version(ProtocolVersion::V_2025_06_18);
+    let timeout = if protocol_mode == McpProtocolMode::V20260728 {
+        // Warm up the executor's HTTP connection before starting the discovery deadline.
+        Mock::given(method("GET"))
+            .and(path("/ready"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&http_server)
+            .await;
+        let ready = exec_server
+            .client
+            .http_request(HttpRequestParams {
+                method: "GET".into(),
+                url: format!("{}/ready", http_server.uri()),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(15_000),
+                redirect_policy: HttpRedirectPolicy::Stop,
+                request_id: "ready".into(),
+                stream_response: false,
+            })
+            .await?;
+        assert_eq!(ready.status, 204);
+        // Time out during discovery, before RMCP falls back to initialize at 10 seconds.
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(15)
+    };
     let error = client
         .initialize(
             params,
-            // Allow the request to reach the remote HTTP server on loaded CI
-            // workers before testing cancellation of its stalled response.
-            Some(Duration::from_secs(15)),
+            Some(timeout),
             Box::new(|_, _| {
                 async {
                     Ok(ElicitationResponse {
