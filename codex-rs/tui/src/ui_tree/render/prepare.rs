@@ -184,7 +184,7 @@ impl PreparedNode {
     }
 
     fn collect_inline(flow: &mut Flow, inline: &mut InlineText, node: UiNode, mut paint: Paint) {
-        let parent_preserves_spaces = paint.inline_code;
+        let parent_preserves_spaces = paint.preserve_whitespace;
         let children = match node {
             UiNode::String(raw) => {
                 inline.push_leaf(raw, paint);
@@ -192,6 +192,7 @@ impl PreparedNode {
             }
             UiNode::Code { children } => {
                 paint.inline_code = true;
+                paint.preserve_whitespace = true;
                 paint.foreground = None;
                 paint.background = None;
                 paint.modifiers = paint

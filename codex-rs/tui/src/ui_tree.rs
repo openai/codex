@@ -97,6 +97,10 @@ pub(crate) struct TextProps {
     italic: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     underline: Option<bool>,
+    /// Preserve spaces and tabs across styled children.
+    #[serde(rename = "preserveWhitespace", skip_serializing_if = "is_default")]
+    #[cfg_attr(test, ts(as = "Option<bool>", optional))]
+    preserve_whitespace: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -44,6 +44,8 @@ export function render(state: StatuslineState): UiTree {
   return { type: "row", props: { gap: 1, wrap: "wrap", justify: "between" }, children };
 }
 
+const indented: UiTree = { type: "text", props: { preserveWhitespace: true }, children: ["  ready"] };
+
 const command: CodeElement = {
   type: "code",
   children: ["cargo ", null, { type: "bold", children: [" test"] }],

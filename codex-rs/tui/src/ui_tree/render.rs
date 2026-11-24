@@ -472,6 +472,7 @@ pub(crate) fn sanitize_leaf(mut raw: String) -> String {
 
 impl TextProps {
     fn apply_to(&self, paint: &mut Paint) {
+        paint.preserve_whitespace |= self.preserve_whitespace;
         if let Some(color) = self.color {
             paint.foreground = Some(color);
         }

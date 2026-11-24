@@ -26,6 +26,7 @@ pub(super) struct Paint {
     pub(super) background: Option<Color>,
     pub(super) href: Option<Arc<String>>,
     pub(super) inline_code: bool,
+    pub(super) preserve_whitespace: bool,
 }
 
 impl Paint {
@@ -140,8 +141,8 @@ impl InlineText {
 
     fn push_sanitized(&mut self, raw: String, paint: Paint) {
         let after_span = !raw.is_empty() && std::mem::take(&mut self.after_span);
-        let break_before = after_span && paint.inline_code && raw.starts_with([' ', '\t']);
-        let separators: &[char] = if paint.inline_code {
+        let break_before = after_span && paint.preserve_whitespace && raw.starts_with([' ', '\t']);
+        let separators: &[char] = if paint.preserve_whitespace {
             &['\n']
         } else {
             &[' ', '\t', '\n']
@@ -326,45 +327,45 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
     let mut offset = 0;
     let mut previous: Option<char> = None;
     let mut word_hyphen = false;
-    let mut previous_code = false;
+    let mut previous_preserved = false;
     for run in runs {
         let mut start = 0;
         for (i, grapheme) in run.text.grapheme_indices(true) {
             let position = offset + i;
             while breaks.next_if(|b| *b < position).is_some() {}
-            // Ordinary text uses textwrap’s word hyphens. In code, Chromium also breaks
+            // Ordinary text uses textwrap’s word hyphens. In preserved text, Chromium also breaks
             // at flag hyphens and keeps paths and shell operators within a word.
             let first = grapheme.as_bytes()[0];
             let can_break = match previous {
                 _ if i == 0 && run.break_before => true,
                 Some(prev)
-                    if (previous_code || run.paint.inline_code)
+                    if (previous_preserved || run.paint.preserve_whitespace)
                         && prev.is_ascii_graphic()
                         && first.is_ascii_graphic() =>
                 {
                     ascii_word_break(prev, first, word_hyphen)
                 }
                 Some('-') => word_hyphen && grapheme.starts_with(char::is_alphanumeric),
-                // A collapsed separator can wrap before the first literal space in code.
+                // A collapsed separator can wrap before the first preserved space.
                 Some(' ' | '\t')
-                    if previous_code
-                        || (run.paint.inline_code && matches!(first, b' ' | b'\t')) =>
+                    if previous_preserved
+                        || (run.paint.preserve_whitespace && matches!(first, b' ' | b'\t')) =>
                 {
                     true
                 }
                 Some('\u{ad}') => false,
                 _ => breaks.peek() == Some(&position),
             };
-            // Preserve normal word breaks first. An overlong code word can also
+            // Preserve normal word breaks first. An overlong preserved word can also
             // wrap at a grapheme boundary, as it does under overflow-wrap: break-word.
-            let code_boundary = position > 0
-                && (run.paint.inline_code
-                    || (previous_code && !matches!(run.text, RunText::Space)));
-            if can_break || code_boundary {
+            let preserved_boundary = position > 0
+                && (run.paint.preserve_whitespace
+                    || (previous_preserved && !matches!(run.text, RunText::Space)));
+            if can_break || preserved_boundary {
                 // A break after a literal space or tab can precede a collapsed
                 // prose separator. Keep the separator on this chunk, so only
                 // the prose space disappears when the line wraps.
-                let end = if previous_code && matches!(run.text, RunText::Space) {
+                let end = if previous_preserved && matches!(run.text, RunText::Space) {
                     run.text.len()
                 } else {
                     i
@@ -384,13 +385,13 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
                 }
                 chunk.break_before = if !can_break {
                     BreakBefore::Emergency
-                } else if previous_code && word_hyphen && first.is_ascii_digit() {
+                } else if previous_preserved && word_hyphen && first.is_ascii_digit() {
                     BreakBefore::AfterHyphenBeforeDigit
                 } else {
                     BreakBefore::Preferred
                 };
             }
-            previous_code = run.paint.inline_code;
+            previous_preserved = run.paint.preserve_whitespace;
             for ch in grapheme.chars() {
                 word_hyphen = ch == '-' && previous.is_some_and(char::is_alphanumeric);
                 previous = Some(ch);
@@ -411,7 +412,7 @@ impl Chunk {
     pub(super) fn prefers_break_before(&self, index_in_line: usize) -> bool {
         match self.break_before {
             BreakBefore::Preferred => true,
-            // A code hyphen occupies its own chunk. When wrapping puts it at the
+            // A preserved hyphen occupies its own chunk. When wrapping puts it at the
             // start of a visual line, keep it with the digits that follow.
             BreakBefore::AfterHyphenBeforeDigit => index_in_line > 1,
             BreakBefore::Emergency => false,
@@ -420,7 +421,7 @@ impl Chunk {
 
     fn tab_paint(&self) -> Option<&Paint> {
         match self.runs.as_slice() {
-            [run] if run.paint.inline_code && &*run.text == "\t" => Some(&run.paint),
+            [run] if run.paint.preserve_whitespace && &*run.text == "\t" => Some(&run.paint),
             _ => None,
         }
     }
@@ -475,7 +476,7 @@ impl PreparedText {
     }
 }
 
-/// Fit one screen row, preferring the last word boundary before splitting a code word.
+/// Fit one screen row, preferring the last word boundary before splitting a preserved word.
 fn fit_visual_line(line: &[Chunk], width: usize) -> (usize, usize) {
     let mut used = 0;
     let mut space = 0;

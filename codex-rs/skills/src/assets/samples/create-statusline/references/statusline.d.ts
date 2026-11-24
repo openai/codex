@@ -79,7 +79,11 @@ export type StatusColor = "status-model" | "status-path" | "status-branch" | "st
 
 export type StatuslineState = { account: Account, app: App, config: Config, thread: Thread, };
 
-export type TextProps = { color?: Color | null, weight?: TextWeight | null, italic?: boolean | null, underline?: boolean | null, };
+export type TextProps = { color?: Color | null, weight?: TextWeight | null, italic?: boolean | null, underline?: boolean | null,
+/**
+ * Preserve spaces and tabs across styled children.
+ */
+preserveWhitespace?: boolean, };
 
 export type TextWeight = "normal" | "bold";
 

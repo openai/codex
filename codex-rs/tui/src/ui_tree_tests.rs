@@ -185,6 +185,40 @@ fn inline_code_uses_the_subdued_fallback_for_translucent_highlights() {
 }
 
 #[test]
+fn preserved_text_keeps_spacing_across_inline_styles_and_wraps() {
+    let preserved = |children: Value| {
+        tree(json!({
+            "type":"text","props":{"preserveWhitespace":true},"children":children
+        }))
+    };
+    let mixed = tree(json!({"type":"text","children":[
+        "last run ", {"type":"text","props":{"preserveWhitespace":true},"children":[" pending"]}
+    ]}));
+    assert_eq!(
+        painted_rows(&mixed, Size::new(8, 2)),
+        ["last run", " pending"]
+    );
+    let joined = preserved(json!(["  build  ready\t!"]));
+    let styled = preserved(json!(["  build ", {"type":"bold","children":[
+        {"type":"text","props":{"preserveWhitespace":false},"children":[" ready"]}
+    ]}, "\t!"]));
+    for width in 1..=18 {
+        let bounds = Size::new(width, 20);
+        assert_eq!(painted_rows(&styled, bounds), painted_rows(&joined, bounds));
+    }
+    let area = Rect::new(0, 0, 18, 1);
+    insta::assert_snapshot!(painted_rows(&styled, area.as_size()).join("\n"), @"  build  ready  !");
+    let mut buf = Buffer::empty(area);
+    styled.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+    assert_eq!(buf[(2, 0)].style(), Buffer::empty(area)[(2, 0)].style());
+    assert!(
+        buf[(9, 0)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
 fn wrapped_code_keeps_a_leading_hyphen_with_the_hash() {
     let bounds = Size::new(8, 3);
     for children in [
