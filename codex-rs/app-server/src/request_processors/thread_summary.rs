@@ -1,8 +1,4 @@
 use super::*;
-#[cfg(test)]
-use chrono::DateTime;
-#[cfg(test)]
-use chrono::Utc;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_utils_path_uri::LegacyAppPathString;
 
@@ -136,93 +132,9 @@ pub(crate) fn thread_settings_from_config_snapshot(
     })
 }
 
-#[cfg(test)]
-fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
-    timestamp.and_then(|ts| {
-        chrono::DateTime::parse_from_rfc3339(ts)
-            .ok()
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-    })
-}
-
 pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNotification {
     thread.turns.clear();
     ThreadStartedNotification { thread }
-}
-
-#[cfg(test)]
-pub(crate) fn summary_to_thread(
-    summary: ConversationSummary,
-    fallback_cwd: &AbsolutePathBuf,
-) -> Thread {
-    let ConversationSummary {
-        conversation_id,
-        path,
-        preview,
-        timestamp,
-        updated_at,
-        model_provider,
-        cwd,
-        cli_version,
-        source,
-        git_info,
-    } = summary;
-
-    let created_at = parse_datetime(timestamp.as_deref());
-    let updated_at = parse_datetime(updated_at.as_deref()).or(created_at);
-    let git_info = git_info.map(|info| ApiGitInfo {
-        sha: info.sha,
-        branch: info.branch,
-        origin_url: info.origin_url,
-    });
-    let cwd =
-        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
-            .unwrap_or_else(|err| {
-                warn!(
-                    conversation_id = %conversation_id,
-                    path = %path.display(),
-                    "failed to normalize thread cwd while summarizing thread: {err}"
-                );
-                fallback_cwd.clone()
-            });
-
-    let thread_id = conversation_id.to_string();
-    Thread {
-        originator: None,
-        environments: None,
-        id: thread_id.clone(),
-        extra: None,
-        session_id: thread_id,
-        forked_from_id: None,
-        attached_to_thread_id: None,
-        parent_thread_id: None,
-        preview,
-        ephemeral: false,
-        section: None,
-        section_entered_at: None,
-        project_id: None,
-        history_mode: ThreadHistoryMode::Legacy,
-        model_provider,
-        created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
-        model: None,
-        reasoning_effort: None,
-        updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
-        recency_at: updated_at.map(|dt| dt.timestamp()),
-        status: ThreadStatus::NotLoaded,
-        path: (!path.as_os_str().is_empty()).then_some(path),
-        cwd: cwd.into(),
-        cli_version,
-        agent_nickname: source.get_nickname(),
-        agent_role: source.get_agent_role(),
-        source: source.into(),
-        can_accept_direct_input: None,
-        thread_source: None,
-        git_info,
-        name: None,
-        daybreak_enabled: None,
-        daybreak_program_propagation_enrolled: None,
-        turns: Vec::new(),
-    }
 }
 
 #[cfg(test)]
