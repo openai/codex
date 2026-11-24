@@ -5775,16 +5775,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-utils-readiness"
-version = "0.0.0"
-dependencies = [
- "assert_matches",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "codex-utils-redacted-string"
 version = "0.0.0"
 dependencies = [

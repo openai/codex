@@ -143,7 +143,6 @@ members = [
     "utils/home-dir",
     "utils/process",
     "utils/pty",
-    "utils/readiness",
     "utils/redacted-string",
     "utils/rustls-provider",
     "utils/string",
