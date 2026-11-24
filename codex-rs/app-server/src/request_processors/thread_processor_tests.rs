@@ -1733,3 +1733,18 @@ mod thread_processor_behavior_tests {
         Ok(())
     }
 }
+
+#[test]
+fn preview_from_rollout_items_prefers_plain_user_messages() {
+    use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+    use codex_rollout::RolloutItem;
+    use core_test_support::responses::user_message_item;
+
+    let items = [
+        "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\n<AGENTS.md contents>\n</INSTRUCTIONS>",
+        &format!("<prior context> {USER_MESSAGE_BEGIN}Count to 5"),
+    ]
+    .map(|text| RolloutItem::ResponseItem(user_message_item(text).into()));
+
+    assert_eq!(super::preview_from_rollout_items(&items), "Count to 5");
+}

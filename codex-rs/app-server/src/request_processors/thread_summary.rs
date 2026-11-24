@@ -2,61 +2,6 @@ use super::*;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_utils_path_uri::LegacyAppPathString;
 
-#[cfg(test)]
-fn extract_conversation_summary(
-    path: PathBuf,
-    head: &[serde_json::Value],
-    session_meta: &SessionMeta,
-    git: Option<&CoreGitInfo>,
-    fallback_provider: &str,
-    updated_at: Option<String>,
-) -> Option<ConversationSummary> {
-    let preview = head
-        .iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })?;
-
-    let preview = strip_user_message_prefix(preview.as_str());
-
-    let timestamp = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.clone())
-    };
-    let conversation_id = session_meta.id;
-    let model_provider = session_meta
-        .model_provider
-        .clone()
-        .unwrap_or_else(|| fallback_provider.to_string());
-    let git_info = git.map(map_git_info);
-    let updated_at = updated_at.or_else(|| timestamp.clone());
-
-    Some(ConversationSummary {
-        conversation_id,
-        timestamp,
-        updated_at,
-        path,
-        preview: preview.to_string(),
-        model_provider,
-        cwd: session_meta.cwd.clone(),
-        cli_version: session_meta.cli_version.clone(),
-        source: session_meta.source.clone(),
-        git_info,
-    })
-}
-
-#[cfg(test)]
-fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
-    ConversationGitInfo {
-        sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
-        branch: git_info.branch.clone(),
-        origin_url: git_info.repository_url.clone().map(String::from),
-    }
-}
-
 pub(super) fn with_thread_spawn_agent_metadata(
     source: codex_protocol::protocol::SessionSource,
     agent_nickname: Option<String>,
@@ -136,7 +81,3 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
     thread.turns.clear();
     ThreadStartedNotification { thread }
 }
-
-#[cfg(test)]
-#[path = "thread_summary_tests.rs"]
-mod thread_summary_tests;

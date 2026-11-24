@@ -434,8 +434,6 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-#[cfg(test)]
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
@@ -448,8 +446,6 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
-#[cfg(test)]
-use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -460,8 +456,6 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::W3cTraceContext;
-#[cfg(test)]
-use codex_protocol::protocol::strip_user_message_prefix;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::McpOAuthClientRegistration;
