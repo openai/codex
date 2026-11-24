@@ -104,8 +104,21 @@ pub(super) struct InlineText {
 }
 
 impl InlineText {
+    /// Whitespace-only text nodes join an existing anonymous flex item but cannot start one.
+    pub(super) fn push_flex_leaf(&mut self, raw: String, paint: Paint) {
+        let raw = sanitize_leaf(raw);
+        if self.line.is_empty() && self.text.lines.is_empty() && raw.trim_ascii().is_empty() {
+            return;
+        }
+        self.push_sanitized(raw, paint);
+    }
+
     pub(super) fn push_leaf(&mut self, raw: String, paint: Paint) {
-        let text = RunText::new(sanitize_leaf(raw));
+        self.push_sanitized(sanitize_leaf(raw), paint);
+    }
+
+    fn push_sanitized(&mut self, raw: String, paint: Paint) {
+        let text = RunText::new(raw);
         let mut start = 0;
         for (end, ch) in text
             .match_indices([' ', '\t', '\n'])

@@ -47,6 +47,10 @@ pub(crate) enum UiNode {
         props: RowProps,
         children: Vec<Option<UiNode>>,
     },
+    Col {
+        props: ColProps,
+        children: Vec<Option<UiNode>>,
+    },
     Bold {
         children: Vec<Option<UiNode>>,
     },
@@ -58,6 +62,17 @@ pub(crate) enum UiNode {
     },
     #[serde(untagged)]
     String(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
+pub(crate) struct ColProps {
+    /// Blank terminal rows between flex items, as a non-negative JavaScript-safe integer.
+    /// Adjacent strings form one item. Separate elements each take a slot, even when empty.
+    #[serde(deserialize_with = "decode::gap")]
+    #[cfg_attr(test, ts(type = "number"))]
+    gap: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

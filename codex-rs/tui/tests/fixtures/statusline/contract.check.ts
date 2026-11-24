@@ -1,4 +1,5 @@
 import type {
+  ColElement,
   Color,
   RowElement,
   StatuslineItemId,
@@ -46,6 +47,13 @@ export function render(state: StatuslineState): UiTree {
 const alias: StatuslineItemId = "project-root";
 // @ts-expect-error Row props require a gap in terminal columns.
 const missingGap: RowElement = { type: "row", props: {}, children: [] };
+const twoLines: ColElement = {
+  type: "col",
+  props: { gap: 0 },
+  children: [{ type: "text", children: ["model main"] }, { type: "text", children: ["75%"] }],
+};
+// @ts-expect-error Column props require a gap in terminal rows.
+const missingColGap: ColElement = { type: "col", props: {}, children: [] };
 // @ts-expect-error Color literals begin with a hash or match one of the named tokens.
 const invalidColor: Color = "ff00bb";
 

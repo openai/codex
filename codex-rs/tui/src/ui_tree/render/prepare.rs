@@ -1,4 +1,4 @@
-//! Prepare inline content and measure each row child before viewport layout.
+//! Prepare inline content and measure container children before viewport layout.
 
 use super::text::InlineText;
 use super::text::Paint;
@@ -28,6 +28,10 @@ pub(super) struct Widths {
 #[derive(Debug, PartialEq)]
 pub(super) enum NodeKind {
     Text(PreparedText),
+    Col {
+        children: Vec<PreparedNode>,
+        gap: u64,
+    },
     Row {
         children: Vec<PreparedNode>,
         props: RowProps,
@@ -36,16 +40,57 @@ pub(super) enum NodeKind {
     Empty,
 }
 
+/// A column interrupts inline flow even when its contents have zero height.
+#[derive(Default)]
+struct Flow {
+    blocks: Vec<PreparedNode>,
+    line: Vec<PreparedNode>,
+    paint: Paint,
+}
+
+impl Flow {
+    fn take_line(&mut self) -> Option<PreparedNode> {
+        if self.line.len() <= 1 {
+            self.line.pop()
+        } else {
+            PreparedNode::row(
+                std::mem::take(&mut self.line),
+                RowProps::default(),
+                self.paint.clone(),
+            )
+        }
+    }
+}
+
 impl PreparedNode {
     pub(super) fn from_node(node: UiNode, paint: Paint) -> Option<Self> {
-        let mut items = Vec::new();
+        let mut flow = Flow {
+            paint: paint.clone(),
+            ..Flow::default()
+        };
         let mut inline = InlineText::default();
-        Self::collect_inline(&mut items, &mut inline, node, paint.clone());
-        items.extend(Self::text(inline));
-        if items.len() <= 1 {
-            items.pop()
-        } else {
-            Self::row(items, RowProps::default(), paint)
+        Self::collect_inline(&mut flow, &mut inline, node, paint);
+        flow.line.extend(Self::text(inline));
+        let last = flow.take_line();
+        if flow.blocks.is_empty() {
+            return last;
+        }
+        flow.blocks.extend(last);
+        if flow.blocks.len() == 1 {
+            return flow.blocks.pop();
+        }
+        Some(Self::col(flow.blocks, /*gap*/ 0))
+    }
+
+    fn col(children: Vec<Self>, gap: u64) -> Self {
+        let mut widths = Widths::default();
+        for child in &children {
+            widths.minimum = widths.minimum.max(child.widths.minimum);
+            widths.preferred = widths.preferred.max(child.widths.preferred);
+        }
+        Self {
+            widths,
+            kind: NodeKind::Col { children, gap },
         }
     }
 
@@ -110,13 +155,13 @@ impl PreparedNode {
         })
     }
 
-    /// In flex layout, consecutive strings form one anonymous item.
+    /// In flex layout, consecutive strings form one anonymous item unless entirely whitespace.
     fn flex_items(children: Vec<Option<UiNode>>, paint: &Paint) -> Vec<Self> {
         let mut items = Vec::new();
         let mut strings = InlineText::default();
         for child in children.into_iter().flatten() {
             match child {
-                UiNode::String(raw) => strings.push_leaf(raw, paint.clone()),
+                UiNode::String(raw) => strings.push_flex_leaf(raw, paint.clone()),
                 child => {
                     items.extend(Self::text(std::mem::take(&mut strings)));
                     // An explicit empty element still separates flex gaps.
@@ -133,19 +178,22 @@ impl PreparedNode {
         items
     }
 
-    fn collect_inline(
-        items: &mut Vec<Self>,
-        inline: &mut InlineText,
-        node: UiNode,
-        mut paint: Paint,
-    ) {
+    fn collect_inline(flow: &mut Flow, inline: &mut InlineText, node: UiNode, mut paint: Paint) {
         let children = match node {
             UiNode::String(raw) => {
                 inline.push_leaf(raw, paint);
                 return;
             }
+            UiNode::Col { props, children } => {
+                flow.line.extend(Self::text(std::mem::take(inline)));
+                let line = flow.take_line();
+                flow.blocks.extend(line);
+                let children = Self::flex_items(children, &paint);
+                flow.blocks.push(Self::col(children, props.gap));
+                return;
+            }
             UiNode::Row { props, children } => {
-                items.extend(Self::text(std::mem::take(inline)));
+                flow.line.extend(Self::text(std::mem::take(inline)));
                 if let Some(color) = props.background {
                     paint.background = Some(color);
                 }
@@ -159,7 +207,7 @@ impl PreparedNode {
                         .filter_map(|node| Self::from_node(node, paint.clone()))
                         .collect()
                 };
-                items.extend(Self::row(children, props, paint));
+                flow.line.extend(Self::row(children, props, paint));
                 return;
             }
             UiNode::Text { props, children } => {
@@ -185,7 +233,7 @@ impl PreparedNode {
             }
         };
         for node in children.into_iter().flatten() {
-            Self::collect_inline(items, inline, node, paint.clone());
+            Self::collect_inline(flow, inline, node, paint.clone());
         }
     }
 

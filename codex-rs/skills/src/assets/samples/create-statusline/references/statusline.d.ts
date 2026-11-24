@@ -14,6 +14,13 @@ export type ApprovalPolicy = "untrusted" | "on-request" | "granular" | "never";
 
 export type ApprovalReviewer = "user" | "auto-review";
 
+export type ColProps = {
+/**
+ * Blank terminal rows between flex items, as a non-negative JavaScript-safe integer.
+ * Adjacent strings form one item. Separate elements each take a slot, even when empty.
+ */
+gap: number, };
+
 export type Color = "primary" | "surface" | "accent" | "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "cyan" | "white" | StatusColor | HexRgb;
 
 export type Config = { statusline_items: StatuslineItemId[], profile?: string, };
@@ -24,7 +31,7 @@ export type Cost = { total_cost_usd?: number, total_credits?: number, };
 
 export type DisplayMode = "standard" | "raw";
 
-export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | string;
+export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | string;
 
 export type FileSystem = { "type": "restricted" } | { "type": "unrestricted" };
 
@@ -97,6 +104,7 @@ export type ItalicElement = Extract<Element, { type: "italic" }>;
 export type UnderlineElement = Extract<Element, { type: "underline" }>;
 export type LinkElement = Extract<Element, { type: "link" }>;
 export type RowElement = Extract<Element, { type: "row" }>;
+export type ColElement = Extract<Element, { type: "col" }>;
 export type RateLimitWindow = {
 /**
  * Percentage of the allowance consumed during the window. Can exceed 100.

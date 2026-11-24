@@ -1,4 +1,4 @@
-//! Lay out prepared text and nested rows within a terminal viewport.
+//! Lay out prepared text, rows, and columns within a terminal viewport.
 
 mod prepare;
 mod text;
@@ -84,6 +84,8 @@ enum Fragment<'a> {
     Gap(usize, &'a Paint),
     /// The visible background of a flex item counts even on an otherwise blank line.
     Background(usize, &'a Paint),
+    /// A vertical gap takes up a line without advancing the horizontal position.
+    BlankLine,
 }
 
 impl<'a> Fragment<'a> {
@@ -93,12 +95,14 @@ impl<'a> Fragment<'a> {
             | Self::Padding(width, _)
             | Self::Gap(width, _)
             | Self::Background(width, _) => width,
+            Self::BlankLine => 0,
         }
     }
 
     fn visit(self, limit: usize, mut draw: impl FnMut(usize, &str, usize, &'a Paint)) -> usize {
         match self {
             Self::Text(chunks, _) => visit_chunks(chunks, limit, draw),
+            Self::BlankLine => 0,
             Self::Padding(width, paint)
             | Self::Gap(width, paint)
             | Self::Background(width, paint) => {
@@ -252,6 +256,26 @@ fn layout_node<'a>(
     match &node.kind {
         NodeKind::Empty => 0,
         NodeKind::Text(text) => text.layout(width, limit, visit),
+        NodeKind::Col { children, gap } => {
+            let gap = (*gap).min(limit as u64) as usize;
+            let mut y = 0;
+            for (index, child) in children.iter().enumerate() {
+                if index > 0 {
+                    let end = (y + gap).min(limit);
+                    for row in y..end {
+                        visit(row, Fragment::BlankLine);
+                    }
+                    y = end;
+                }
+                if y == limit {
+                    break;
+                }
+                y += layout_node(child, width, limit - y, &mut |row, part| {
+                    visit(y + row, part)
+                });
+            }
+            y
+        }
         NodeKind::Row {
             children,
             props,
@@ -347,6 +371,10 @@ fn layout_band<'a>(
         layout_node(child, child_width, limit, &mut |y, part| {
             if y >= lines.len() {
                 lines.resize_with(y + 1, || (0, suppress_blank.then(Vec::new)));
+            }
+            if matches!(part, Fragment::BlankLine) {
+                visit(y, part);
+                return;
             }
             // Unpainted alignment and gaps alone do not make a blank line visible.
             let (end, pending) = &mut lines[y];
