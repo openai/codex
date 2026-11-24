@@ -8,7 +8,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::strip_user_message_prefix;
 use futures::TryStreamExt;
 use pulldown_cmark::Event;
+use pulldown_cmark::LinkType;
 use pulldown_cmark::Parser;
+use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
 use serde::Deserialize;
 use serde::Serialize;
@@ -37,7 +39,8 @@ struct SearchCursor {
     thread_id: ThreadId,
     search_term: String,
     next_rollout_ordinal: i64,
-    next_occurrence_index: usize,
+    // Raw-text cursors counted hidden destinations. Reject them instead of skipping visible hits.
+    next_visible_occurrence_index: usize,
 }
 
 struct CandidateRow {
@@ -188,7 +191,7 @@ ORDER BY rollout_ordinal ASC
             let first_occurrence_index = cursor
                 .as_ref()
                 .filter(|cursor| cursor.next_rollout_ordinal == row.rollout_ordinal)
-                .map_or(0, |cursor| cursor.next_occurrence_index);
+                .map_or(0, |cursor| cursor.next_visible_occurrence_index);
             let remaining = params
                 .page_size
                 .saturating_add(1)
@@ -242,7 +245,7 @@ ORDER BY rollout_ordinal ASC
                             thread_id: params.thread_id,
                             search_term: params.search_term,
                             next_rollout_ordinal: row.rollout_ordinal,
-                            next_occurrence_index: occurrence_index,
+                            next_visible_occurrence_index: occurrence_index,
                         })?),
                     });
                 }
@@ -326,14 +329,15 @@ fn searchable_text(item: &ThreadItemPayload) -> Option<Cow<'_, str>> {
                 .filter(|text| !text.is_empty())
                 .peekable();
             let first = text_parts.next()?;
-            match text_parts.next() {
-                None => Some(Cow::Borrowed(first)),
-                Some(second) => {
-                    let mut parts = vec![first, second];
-                    parts.extend(text_parts);
-                    Some(Cow::Owned(parts.concat()))
-                }
+            let text = match text_parts.peek() {
+                None => Cow::Borrowed(first),
+                Some(_) => Cow::Owned(std::iter::once(first).chain(text_parts).collect()),
+            };
+            // Inline elements address byte ranges in the literal prompt.
+            if content.iter().any(|part| matches!(part, UserInput::Text { text_elements, .. } if !text_elements.is_empty())) {
+                return Some(text);
             }
+            Some(user_link_labels(text))
         }
         ThreadItemPayload::AgentMessage { text, .. } => {
             let text = markdown_to_search_text(text);
@@ -357,6 +361,47 @@ fn searchable_text(item: &ThreadItemPayload) -> Option<Cow<'_, str>> {
         | ThreadItemPayload::ExitedReviewMode { .. }
         | ThreadItemPayload::ContextCompaction { .. } => None,
     }
+}
+
+// Leave literal prompt text (including code and whitespace) alone outside inline links.
+fn user_link_labels(source: Cow<'_, str>) -> Cow<'_, str> {
+    if !source.contains("](") {
+        return source;
+    }
+    let mut text = String::new();
+    let mut copied = 0;
+    let mut events = Parser::new(&source).into_offset_iter();
+    while let Some((event, span)) = events.next() {
+        if !matches!(
+            event,
+            Event::Start(Tag::Link {
+                link_type: LinkType::Inline,
+                ..
+            })
+        ) {
+            continue;
+        }
+        text.push_str(&source[copied..span.start]);
+        for (event, _) in events.by_ref() {
+            match event {
+                Event::End(TagEnd::Link) => break,
+                Event::Text(value) | Event::Code(value) | Event::InlineHtml(value) => {
+                    text.push_str(&value)
+                }
+                Event::SoftBreak | Event::HardBreak => text.push('\n'),
+                _ => {}
+            }
+        }
+        copied = span.end;
+    }
+    if copied == 0 {
+        return source;
+    }
+    text.push_str(&source[copied..]);
+    if text.trim().is_empty() {
+        return source;
+    }
+    Cow::Owned(text)
 }
 
 fn markdown_to_search_text(markdown: &str) -> String {

@@ -691,7 +691,8 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                                 text_elements: Vec::new(),
                             },
                             codex_protocol::user_input::UserInput::Text {
-                                text: "dle needle needle needle".to_string(),
+                                text: "dle needle needle [needle](https://example.com/needle)  end\n\n```\na  b\n```"
+                                    .to_string(),
                                 text_elements: Vec::new(),
                             },
                         ],
@@ -704,8 +705,8 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                         id: "steer-1".to_string(),
                         client_id: None,
                         content: vec![codex_protocol::user_input::UserInput::Text {
-                            text: "steer toward needle".to_string(),
-                            text_elements: Vec::new(),
+                            text: "steer [label](https://example.com/needle)".to_string(),
+                            text_elements: vec![TextElement::new(ByteRange { start: 0, end: 5 }, /*placeholder*/ None)],
                         }],
                     }),
                 ),
@@ -798,7 +799,31 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![0, 7, 14]
     );
+    assert_eq!(
+        data[0].snippet,
+        "Needle needle needle needle  end\n\n```\na  b\n```"
+    );
     let next_cursor = next_cursor.expect("first page should have another occurrence");
+
+    // A raw-text index may count a URL before a visible hit. Reject it rather than skipping that hit.
+    let old_cursor = serde_json::json!({
+        "threadId": thread_id.to_string(), "searchTerm": "needle",
+        "nextRolloutOrdinal": 2, "nextOccurrenceIndex": 1
+    });
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.to_string(),
+            search_term: "needle".to_string(),
+            cursor: Some(old_cursor.to_string()),
+            limit: Some(3),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(error.error.message.contains("invalid cursor"));
 
     let request_id = mcp
         .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
