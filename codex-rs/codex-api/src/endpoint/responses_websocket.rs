@@ -72,6 +72,7 @@ use url::Url;
 struct WsStream {
     max_message_bytes: Option<usize>,
     routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
+    handshake_models_etag: Option<String>,
     tx_command: mpsc::Sender<WsCommand>,
     rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
     pump_task: tokio::task::JoinHandle<()>,
@@ -326,9 +327,15 @@ where
 }
 
 impl WsStream {
-    fn new(inner: WebSocketConnection, max_message_bytes: Option<usize>) -> Self {
+    fn new(
+        inner: WebSocketConnection,
+        max_message_bytes: Option<usize>,
+        handshake_models_etag: Option<String>,
+    ) -> Self {
         let routing_affinity = inner.routing_affinity().cloned();
-        Self::with_socket(inner, max_message_bytes, routing_affinity)
+        let mut stream = Self::with_socket(inner, max_message_bytes, routing_affinity);
+        stream.handshake_models_etag = handshake_models_etag;
+        stream
     }
 
     fn with_socket(
@@ -348,6 +355,7 @@ impl WsStream {
         Self {
             max_message_bytes,
             routing_affinity,
+            handshake_models_etag: None,
             tx_command,
             rx_message,
             pump_task,
@@ -621,6 +629,14 @@ impl ResponsesWebsocketConnection {
                         .await;
                     return;
                 };
+                // Warmup drains events without updating the catalog. Preserve the handshake
+                // ETag until the first generation, and never replay it on a reused connection:
+                // later response metadata may advertise a newer catalog.
+                if !timing_log_context.warmup
+                    && let Some(etag) = ws_stream.handshake_models_etag.take()
+                {
+                    let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
+                }
                 let mut completion = None;
                 let result = {
                     let response = run_websocket_response_stream(
@@ -895,6 +911,11 @@ async fn connect_websocket(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok());
     let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
+    let models_etag = response
+        .headers()
+        .get(X_MODELS_ETAG_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
     let server_model = response
         .headers()
         .get(OPENAI_MODEL_HEADER)
@@ -909,7 +930,7 @@ async fn connect_websocket(
         let _ = turn_state.set(header_value.to_string());
     }
     Ok((
-        WsStream::new(stream, max_message_bytes),
+        WsStream::new(stream, max_message_bytes, models_etag),
         response,
         reasoning_included,
         server_model,

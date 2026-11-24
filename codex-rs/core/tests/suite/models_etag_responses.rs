@@ -1,13 +1,18 @@
 #![cfg(not(target_os = "windows"))]
 
 use codex_core::TurnInputRequest;
+use codex_core::build_startup_models;
 use core_test_support::test_codex::local_requests;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::manager::ModelCatalogSettings;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -18,19 +23,146 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_exec_command_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 use wiremock::MockServer;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handshake_models_etag_refreshes_catalog_after_warmup_without_response_metadata()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let models_server = MockServer::start().await;
+    let mut model = model_info_from_slug("gpt-5.2");
+    model.description = Some("original catalog".to_string());
+    let original_catalog = ModelsResponse {
+        models: vec![model.clone()],
+    };
+    let initial_fetch = responses::mount_models_once_with_etag(
+        &models_server,
+        original_catalog.clone(),
+        "original-etag",
+    )
+    .await;
+
+    // Use a real HTTP catalog client with a separate WebSocket inference fixture.
+    let catalog_home = TempDir::new()?;
+    let mut catalog_config = load_default_config_for_test(&catalog_home).await;
+    catalog_config.model_provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", models_server.uri())));
+    catalog_config.model_provider.request_max_retries = Some(0);
+    catalog_config.model_catalog = None;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let manager = build_startup_models(
+        &catalog_config,
+        AuthManager::from_auth_for_testing(auth.clone()),
+        "handshake-etag-test".to_string(),
+        Arc::new(ModelCatalogSettings::default()),
+    )
+    .models_manager();
+
+    let websocket_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![ev_response_created("warmup"), ev_completed("warmup")],
+            vec![
+                ev_response_created("turn-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("turn-1"),
+            ],
+            vec![
+                ev_response_created("turn-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("turn-2"),
+            ],
+        ],
+        response_headers: vec![("x-models-etag".into(), "updated-etag".into())],
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+    let websocket_base_url = format!("{}/v1", websocket_server.uri());
+    let test = test_codex()
+        .with_auth(auth)
+        .with_model("gpt-5.2")
+        .with_models_manager(Arc::clone(&manager))
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(websocket_base_url);
+            config.model_provider.supports_websockets = true;
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build_with_auto_env(&models_server)
+        .await?;
+    let warmup = tokio::time::timeout(
+        Duration::from_secs(10),
+        websocket_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+    assert_eq!(warmup.body_json()["generate"], false);
+    assert_eq!(initial_fetch.requests().len(), 1);
+    assert_eq!(
+        manager
+            .get_remote_models()
+            .await
+            .into_iter()
+            .filter(|model| model.slug == "gpt-5.2")
+            .collect::<Vec<_>>(),
+        original_catalog.models,
+    );
+
+    model.description = Some("updated catalog".to_string());
+    let updated_catalog = ModelsResponse {
+        models: vec![model],
+    };
+    let refresh_fetch = responses::mount_models_once_with_etag(
+        &models_server,
+        updated_catalog.clone(),
+        "updated-etag",
+    )
+    .await;
+    for _ in 0..2 {
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(
+            manager
+                .get_remote_models()
+                .await
+                .into_iter()
+                .filter(|model| model.slug == "gpt-5.2")
+                .collect::<Vec<_>>(),
+            updated_catalog.models,
+        );
+        assert_eq!(refresh_fetch.requests().len(), 1);
+    }
+    assert_eq!(websocket_server.handshakes().len(), 1);
+    let requests = websocket_server.single_connection();
+    assert_eq!(requests.len(), 3);
+    websocket_server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch() -> Result<()> {
