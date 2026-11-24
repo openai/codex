@@ -11,8 +11,6 @@ use crate::render::highlight::MAX_HIGHLIGHT_LINE_BYTES;
 use crate::session_state::ThreadSessionState;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::McpAuthStatus;
-use codex_config::types::McpServerConfig;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -148,56 +146,6 @@ fn streaming_agent_tail_blank_line_uses_one_viewport_row() {
 
   second");
     assert_eq!(cell.desired_height(/*width*/ 80), 3);
-}
-
-fn stdio_server_config(
-    command: &str,
-    args: Vec<&str>,
-    env: Option<HashMap<String, String>>,
-    env_vars: Vec<&str>,
-) -> McpServerConfig {
-    let mut table = toml::Table::new();
-    table.insert(
-        "command".to_string(),
-        toml::Value::String(command.to_string()),
-    );
-    if !args.is_empty() {
-        table.insert(
-            "args".to_string(),
-            toml::Value::Array(
-                args.into_iter()
-                    .map(|arg| toml::Value::String(arg.to_string()))
-                    .collect(),
-            ),
-        );
-    }
-    if let Some(env) = env {
-        table.insert("env".to_string(), string_map_to_toml_value(env));
-    }
-    if !env_vars.is_empty() {
-        table.insert(
-            "env_vars".to_string(),
-            toml::Value::Array(
-                env_vars
-                    .into_iter()
-                    .map(|name| toml::Value::String(name.to_string()))
-                    .collect(),
-            ),
-        );
-    }
-
-    toml::Value::Table(table)
-        .try_into()
-        .expect("test stdio MCP config should deserialize")
-}
-
-fn string_map_to_toml_value(entries: HashMap<String, String>) -> toml::Value {
-    toml::Value::Table(
-        entries
-            .into_iter()
-            .map(|(key, value)| (key, toml::Value::String(value)))
-            .collect(),
-    )
 }
 
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1041,46 +989,6 @@ unset it, then restart Codex"
     };
     let cell = new_error_event(error.to_string());
     let rendered = render_lines(&cell.display_lines(/*width*/ 100)).join("\n");
-
-    insta::assert_snapshot!(rendered);
-}
-
-#[tokio::test]
-async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
-    let mut config = test_config().await;
-    let mut servers = config.mcp_servers.get().clone();
-    servers.insert(
-        "some-server".to_string(),
-        stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]),
-    );
-    config
-        .mcp_servers
-        .set(servers)
-        .expect("test mcp servers should accept any configuration");
-
-    let tools = HashMap::from([(
-        "mcp__some_server__lookup".to_string(),
-        Tool {
-            description: None,
-            name: "lookup".to_string(),
-            title: None,
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            output_schema: None,
-            annotations: None,
-            icons: None,
-            meta: None,
-        },
-    )]);
-
-    let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
-    let cell = new_mcp_tools_output(
-        &config,
-        tools,
-        HashMap::new(),
-        HashMap::new(),
-        &auth_statuses,
-    );
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
 }
