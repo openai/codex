@@ -234,7 +234,13 @@ async fn guardian_saves_each_completed_review_before_releasing_its_action() -> a
                 .history
                 .items
                 .iter()
-                .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(_))))
+                .filter(|item| matches!(
+                    item,
+                    RolloutItem::EventMsg {
+                        event: EventMsg::TurnComplete(_),
+                        ..
+                    }
+                ))
                 .count(),
             review,
             "the first save after inference must include turn completion"

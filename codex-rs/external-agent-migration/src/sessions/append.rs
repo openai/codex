@@ -228,20 +228,28 @@ fn source_model_items(items: &[RolloutItem]) -> Option<Vec<SourceModelItem<'_>>>
                     append_start_index: append_start_index.take().unwrap_or(index),
                 });
             }
-            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(_),
+                ..
+            } => {
                 append_start_index = Some(index);
             }
-            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(_),
+                ..
+            } => {
                 append_start_index.get_or_insert(index);
             }
-            RolloutItem::EventMsg(EventMsg::AgentMessage(event))
-                if event.message != EXTERNAL_SESSION_IMPORTED_MARKER =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::AgentMessage(event),
+                ..
+            } if event.message != EXTERNAL_SESSION_IMPORTED_MARKER => {
                 append_start_index = Some(index);
             }
-            RolloutItem::EventMsg(
-                EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),
-            )
+            RolloutItem::EventMsg {
+                event: EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),
+                ..
+            }
             | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)
@@ -249,7 +257,7 @@ fn source_model_items(items: &[RolloutItem]) -> Option<Vec<SourceModelItem<'_>>>
             | RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::WorldState(_) => return None,
-            RolloutItem::EventMsg(_) => {}
+            RolloutItem::EventMsg { .. } => {}
         }
     }
     Some(model_items)
@@ -267,14 +275,15 @@ fn history_model_items(items: &[RolloutItem]) -> Option<Vec<&ResponseItem>> {
             | RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SecurityRiskScore(_) => {}
             RolloutItem::ResponseItem(response_item) => model_items.push(&response_item.item),
-            RolloutItem::EventMsg(
-                EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),
-            )
+            RolloutItem::EventMsg {
+                event: EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),
+                ..
+            }
             | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::WorldState(_) => return None,
-            RolloutItem::EventMsg(_) => {}
+            RolloutItem::EventMsg { .. } => {}
         }
     }
     Some(model_items)
@@ -283,7 +292,7 @@ fn history_model_items(items: &[RolloutItem]) -> Option<Vec<&ResponseItem>> {
 fn is_import_marker(item: &RolloutItem) -> bool {
     matches!(
         item,
-        RolloutItem::EventMsg(EventMsg::AgentMessage(event))
+        RolloutItem::EventMsg { event: EventMsg::AgentMessage(event), .. }
             if event.message == EXTERNAL_SESSION_IMPORTED_MARKER
     )
 }

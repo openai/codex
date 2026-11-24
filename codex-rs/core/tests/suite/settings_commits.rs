@@ -48,9 +48,10 @@ fn assert_checkpoints(test: &TestCodex, expected: &[ThreadSettingsSnapshot]) -> 
     let snapshots: Vec<_> = rollout
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied))
-                if applied.thread_id == Some(test.session_configured.thread_id) =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(applied),
+                ..
+            } if applied.thread_id == Some(test.session_configured.thread_id) => {
                 Some(applied.thread_settings)
             }
             _ => None,
@@ -302,7 +303,10 @@ async fn settings_notifications_keep_their_commit_across_postcommit_work(
         RolloutItem::TurnContext(context) => {
             Some((context.model.as_str(), context.approval_policy))
         }
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied)) => Some((
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(applied),
+            ..
+        } => Some((
             applied.thread_settings.model.as_str(),
             applied.thread_settings.approval_policy,
         )),
@@ -385,9 +389,10 @@ async fn compaction_checkpoints_settings_changed_during_its_model_request() -> R
         .iter()
         .skip_while(|line| !matches!(line.item, RolloutItem::Compacted(_)))
         .find_map(|line| match &line.item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied)) => {
-                Some((applied.thread_id, &applied.thread_settings))
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(applied),
+                ..
+            } => Some((applied.thread_id, &applied.thread_settings)),
             _ => None,
         });
     assert_eq!(

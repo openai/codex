@@ -567,7 +567,6 @@ async fn on_event_updates_status_from_task_complete() {
                 misalignment: None,
                 message: "denied".to_string(),
                 codex_error_info: None,
-                rejected_audio_file_ids: Vec::new(),
             }),
             AgentStatus::Errored("denied".to_string()),
         ),
@@ -592,7 +591,6 @@ async fn on_event_updates_status_from_error() {
         misalignment: None,
         message: "boom".to_string(),
         codex_error_info: None,
-        rejected_audio_file_ids: Vec::new(),
     }));
 
     let expected = AgentStatus::Errored("boom".to_string());
@@ -2563,9 +2561,10 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
         !copied_prefix.iter().any(|line| {
             matches!(
                 &line.item,
-                RolloutItem::EventMsg(
-                    EventMsg::ItemCompleted(_) | EventMsg::ThreadSettingsApplied(_)
-                )
+                RolloutItem::EventMsg {
+                    event: EventMsg::ItemCompleted(_) | EventMsg::ThreadSettingsApplied(_),
+                    ..
+                }
             )
         }),
         "copied non-structural presentation and metadata records should not enter the child rollout"

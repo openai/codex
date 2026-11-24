@@ -47,7 +47,10 @@ fn parses_legacy_numeric_event_payloads_through_value() {
         .expect("keep legacy token count");
     assert!(matches!(
         parsed.item,
-        RolloutItem::EventMsg(EventMsg::TokenCount(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::TokenCount(_),
+            ..
+        }
     ));
 }
 
@@ -76,7 +79,10 @@ fn normalizes_legacy_rate_limit_reset_timestamps() {
         .expect("keep legacy token count");
     assert!(matches!(
         parsed.item,
-        RolloutItem::EventMsg(EventMsg::TokenCount(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::TokenCount(_),
+            ..
+        }
     ));
 }
 
@@ -155,7 +161,10 @@ fn normalizes_legacy_review_entry_prompt() {
         .expect("keep legacy review entry");
     assert!(matches!(
         parsed.item,
-        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::EnteredReviewMode(_),
+            ..
+        }
     ));
 }
 
@@ -187,7 +196,10 @@ fn normalizes_legacy_plain_command_cwd() {
         .expect("keep legacy command");
     assert!(matches!(
         parsed.item,
-        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::ExecCommandEnd(_),
+            ..
+        }
     ));
 }
 

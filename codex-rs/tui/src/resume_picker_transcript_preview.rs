@@ -171,8 +171,14 @@ fn scan_legacy_transcript_preview(
             continue;
         };
         match line.item {
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => return Ok(None),
-            RolloutItem::EventMsg(EventMsg::UserMessage(message)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadRolledBack(_),
+                ..
+            } => return Ok(None),
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(message),
+                ..
+            } => {
                 append_transcript_preview_text(
                     &mut lines,
                     TranscriptPreviewSpeaker::User,
@@ -181,7 +187,10 @@ fn scan_legacy_transcript_preview(
                     inline_visualization_context,
                 );
             }
-            RolloutItem::EventMsg(EventMsg::AgentMessage(message)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::AgentMessage(message),
+                ..
+            } => {
                 append_transcript_preview_text(
                     &mut lines,
                     TranscriptPreviewSpeaker::Assistant,

@@ -1023,7 +1023,6 @@ pub(crate) async fn run_turn(
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
                     codex_error_info: Some(error),
-                    rejected_audio_file_ids: Vec::new(),
                 });
                 sess.send_event(&turn_context, event).await;
                 break;
@@ -1052,16 +1051,11 @@ pub(crate) async fn run_turn(
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let mut error_event = e.to_error_event(/*message_prefix*/ None);
-                if let Some(rejected) = turn_context
-                    .extension_data
-                    .remove::<rejected_audio::RejectedAudioFileIds>()
-                {
-                    error_event
-                        .rejected_audio_file_ids
-                        .extend(Arc::unwrap_or_clone(rejected).0);
-                }
                 if matches!(e.details(), CodexErrorDetails::InvalidAudioInput { .. })
-                    || !error_event.rejected_audio_file_ids.is_empty()
+                    || turn_context
+                        .extension_data
+                        .get::<rejected_audio::RejectedAudioFileIds>()
+                        .is_some()
                 {
                     error_event.message.push_str(
                         " Please remove or replace the affected audio attachment and try again.",

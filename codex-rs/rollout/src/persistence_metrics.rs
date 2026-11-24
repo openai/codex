@@ -168,8 +168,8 @@ fn update_turn_measurements(
 ) -> TurnMeasurementUpdate {
     let mut update = TurnMeasurementUpdate::default();
     for (item, item_measurement) in items.iter().zip(&measurement.items) {
-        match item {
-            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => {
+        match item.event_msg() {
+            Some(EventMsg::TurnStarted(_)) => {
                 if state.active.take().is_some() {
                     update.boundary_errors.push("event.turn_started");
                 }
@@ -177,7 +177,7 @@ fn update_turn_measurements(
                 add_item_to_turn(&mut totals, item_measurement);
                 state.active = Some(totals);
             }
-            RolloutItem::EventMsg(EventMsg::TurnComplete(_)) => {
+            Some(EventMsg::TurnComplete(_)) => {
                 finish_turn(
                     state,
                     item_measurement,
@@ -186,7 +186,7 @@ fn update_turn_measurements(
                     &mut update,
                 );
             }
-            RolloutItem::EventMsg(EventMsg::TurnAborted(_)) => {
+            Some(EventMsg::TurnAborted(_)) => {
                 finish_turn(
                     state,
                     item_measurement,
@@ -289,10 +289,15 @@ fn rollout_item_type(item: &RolloutItem) -> String {
                 "realtime.session_input_saved".to_string()
             }
         },
-        RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+        RolloutItem::EventMsg {
+            event: EventMsg::ItemCompleted(event),
+            ..
+        } => {
             format!("event.item_completed.{}", turn_item_type(&event.item))
         }
-        RolloutItem::EventMsg(event) => format!("event.{event}"),
+        RolloutItem::EventMsg { event, .. } => {
+            format!("event.{event}")
+        }
     }
 }
 

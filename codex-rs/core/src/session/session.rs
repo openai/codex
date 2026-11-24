@@ -1789,7 +1789,9 @@ impl Session {
                             mcp_runtime.restore_resource_origin_checkpoint(checkpoint);
                         }
                     }
-                    RolloutItem::EventMsg(event) => mcp_runtime.observe_event(event),
+                    RolloutItem::EventMsg { event, .. } => {
+                        mcp_runtime.observe_event(event);
+                    }
                     RolloutItem::DynamicToolsUpdated { .. }
                     | RolloutItem::SessionMeta(_)
                     | RolloutItem::ResponseItem(_)

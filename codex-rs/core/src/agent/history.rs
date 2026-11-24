@@ -57,12 +57,13 @@ fn sanitize_forked_rollout_item(
         || history_mode == ThreadHistoryMode::Paginated
             && matches!(
                 item,
-                RolloutItem::EventMsg(
-                    EventMsg::ItemCompleted(_)
+                RolloutItem::EventMsg {
+                    event: EventMsg::ItemCompleted(_)
                         | EventMsg::TokenCount(_)
                         | EventMsg::ThreadGoalUpdated(_)
-                        | EventMsg::ThreadSettingsApplied(_)
-                )
+                        | EventMsg::ThreadSettingsApplied(_),
+                    ..
+                }
             )
     {
         return false;
@@ -164,9 +165,10 @@ pub(crate) fn sanitize_referenced_agent_fork(
     let boundary = history
         .iter()
         .position(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                event.thread_id == Some(thread_id)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => event.thread_id == Some(thread_id),
             // A bounded context scan can begin at a child-owned compaction, omitting
             // the original startup event. Its catalog snapshot identifies its owner.
             RolloutItem::Compacted(checkpoint) => checkpoint
@@ -283,7 +285,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         RolloutItem::TokenUsageRecord(_) => false,
         RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::Compacted(_)
-        | RolloutItem::EventMsg(_)
+        | RolloutItem::EventMsg { .. }
         | RolloutItem::SessionMeta(_) => true,
     }
 }

@@ -4276,7 +4276,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     assert!(rollout_items.iter().any(|item| {
         matches!(
             item,
-            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+            RolloutItem::EventMsg { event: EventMsg::TurnAborted(TurnAbortedEvent {
                 root_turn_id: None,
                 turn_id: Some(turn_id),
                 started_at: None,
@@ -4284,7 +4284,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
                 error: None,
             completed_at: None,
             duration_ms: None,
-            })) if turn_id == "turn-explicit"
+            }), .. } if turn_id == "turn-explicit"
         )
     }));
 }
@@ -4419,10 +4419,13 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             .filter(|item| {
                 matches!(
                     item,
-                    RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
-                        reason: TurnAbortReason::Interrupted,
+                    RolloutItem::EventMsg {
+                        event: EventMsg::TurnAborted(TurnAbortedEvent {
+                            reason: TurnAbortReason::Interrupted,
+                            ..
+                        }),
                         ..
-                    }))
+                    }
                 )
             })
             .count(),

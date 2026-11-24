@@ -98,7 +98,7 @@ async fn compaction_preserves_updated_summary(mode: CompactionMode) -> Result<()
         .iter()
         .skip_while(|line| !matches!(line.item, RolloutItem::Compacted(_)))
         .skip(/*n*/ 1)
-        .take_while(|line| !matches!(line.item, RolloutItem::EventMsg(_)))
+        .take_while(|line| !matches!(line.item, RolloutItem::EventMsg { .. }))
         .find_map(|line| match &line.item {
             RolloutItem::TurnContext(context) => Some(context.summary),
             _ => None,

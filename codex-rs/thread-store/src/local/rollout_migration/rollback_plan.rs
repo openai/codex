@@ -81,7 +81,10 @@ impl RollbackPlan {
             .ok_or_else(|| migration_error("rollback plan is shorter than source replay"))?;
         if matches!(
             &line.item,
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadRolledBack(_),
+                ..
+            }
         ) {
             return Ok(None);
         }
@@ -142,11 +145,13 @@ impl RollbackPlanner {
         self.record_boundaries
             .push(self.boundary_stack.last().copied());
         let paired_user_boundary = match (&self.pending_user_response, &line.item) {
-            (Some(pending), RolloutItem::EventMsg(EventMsg::UserMessage(event)))
-                if user_response_matches_event(&pending.content, event) =>
-            {
-                Some(pending.boundary)
-            }
+            (
+                Some(pending),
+                RolloutItem::EventMsg {
+                    event: EventMsg::UserMessage(event),
+                    ..
+                },
+            ) if user_response_matches_event(&pending.content, event) => Some(pending.boundary),
             _ => None,
         };
         let paired_delivery_boundary = match (&self.pending_delivery_boundary, &line.item) {
@@ -164,9 +169,10 @@ impl RollbackPlanner {
             RolloutItem::DynamicToolsUpdated { .. } | RolloutItem::SessionMeta(_) => {
                 self.record_boundaries[index] = None
             }
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                if event.thread_id.is_some() =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } if event.thread_id.is_some() => {
                 self.record_boundaries[index] = None;
             }
             RolloutItem::ResponseItem(response) => {
@@ -221,22 +227,34 @@ impl RollbackPlanner {
                     );
                 }
             }
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadRolledBack(rollback),
+                ..
+            } => {
                 self.apply_rollback(rollback.num_turns)?;
             }
-            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(event),
+                ..
+            } => {
                 self.active_turn_id = Some(event.turn_id.clone());
                 self.pending_turn_records.clear();
                 self.pending_turn_records.push(index);
             }
-            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnComplete(event),
+                ..
+            } => {
                 self.assign_targeted_record(index, Some(event.turn_id.as_str()));
                 if self.active_turn_id.as_deref() == Some(event.turn_id.as_str()) {
                     self.active_turn_id = None;
                     self.pending_turn_records.clear();
                 }
             }
-            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnAborted(event),
+                ..
+            } => {
                 self.assign_targeted_record(index, event.turn_id.as_deref());
                 if event
                     .turn_id
@@ -247,14 +265,20 @@ impl RollbackPlanner {
                     self.pending_turn_records.clear();
                 }
             }
-            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(_),
+                ..
+            } => {
                 let boundary = paired_user_boundary.unwrap_or_else(|| self.start_boundary(index));
                 self.record_boundaries[index] = Some(boundary);
             }
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } => {
                 self.assign_targeted_record(index, Some(event.turn_id.as_str()));
             }
-            RolloutItem::EventMsg(event) => {
+            RolloutItem::EventMsg { event, .. } => {
                 self.assign_targeted_record(index, explicit_event_turn_id(event));
             }
             RolloutItem::InterAgentCommunication(_) => {

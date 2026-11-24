@@ -461,7 +461,11 @@ async fn load_rollout_items_preserves_legacy_guardian_assessment_lines() -> std:
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 2);
-    let RolloutItem::EventMsg(EventMsg::GuardianAssessment(assessment)) = &items[1] else {
+    let RolloutItem::EventMsg {
+        event: EventMsg::GuardianAssessment(assessment),
+        ..
+    } = &items[1]
+    else {
         panic!("expected guardian assessment rollout item");
     };
     assert_eq!(assessment.id, "guardian-1");

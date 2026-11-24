@@ -1001,7 +1001,10 @@ impl LocalThreadStore {
             if plan.is_none()
                 && matches!(
                     &line.item,
-                    RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::ThreadRolledBack(_))
+                    RolloutItem::EventMsg {
+                        event: codex_protocol::protocol::EventMsg::ThreadRolledBack(_),
+                        ..
+                    }
                 )
             {
                 return Ok(CanonicalizationAttempt::NeedsRollbackPlan);

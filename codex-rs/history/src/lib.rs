@@ -439,12 +439,36 @@ pub enum RolloutItem {
     WorldState(WorldStateItem),
     SecurityRiskScore(SecurityRiskScore),
     RetainedContext(RetainedContextEvent),
-    EventMsg(EventMsg),
+    /// A protocol event and optional metadata owned by rollout storage.
+    EventMsg {
+        event: EventMsg,
+        metadata: Option<RolloutEventMetadata>,
+    },
     /// Sparse, model-invisible facts used to reconstruct realtime presentation.
     RealtimeItem(RealtimeItem),
 }
 
 impl RolloutItem {
+    /// Constructs a rollout event without host metadata.
+    #[allow(
+        non_snake_case,
+        reason = "preserve the existing event constructor syntax"
+    )]
+    pub fn EventMsg(event: EventMsg) -> Self {
+        Self::EventMsg {
+            event,
+            metadata: None,
+        }
+    }
+
+    /// Returns the protocol event carried by this rollout item.
+    pub fn event_msg(&self) -> Option<&EventMsg> {
+        match self {
+            Self::EventMsg { event, .. } => Some(event),
+            _ => None,
+        }
+    }
+
     /// Returns the handoff ID only when the rollout item is a valid acceptance receipt.
     pub fn realtime_handoff_id(&self) -> Option<&str> {
         match self {
@@ -492,6 +516,13 @@ impl RolloutItem {
             _ => None,
         }
     }
+}
+
+/// Host-only data saved with a rollout event to support recovery.
+#[derive(Debug, Clone)]
+pub struct RolloutEventMetadata {
+    /// Exact audio file identities rejected by the provider for the failed turn.
+    pub rejected_audio_file_ids: Vec<String>,
 }
 
 impl Serialize for RolloutItem {
@@ -787,11 +818,10 @@ impl InitialHistory {
             return None;
         };
         resumed.history.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                if event.thread_id == Some(resumed.conversation_id) =>
-            {
-                Some(&event.thread_settings)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } if event.thread_id == Some(resumed.conversation_id) => Some(&event.thread_settings),
             _ => None,
         })
     }
@@ -847,7 +877,10 @@ pub fn latest_dynamic_tools(items: &[RolloutItem]) -> Option<&[DynamicToolSpec]>
 /// selection; a missing field must not resurrect a selection from an older turn.
 pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) -> Option<&[String]> {
     if let Some(ids) = items.iter().rev().find_map(|item| {
-        if let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = item
+        if let RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } = item
             && event.thread_id == Some(thread_id)
         {
             Some(event.thread_settings.disabled_plugin_ids.as_slice())

@@ -383,9 +383,10 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .find_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
-                if matches!(&event.item, TurnItem::WebSearch(item) if item.id == begin.call_id) =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } if matches!(&event.item, TurnItem::WebSearch(item) if item.id == begin.call_id) => {
                 Some(event)
             }
             _ => None,
@@ -687,11 +688,10 @@ async fn plan_mode_keeps_only_unfinished_ids_across_model_requests(
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
-                if matches!(event.item, TurnItem::Plan(_)) =>
-            {
-                Some(event)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } if matches!(event.item, TurnItem::Plan(_)) => Some(event),
             _ => None,
         })
         .collect::<Vec<_>>();

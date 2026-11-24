@@ -53,20 +53,27 @@ impl ModelReplayPlanner {
                 record_index,
                 has_replacement_history: compacted.replacement_history.is_some(),
             },
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                ReplayRecord::Rollback(rollback.num_turns)
-            }
-            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                ReplayRecord::TurnStarted(event.turn_id.clone())
-            }
-            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                ReplayRecord::TurnComplete(event.turn_id.clone())
-            }
-            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                ReplayRecord::TurnAborted(event.turn_id.clone())
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadRolledBack(rollback),
+                ..
+            } => ReplayRecord::Rollback(rollback.num_turns),
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(event),
+                ..
+            } => ReplayRecord::TurnStarted(event.turn_id.clone()),
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnComplete(event),
+                ..
+            } => ReplayRecord::TurnComplete(event.turn_id.clone()),
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnAborted(event),
+                ..
+            } => ReplayRecord::TurnAborted(event.turn_id.clone()),
             RolloutItem::TurnContext(context) => ReplayRecord::TurnContext(context.turn_id.clone()),
-            RolloutItem::EventMsg(EventMsg::UserMessage(_))
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(_),
+                ..
+            }
             | RolloutItem::InterAgentCommunication(_) => ReplayRecord::UserBoundary,
             RolloutItem::ResponseItem(response) if rollback::counts_as_boundary(response) => {
                 ReplayRecord::UserBoundary
@@ -74,7 +81,7 @@ impl ModelReplayPlanner {
             RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
-            | RolloutItem::EventMsg(_)
+            | RolloutItem::EventMsg { .. }
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::TokenUsageRecord(_)

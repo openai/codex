@@ -644,9 +644,9 @@ async fn hangup_timeout_aborts_a_turn_with_an_allowing_steer_hook() -> Result<()
         })
         .await?;
     assert_eq!(history.items.iter().filter(|item| matches!(item,
-        RolloutItem::EventMsg(EventMsg::TurnAborted(aborted)) if aborted.turn_id.as_deref() == Some(turn_id.as_str())
+        RolloutItem::EventMsg { event: EventMsg::TurnAborted(aborted), .. } if aborted.turn_id.as_deref() == Some(turn_id.as_str())
     ) || matches!(item,
-        RolloutItem::EventMsg(EventMsg::TurnComplete(completed)) if completed.turn_id == turn_id
+        RolloutItem::EventMsg { event: EventMsg::TurnComplete(completed), .. } if completed.turn_id == turn_id
     )).count(), 1);
     let session = store
         .load_realtime_session(test.session_configured.thread_id, "hook-timeout".to_owned())

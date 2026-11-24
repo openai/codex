@@ -245,11 +245,12 @@ impl ContextManager {
                             .extend(metadata.rejected_audio_file_ids.iter().cloned());
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::TurnComplete(completed)) => {
-                    if let Some(error) = &completed.error {
-                        rejected_audio_file_ids
-                            .extend(error.rejected_audio_file_ids.iter().cloned());
-                    }
+                RolloutItem::EventMsg {
+                    metadata: Some(metadata),
+                    ..
+                } => {
+                    rejected_audio_file_ids
+                        .extend(metadata.rejected_audio_file_ids.iter().cloned());
                 }
                 _ => {}
             }
@@ -284,7 +285,10 @@ impl ContextManager {
             .iter()
             .rev()
             .filter_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.as_str()),
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(event),
+                    ..
+                } => Some(event.turn_id.as_str()),
                 RolloutItem::DynamicToolsUpdated { .. }
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::ResponseItem(_)
@@ -297,14 +301,17 @@ impl ContextManager {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::Compacted(_)
-                | RolloutItem::EventMsg(_) => None,
+                | RolloutItem::EventMsg { .. } => None,
             })
             .peekable();
         let last_started_turn_id = replay_items
             .iter()
             .rev()
             .find_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(event),
+                    ..
+                } => Some(event.turn_id.clone()),
                 _ => None,
             })
             .or_else(|| resume_metadata.and_then(|metadata| metadata.last_started_turn_id.clone()));
@@ -362,11 +369,17 @@ impl ContextManager {
                         });
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ThreadRolledBack(rollback),
+                    ..
+                } => {
                     pending_rollback_turns = pending_rollback_turns
                         .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
                 }
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnComplete(event),
+                    ..
+                } => {
                     // Stop hooks can finish after a newer turn has started.
                     if !turn_ids_are_compatible(preceding_turn_id, Some(event.turn_id.as_str())) {
                         late_completed_turn_ids.insert(event.turn_id.as_str());
@@ -381,7 +394,10 @@ impl ContextManager {
                         active_segment.turn_id = Some(event.turn_id.clone());
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnAborted(event),
+                    ..
+                } => {
                     if !turn_ids_are_compatible(preceding_turn_id, event.turn_id.as_deref()) {
                         continue;
                     }
@@ -398,7 +414,10 @@ impl ContextManager {
                         });
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::UserMessage(_),
+                    ..
+                } => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn = true;
@@ -435,7 +454,10 @@ impl ContextManager {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.world_state_replay.push(item);
                 }
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(event),
+                    ..
+                } => {
                     started_turn_ids.next();
                     // Startup can be suspended before any input or context is written.
                     // Explicit start attribution is authoritative, including unknown fields.
@@ -486,7 +508,7 @@ impl ContextManager {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn = true;
                 }
-                RolloutItem::EventMsg(_)
+                RolloutItem::EventMsg { .. }
                 | RolloutItem::DynamicToolsUpdated { .. }
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::RealtimeItem(_)
@@ -617,10 +639,13 @@ impl ContextManager {
                         history.restore_retained_context(Some(&retained_context));
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ThreadRolledBack(rollback),
+                    ..
+                } => {
                     history.drop_last_n_user_turns(rollback.num_turns);
                 }
-                RolloutItem::EventMsg(_)
+                RolloutItem::EventMsg { .. }
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::SecurityRiskScore(_)
@@ -669,7 +694,7 @@ impl ContextManager {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
-                | RolloutItem::EventMsg(_) => {
+                | RolloutItem::EventMsg { .. } => {
                     unreachable!("only world-state replay items are collected")
                 }
             }

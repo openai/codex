@@ -339,11 +339,10 @@ async fn terminated_cell_persists_failure_and_excludes_late_reply_from_context()
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
-                if event.item.id() == original =>
-            {
-                Some(event)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } if event.item.id() == original => Some(event),
             _ => None,
         })
         .collect();

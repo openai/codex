@@ -300,7 +300,6 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
                 misalignment: None,
                 message,
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
-                rejected_audio_file_ids: Vec::new(),
             })
         };
         if let Err(error) = sess.tx_event.try_send(Event { id: sub_id, msg }) {
@@ -353,7 +352,6 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
                 misalignment: None,
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
-                rejected_audio_file_ids: Vec::new(),
             }),
         };
         sess.send_event_raw(event).await;
@@ -513,7 +511,6 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
                 misalignment: None,
                 message: "Failed to shutdown thread persistence".to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
-                rejected_audio_file_ids: Vec::new(),
             }),
         };
         sess.send_event_raw(event).await;
@@ -563,7 +560,6 @@ pub async fn review(
                     misalignment: None,
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
-                    rejected_audio_file_ids: Vec::new(),
                 }),
             };
             sess.send_event(&turn_context, event.msg).await;
@@ -729,7 +725,6 @@ pub(super) async fn submission_loop(
                                 misalignment: None,
                                 message: err.to_string(),
                                 codex_error_info: Some(CodexErrorInfo::Other),
-                                rejected_audio_file_ids: Vec::new(),
                             }),
                         })
                         .await;
@@ -870,7 +865,6 @@ pub(super) async fn submission_loop(
                                         misalignment: None,
                                         message,
                                         codex_error_info: Some(CodexErrorInfo::BadRequest),
-                                        rejected_audio_file_ids: Vec::new(),
                                     }),
                                 })
                                 .await;

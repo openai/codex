@@ -3760,7 +3760,6 @@ async fn send_conversation_error(
             misalignment: None,
             message,
             codex_error_info: Some(codex_error_info),
-            rejected_audio_file_ids: Vec::new(),
         }),
     })
     .await;

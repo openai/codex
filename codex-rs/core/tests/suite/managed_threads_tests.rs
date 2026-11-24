@@ -227,7 +227,10 @@ async fn owner_cancellation_closes_agent_and_preserves_history_and_parent() -> a
         .await?;
     assert!(history.items.iter().any(|item| matches!(
         item,
-        codex_history::RolloutItem::EventMsg(EventMsg::TurnComplete(_))
+        codex_history::RolloutItem::EventMsg {
+            event: EventMsg::TurnComplete(_),
+            ..
+        }
     )));
 
     let parent_response = responses::mount_sse_once(

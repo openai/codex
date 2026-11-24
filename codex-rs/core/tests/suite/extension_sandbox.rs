@@ -205,7 +205,10 @@ async fn generated_image_ui_item_is_file_backed_in_rollout() -> Result<()> {
         .collect::<Vec<_>>();
     let image =
         rollout.iter().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match &event.item {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } => match &event.item {
                 codex_protocol::items::TurnItem::Extension(ExtensionItem::ImageGeneration(
                     image,
                 )) if image.id == image_call_id => Some(image),

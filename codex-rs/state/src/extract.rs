@@ -33,7 +33,9 @@ pub fn apply_rollout_item(
     match item {
         RolloutItem::SessionMeta(meta_line) => apply_session_meta_from_item(metadata, meta_line),
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
-        RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
+        RolloutItem::EventMsg { event, .. } => {
+            apply_event_msg(metadata, event);
+        }
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, &item.item),
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
@@ -54,21 +56,25 @@ pub fn apply_rollout_item(
 pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
-        RolloutItem::EventMsg(
-            EventMsg::TokenCount(_)
-            | EventMsg::UserMessage(_)
-            | EventMsg::ThreadGoalUpdated(_)
-            | EventMsg::ThreadSettingsApplied(_),
-        ) => true,
-        RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
-            if matches!(
-                event.item,
-                TurnItem::UserMessage(_) | TurnItem::FunctionCallOutput(_)
-            ) =>
+        RolloutItem::EventMsg {
+            event:
+                EventMsg::TokenCount(_)
+                | EventMsg::UserMessage(_)
+                | EventMsg::ThreadGoalUpdated(_)
+                | EventMsg::ThreadSettingsApplied(_),
+            ..
+        } => true,
+        RolloutItem::EventMsg {
+            event: EventMsg::ItemCompleted(event),
+            ..
+        } if matches!(
+            event.item,
+            TurnItem::UserMessage(_) | TurnItem::FunctionCallOutput(_)
+        ) =>
         {
             true
         }
-        RolloutItem::EventMsg(_)
+        RolloutItem::EventMsg { .. }
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }

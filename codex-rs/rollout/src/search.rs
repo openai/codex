@@ -324,7 +324,10 @@ fn content_match_snippet(jsonl_line: &str, search_term: &Regex) -> Option<String
 
 fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
     match item {
-        RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
+        RolloutItem::EventMsg {
+            event: EventMsg::UserMessage(user),
+            ..
+        } => {
             let text = strip_user_message_prefix(user.message.as_str());
             if text.is_empty() {
                 None
@@ -332,7 +335,10 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
                 Some(text.to_string())
             }
         }
-        RolloutItem::EventMsg(EventMsg::AgentMessage(agent)) => {
+        RolloutItem::EventMsg {
+            event: EventMsg::AgentMessage(agent),
+            ..
+        } => {
             if agent.message.trim().is_empty() {
                 None
             } else {
@@ -357,7 +363,7 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
         RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::SessionMeta(_)
         | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_)
+        | RolloutItem::EventMsg { .. }
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }

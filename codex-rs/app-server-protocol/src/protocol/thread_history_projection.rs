@@ -20,7 +20,10 @@ use crate::protocol::v2::TurnStatus;
 /// can preserve the first and latest timestamps for repeated item snapshots independently.
 pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
     match &line.item {
-        RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => ThreadHistoryChangeSet {
+        RolloutItem::EventMsg {
+            event: EventMsg::TurnStarted(event),
+            ..
+        } => ThreadHistoryChangeSet {
             changed_turns: vec![ThreadHistoryTurnMetadata {
                 turn_id: event.turn_id.clone(),
                 root_turn_id: event.root_turn_id.clone(),
@@ -32,7 +35,10 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
             }],
             ..Default::default()
         },
-        RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => ThreadHistoryChangeSet {
+        RolloutItem::EventMsg {
+            event: EventMsg::TurnComplete(event),
+            ..
+        } => ThreadHistoryChangeSet {
             changed_turns: vec![ThreadHistoryTurnMetadata {
                 turn_id: event.turn_id.clone(),
                 root_turn_id: event.root_turn_id.clone(),
@@ -48,7 +54,10 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
             }],
             ..Default::default()
         },
-        RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+        RolloutItem::EventMsg {
+            event: EventMsg::TurnAborted(event),
+            ..
+        } => {
             let Some(turn_id) = event.turn_id.as_ref() else {
                 return ThreadHistoryChangeSet::default();
             };
@@ -65,7 +74,10 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
                 ..Default::default()
             }
         }
-        RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => ThreadHistoryChangeSet {
+        RolloutItem::EventMsg {
+            event: EventMsg::ItemCompleted(event),
+            ..
+        } => ThreadHistoryChangeSet {
             changed_items: vec![ThreadHistoryItemChange {
                 turn_id: event.turn_id.clone(),
                 item: ThreadItem::from(event),
@@ -84,7 +96,7 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
-        | RolloutItem::EventMsg(_) => ThreadHistoryChangeSet::default(),
+        | RolloutItem::EventMsg { .. } => ThreadHistoryChangeSet::default(),
     }
 }
 

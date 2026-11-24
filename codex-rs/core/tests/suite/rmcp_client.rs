@@ -2177,7 +2177,7 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
             .iter()
             .any(|item| matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied))
+                RolloutItem::EventMsg { event: EventMsg::ThreadSettingsApplied(applied), .. }
                     if applied.thread_id == Some(fixture.session_configured.thread_id)
             ))
     );

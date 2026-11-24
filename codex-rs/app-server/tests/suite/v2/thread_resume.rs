@@ -869,9 +869,10 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
         .into_iter()
         .rev()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                Some(event.thread_settings.runtime_workspace_roots)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => Some(event.thread_settings.runtime_workspace_roots),
             _ => None,
         })
         .take(/*n*/ 3)
@@ -1056,15 +1057,14 @@ sandbox = "unelevated"
         let expected_thread_id = ThreadId::from_string(&thread_id)?;
         let (items, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
         let persisted = items.into_iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                if event.thread_id == Some(expected_thread_id) =>
-            {
-                Some((
-                    event.thread_settings.cwd,
-                    event.thread_settings.runtime_workspace_roots,
-                    event.thread_settings.permission_profile,
-                ))
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } if event.thread_id == Some(expected_thread_id) => Some((
+                event.thread_settings.cwd,
+                event.thread_settings.runtime_workspace_roots,
+                event.thread_settings.permission_profile,
+            )),
             _ => None,
         });
         let (persisted_cwd, persisted_roots, permission_profile) =
@@ -1569,8 +1569,10 @@ async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Res
             items
                 .into_iter()
                 .filter_map(|item| match item {
-                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) =>
-                        event.thread_id,
+                    RolloutItem::EventMsg {
+                        event: EventMsg::ThreadSettingsApplied(event),
+                        ..
+                    } => event.thread_id,
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -1844,10 +1846,12 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
     );
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
     let mode = items.iter().rev().find_map(|item| match item {
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-            if event
-                .thread_id
-                .is_some_and(|id| id.to_string() == thread_id) =>
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } if event
+            .thread_id
+            .is_some_and(|id| id.to_string() == thread_id) =>
         {
             Some(event.thread_settings.collaboration_mode.clone())
         }
@@ -1902,7 +1906,10 @@ async fn thread_resume_restores_collaboration_mode_from_legacy_turn_context() ->
     let (items, _, _) = RolloutRecorder::load_rollout_items(&fixture.rollout_file_path).await?;
     assert!(!items.iter().any(|item| matches!(
         item,
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(_),
+            ..
+        }
     )));
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -5280,7 +5287,7 @@ async fn thread_resume_checkpoints_settings_without_advancing_recency() -> Resul
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout.rollout_file_path).await?;
     assert!(items.iter().any(|item| matches!(
         item,
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+        RolloutItem::EventMsg { event: EventMsg::ThreadSettingsApplied(event), .. }
             if event.thread_id == Some(expected_thread_id)
     )));
 
@@ -6443,9 +6450,10 @@ async fn thread_resume_with_overrides_preserves_recency_and_checkpoints_model() 
     let expected_thread_id = ThreadId::from_string(&resumed_thread.id)?;
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_file_path).await?;
     let persisted_model = items.iter().rev().find_map(|item| match item {
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-            if event.thread_id == Some(expected_thread_id) =>
-        {
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } if event.thread_id == Some(expected_thread_id) => {
             Some(event.thread_settings.model.as_str())
         }
         _ => None,
@@ -6494,7 +6502,10 @@ async fn thread_resume_does_not_checkpoint_unchanged_settings() -> Result<()> {
     let settings_before_resume = items
         .into_iter()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(event),
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => Some(event),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -6513,7 +6524,10 @@ async fn thread_resume_does_not_checkpoint_unchanged_settings() -> Result<()> {
     let settings_after_resume = items
         .into_iter()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(event),
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => Some(event),
             _ => None,
         })
         .collect::<Vec<_>>();

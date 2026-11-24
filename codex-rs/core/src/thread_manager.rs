@@ -3493,8 +3493,8 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     SnapshotTurnState {
         ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
             matches!(
-                item,
-                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                item.event_msg(),
+                Some(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
             )
         }),
         active_turn_id: None,

@@ -95,9 +95,15 @@ async fn attached_history_start(path: &Path, start: u64) -> std::io::Result<u64>
         };
         match line.item {
             RolloutItem::SessionMeta(_)
-            | RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(_))
+            | RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(_),
+                ..
+            }
             | RolloutItem::ResponseItem(_) => {}
-            RolloutItem::EventMsg(EventMsg::TurnAborted(_)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnAborted(_),
+                ..
+            } => {
                 return Ok(line.ordinal.map_or(start, |n| n.saturating_add(1)));
             }
             _ => break,

@@ -309,7 +309,7 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
         codex_rollout::parse_rollout_line(line)
             .expect("parse child rollout")
             .item,
-        RolloutItem::EventMsg(EventMsg::TurnAborted(_))
+        RolloutItem::EventMsg { event: EventMsg::TurnAborted(_), .. }
     )));
     let rollout_path = codex.rollout_path().expect("rollout path");
     let rollout = tokio::fs::read_to_string(&rollout_path)
@@ -325,7 +325,10 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
         .collect::<Vec<_>>();
     assert!(items.iter().all(|item| !matches!(
         item,
-        RolloutItem::EventMsg(EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
+        RolloutItem::EventMsg {
+            event: EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_),
+            ..
+        }
     )));
     test.thread_manager
         .remove_thread(&test.session_configured.thread_id)
@@ -583,7 +586,13 @@ async fn graceful_suspend_preserves_a_finishing_child_result(
         assert_eq!(
             history
                 .iter()
-                .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))))
+                .filter(|item| matches!(
+                    item,
+                    RolloutItem::EventMsg {
+                        event: EventMsg::TurnStarted(_),
+                        ..
+                    }
+                ))
                 .count(),
             1
         );

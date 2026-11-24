@@ -4895,9 +4895,10 @@ async fn auto_compact_persists_rollout_entries() {
                 turn_context_count += 1;
             }
             RolloutItem::Compacted(_) => saw_compaction = true,
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied))
-                if saw_compaction && checkpoint.is_none() =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(applied),
+                ..
+            } if saw_compaction && checkpoint.is_none() => {
                 checkpoint = Some((applied.thread_id, applied.thread_settings));
             }
             _ => {}

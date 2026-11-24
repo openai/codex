@@ -306,11 +306,10 @@ async fn thread_revert_preserves_fork_cutoff_after_cold_resume() -> Result<()> {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find_map(|line| match line.item {
-                RolloutItem::EventMsg(EventMsg::TurnStarted(turn))
-                    if turn.turn_id == parent_turns[1] =>
-                {
-                    line.ordinal
-                }
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(turn),
+                    ..
+                } if turn.turn_id == parent_turns[1] => line.ordinal,
                 _ => None,
             })
             .expect("inherited turn start ordinal");

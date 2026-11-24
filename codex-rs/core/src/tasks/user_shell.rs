@@ -359,7 +359,6 @@ async fn send_user_shell_error(session: &Session, turn_context: &TurnContext, me
                 misalignment: None,
                 message: message.to_string(),
                 codex_error_info: None,
-                rejected_audio_file_ids: Vec::new(),
             }),
         )
         .await;

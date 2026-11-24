@@ -44,7 +44,10 @@ pub(super) async fn side_context_checkpoint(path: Option<&Path>) -> io::Result<O
                     _ => {}
                 }
             }
-            RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::TurnStarted(_)) => break,
+            RolloutItem::EventMsg {
+                event: codex_protocol::protocol::EventMsg::TurnStarted(_),
+                ..
+            } => break,
             _ => {}
         }
     }

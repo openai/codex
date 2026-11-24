@@ -2212,7 +2212,7 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg { .. } => None,
         })
     {
         return cwd_matches(latest_turn_context_cwd.as_path(), cwd);

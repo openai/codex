@@ -513,8 +513,14 @@ impl ExternalAgentSessionImporter {
         let (created_at, updated_at) = rollout_items
             .iter()
             .filter_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => event.started_at,
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => event.completed_at,
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(event),
+                    ..
+                } => event.started_at,
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnComplete(event),
+                    ..
+                } => event.completed_at,
                 _ => None,
             })
             .fold(None, |chronology: Option<(i64, i64)>, timestamp| {

@@ -189,9 +189,15 @@ impl ThreadMetadataSync {
         let affects_metadata = items
             .iter()
             .any(codex_state::rollout_item_affects_thread_metadata);
-        let advances_recency = items
-            .iter()
-            .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))));
+        let advances_recency = items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(_),
+                    ..
+                }
+            )
+        });
         let mut update = if affects_metadata {
             self.observe_items(items)?
         } else {
@@ -299,10 +305,16 @@ impl ThreadMetadataSync {
                     update.approval_mode = Some(turn_ctx.approval_policy);
                     update.permission_profile = Some(turn_ctx.permission_profile.clone());
                 }
-                RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::UserMessage(user),
+                    ..
+                } => {
                     self.observe_user_message(user, &mut update);
                 }
-                RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ItemCompleted(event),
+                    ..
+                } => {
                     if let TurnItem::UserMessage(user) = &event.item
                         && (!self.first_user_message_seen || !self.preview_seen || !self.title_seen)
                     {
@@ -318,12 +330,18 @@ impl ThreadMetadataSync {
                         update.preview = Some(preview);
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::TokenCount(token_count)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::TokenCount(token_count),
+                    ..
+                } => {
                     if let Some(info) = token_count.info.as_ref() {
                         update.token_usage = Some(info.total_token_usage.clone());
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ThreadGoalUpdated(event),
+                    ..
+                } => {
                     if !self.preview_seen {
                         let objective = event.goal.objective.trim();
                         if !objective.is_empty() {
@@ -332,7 +350,10 @@ impl ThreadMetadataSync {
                         }
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ThreadSettingsApplied(event),
+                    ..
+                } => {
                     let settings = &event.thread_settings;
                     self.cwd_seen = true;
                     update.model = Some(settings.model.clone());
@@ -344,7 +365,7 @@ impl ThreadMetadataSync {
                 }
                 RolloutItem::DynamicToolsUpdated { .. }
                 | RolloutItem::SessionMeta(_)
-                | RolloutItem::EventMsg(_)
+                | RolloutItem::EventMsg { .. }
                 | RolloutItem::ResponseItem(_)
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
@@ -794,7 +815,11 @@ mod tests {
         assert_eq!(update.patch.approval_mode, Some(AskForApproval::Never));
         assert_eq!(update.patch.permission_profile, Some(permission_profile));
 
-        let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = &mut item else {
+        let RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } = &mut item
+        else {
             panic!("thread settings applied item");
         };
         event.thread_settings.reasoning_effort = None;

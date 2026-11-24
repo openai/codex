@@ -39,19 +39,22 @@ impl ThreadRequestProcessor {
         };
         // The snapshot has complete recorded input, but the old process may have
         // completed or replaced its turn during the shutdown grace period.
-        let Some(start) = history
-            .iter()
-            .rposition(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))))
-        else {
+        let Some(start) = history.iter().rposition(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnStarted(_),
+                    ..
+                }
+            )
+        }) else {
             return;
         };
-        if !matches!(&history[start], RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+        if !matches!(&history[start], RolloutItem::EventMsg { event: EventMsg::TurnStarted(event), .. }
             if event.turn_id == saved.turn_id)
-            || history[start..].iter().any(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    event.turn_id == saved.turn_id
-                }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => event
+            || history[start..].iter().any(|item| match item.event_msg() {
+                Some(EventMsg::TurnComplete(event)) => event.turn_id == saved.turn_id,
+                Some(EventMsg::TurnAborted(event)) => event
                     .turn_id
                     .as_ref()
                     .is_none_or(|turn_id| turn_id == &saved.turn_id),

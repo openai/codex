@@ -184,9 +184,10 @@ async fn interrupted_one_shot_launch_failure_completes_and_persists() -> Result<
     let persisted_completions = items
         .iter()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) if event.item.id() == CALL_ID => {
-                Some(event)
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } if event.item.id() == CALL_ID => Some(event),
             _ => None,
         })
         .collect::<Vec<_>>();

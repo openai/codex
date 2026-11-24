@@ -22,7 +22,11 @@ impl PersistedResumeSettings {
         // owner is known, including a legacy update following that owner's checkpoint.
         let mut latest_legacy = None;
         for item in history.iter().rev() {
-            let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = item else {
+            let RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } = item
+            else {
                 continue;
             };
             match event.thread_id {
@@ -68,7 +72,10 @@ fn latest_persisted_resume_settings(history: &[RolloutItem]) -> Option<Persisted
                 approvals_reviewer: turn_context.approvals_reviewer.or_else(|| {
                     history[..index].iter().rev().find_map(|item| match item {
                         RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
-                        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(
+                        RolloutItem::EventMsg {
+                            event: EventMsg::ThreadSettingsApplied(event),
+                            ..
+                        } => Some(
                             event
                                 .thread_settings
                                 .requested_approvals_reviewer
@@ -83,7 +90,10 @@ fn latest_persisted_resume_settings(history: &[RolloutItem]) -> Option<Persisted
                     turn_context.active_permission_profile.as_ref(),
                 ),
             }),
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => {
                 let settings = &event.thread_settings;
                 Some(PersistedResumeSettings {
                     approval_policy: settings.approval_policy,
@@ -125,7 +135,11 @@ pub(super) fn latest_persisted_model_settings(
     };
     let mut crossed_foreign_snapshot = false;
     for item in history.history.iter().rev() {
-        let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = item else {
+        let RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } = item
+        else {
             continue;
         };
         match event.thread_id {

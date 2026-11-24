@@ -681,10 +681,6 @@ async fn rejected_uploaded_audio_does_not_poison_follow_up_or_resume(
             .message
             .contains("remove or replace the affected audio attachment")
     );
-    assert_eq!(
-        error.rejected_audio_file_ids,
-        vec!["file_rejected".to_string()],
-    );
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -896,7 +892,6 @@ async fn ambiguous_multi_audio_rejection_preserves_all_audio_on_follow_up_and_re
             .message
             .contains("remove or replace the affected audio attachment")
     );
-    assert!(error.rejected_audio_file_ids.is_empty());
     test.submit_text_turn("Retry with the retained recordings.")
         .await?;
     let resumed = builder().restart_with_auto_env(&server, &test).await?;
@@ -978,10 +973,10 @@ async fn unknown_file_after_two_recordings_were_accepted(
             "Recall the recordings.",
         )]))
         .await?;
-    let error = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnComplete(done) => done.error.clone(),
-        _ => None,
-    })
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(done) if done.error.is_some()),
+    )
     .await;
     {
         let resolves = store
@@ -991,14 +986,6 @@ async fn unknown_file_after_two_recordings_were_accepted(
         assert_eq!(resolves.get("file_a"), Some(&2));
         assert_eq!(resolves.get("file_b"), Some(&2));
     }
-    assert_eq!(
-        error.rejected_audio_file_ids,
-        if confirmed {
-            vec!["file_b"]
-        } else {
-            Vec::new()
-        }
-    );
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
             "Continue in this chat.",
@@ -1103,12 +1090,11 @@ async fn persistently_invalid_recording_is_removed_on_follow_up_and_resume(
             recording("file_bad_b"),
         ]))
         .await?;
-    let error = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnComplete(done) => done.error.clone(),
-        _ => None,
-    })
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(done) if done.error.is_some()),
+    )
     .await;
-    assert_eq!(error.rejected_audio_file_ids, ["file_bad_b"]);
     test.submit_text_turn("Continue without the rejected upload.")
         .await?;
     let resumed = builder().restart_with_auto_env(&server, &test).await?;
@@ -1180,12 +1166,11 @@ async fn paginated_resume_filters_audio_rejected_before_and_after_compaction() -
                 recording(id),
             ]))
             .await?;
-        let error = wait_for_event_match(&test.codex, |event| match event {
-            EventMsg::TurnComplete(completed) => completed.error.clone(),
-            _ => None,
-        })
+        wait_for_event(
+            &test.codex,
+            |event| matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_some()),
+        )
         .await;
-        assert_eq!(error.rejected_audio_file_ids, [id]);
         if id == "file_A" {
             test.codex.submit(Op::Compact).await?;
             wait_for_event(&test.codex, |event| {
@@ -1311,18 +1296,11 @@ async fn instant_interrupt_preserves_delayed_http_audio_rejection() -> Result<()
         )
         .await?;
     release.send(())?;
-    let completed = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnComplete(completed) => Some(completed.clone()),
-        _ => None,
-    })
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_some()),
+    )
     .await;
-    assert_eq!(
-        completed
-            .error
-            .expect("terminal rejection of A")
-            .rejected_audio_file_ids,
-        ["file_A"]
-    );
     mount_sse_sequence(
         &server,
         vec![
@@ -1448,18 +1426,11 @@ async fn provider_rejection_preserves_a_different_queued_audio_file() -> Result<
         )
         .await?;
     release.send(()).expect("release rejection");
-    let completed = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnComplete(completed) => Some(completed.clone()),
-        _ => None,
-    })
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_some()),
+    )
     .await;
-    assert_eq!(
-        completed
-            .error
-            .as_ref()
-            .map(|error| error.rejected_audio_file_ids.clone()),
-        Some(vec!["file_a_rejected".to_string()])
-    );
 
     test.submit_text_turn("Continue with queued recording B.")
         .await?;

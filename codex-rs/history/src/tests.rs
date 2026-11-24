@@ -17,6 +17,40 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn legacy_audio_rejection_survives_rollout_rewriting_without_exposing_ids_in_events() -> Result<()>
+{
+    let wire = json!({
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": "turn-1",
+            "last_agent_message": null,
+            "error": {
+                "message": "Invalid recording",
+                "codex_error_info": "bad_request",
+                "rejected_audio_file_ids": ["file_audio"]
+            }
+        }
+    });
+    let item: RolloutItem = serde_json::from_value(wire.clone())?;
+    assert!(matches!(
+        item,
+        RolloutItem::EventMsg {
+            metadata: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(serde_json::to_value(&item)?, wire);
+    let mut expected_event = wire["payload"].clone();
+    expected_event["error"]
+        .as_object_mut()
+        .expect("turn error object")
+        .remove("rejected_audio_file_ids");
+    assert_eq!(serde_json::to_value(item.event_msg())?, expected_event);
+    Ok(())
+}
+
+#[test]
 fn accepted_realtime_input_projects_from_the_canonical_response_item() -> Result<()> {
     let mut item: ResponseItem = serde_json::from_value(json!({
         "type": "message",

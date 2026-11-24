@@ -66,7 +66,6 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
 use codex_thread_context_ids::ThreadContextIds;
@@ -853,14 +852,6 @@ impl ContextManager {
     /// Returns annotated history items without cloning their response payloads.
     pub(crate) fn annotated_items(&self) -> &[ResponseItemEnvelope] {
         &self.items
-    }
-
-    /// Apply the durable failed-turn record without rewriting retained user history.
-    pub(crate) fn record_rejected_file_audio(&mut self, event: &TurnCompleteEvent) {
-        let Some(error) = &event.error else {
-            return;
-        };
-        self.extend_rejected_audio_file_ids(error.rejected_audio_file_ids.iter().cloned());
     }
 
     pub(crate) fn extend_rejected_audio_file_ids(&mut self, ids: impl IntoIterator<Item = String>) {

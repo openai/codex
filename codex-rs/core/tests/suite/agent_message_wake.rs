@@ -457,9 +457,10 @@ async fn interrupt_during_completion_preserves_running_status(
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(
-                event @ (EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)),
-            ) => Some(event),
+            RolloutItem::EventMsg {
+                event: event @ (EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)),
+                ..
+            } => Some(event),
             _ => None,
         })
         .collect::<Vec<_>>();

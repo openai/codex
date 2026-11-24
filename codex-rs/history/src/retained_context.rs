@@ -202,16 +202,15 @@ impl MessageRetention {
     /// Recover the latest owned settings even when replay begins at a compaction.
     pub fn saved(items: &[RolloutItem], thread_id: ThreadId) -> Option<Self> {
         items.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                if event.thread_id == Some(thread_id) =>
-            {
-                Some(
-                    event
-                        .thread_settings
-                        .guardian_retention
-                        .map(|policy| Self { thread_id, policy }),
-                )
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } if event.thread_id == Some(thread_id) => Some(
+                event
+                    .thread_settings
+                    .guardian_retention
+                    .map(|policy| Self { thread_id, policy }),
+            ),
             RolloutItem::Compacted(item) => item
                 .retained_context
                 .as_ref()?

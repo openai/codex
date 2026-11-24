@@ -1234,9 +1234,10 @@ async fn resume_reloads_config_when_saved_workspace_roots_change(
     );
     let expected_thread_id = ThreadId::from_string(&thread_id)?;
     let latest_roots = items.into_iter().rev().find_map(|item| match item {
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-            if event.thread_id == Some(expected_thread_id) =>
-        {
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(event),
+            ..
+        } if event.thread_id == Some(expected_thread_id) => {
             Some(event.thread_settings.runtime_workspace_roots)
         }
         _ => None,

@@ -24,7 +24,7 @@ fn returns_the_missing_suffix_from_its_visible_boundary() {
 
     assert!(matches!(
         suffix.first(),
-        Some(RolloutItem::EventMsg(EventMsg::AgentMessage(event)))
+        Some(RolloutItem::EventMsg { event: EventMsg::AgentMessage(event), .. })
             if event.message == "late answer"
     ));
     assert_eq!(
@@ -36,7 +36,7 @@ fn returns_the_missing_suffix_from_its_visible_boundary() {
     );
     assert!(!suffix.iter().any(|item| matches!(
         item,
-        RolloutItem::EventMsg(EventMsg::AgentMessage(event))
+        RolloutItem::EventMsg { event: EventMsg::AgentMessage(event), .. }
             if event.message == EXTERNAL_SESSION_IMPORTED_MARKER
     )));
 }
@@ -59,7 +59,11 @@ fn requires_a_strict_nonempty_model_prefix() {
 
     let mut metadata_changed = history.clone();
     for item in &mut metadata_changed {
-        if let RolloutItem::EventMsg(EventMsg::TurnStarted(event)) = item {
+        if let RolloutItem::EventMsg {
+            event: EventMsg::TurnStarted(event),
+            ..
+        } = item
+        {
             event.turn_id = "different-turn-id".to_string();
             event.started_at = Some(9_999);
         }

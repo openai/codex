@@ -212,9 +212,10 @@ async fn mcp_app_ui_survives_tool_events_and_resume(
         .items
         .into_iter()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(end)) if end.call_id == call_id => {
-                Some(EventMsg::McpToolCallEnd(end))
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::McpToolCallEnd(end),
+                ..
+            } if end.call_id == call_id => Some(EventMsg::McpToolCallEnd(end)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1761,9 +1762,10 @@ async fn apps_default_approval_prompts_for_writes_but_not_reads(
         .collect::<serde_json::Result<Vec<_>>>()?
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(event))
-                if event.call_id == read_call_id || event.call_id == write_call_id =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::McpToolCallEnd(event),
+                ..
+            } if event.call_id == read_call_id || event.call_id == write_call_id => {
                 Some((event.call_id, event.read_only_hint))
             }
             _ => None,

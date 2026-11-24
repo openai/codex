@@ -269,7 +269,11 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
             })
             .await?;
         for item in history.items {
-            if let codex_history::RolloutItem::EventMsg(EventMsg::TurnStarted(event)) = item {
+            if let codex_history::RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(event),
+                ..
+            } = item
+            {
                 starts.push((thread_id, event));
             }
         }

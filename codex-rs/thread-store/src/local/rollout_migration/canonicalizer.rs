@@ -113,7 +113,8 @@ impl LegacyRolloutCanonicalizer {
             .ok_or_else(|| migration_error("legacy rollout line index overflow"))?;
         let timestamp = line.timestamp;
         let bytes_before = self.bytes_written;
-        match line.item {
+        let item = line.item;
+        match item {
             RolloutItem::SessionMeta(_) => return Ok(0),
             RolloutItem::ResponseItem(response) => {
                 if matches!(&response.item, ResponseItem::Other) {
@@ -136,12 +137,18 @@ impl LegacyRolloutCanonicalizer {
                         .await?;
                 }
             }
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadRolledBack(_),
+                ..
+            } => {
                 return Err(migration_error(
                     "rollback marker reached canonical writer without a rollback plan",
                 ));
             }
-            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(event),
+                ..
+            } => {
                 self.finish_implicit_turn(writer, &timestamp).await?;
                 self.known_turn_ids.insert(event.turn_id.clone());
                 self.active_turn = Some(ActiveTurn {
@@ -157,7 +164,10 @@ impl LegacyRolloutCanonicalizer {
                 )
                 .await?;
             }
-            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnComplete(ref event),
+                ..
+            } => {
                 self.reasoning = None;
                 if self
                     .active_turn
@@ -166,14 +176,12 @@ impl LegacyRolloutCanonicalizer {
                 {
                     self.active_turn = None;
                 }
-                self.write_item(
-                    writer,
-                    &timestamp,
-                    RolloutItem::EventMsg(EventMsg::TurnComplete(event)),
-                )
-                .await?;
+                self.write_item(writer, &timestamp, item).await?;
             }
-            RolloutItem::EventMsg(EventMsg::TurnAborted(mut event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnAborted(mut event),
+                ..
+            } => {
                 if event.turn_id.is_none() {
                     event.turn_id = self.active_turn.as_ref().map(|turn| turn.id.clone());
                 }
@@ -192,7 +200,10 @@ impl LegacyRolloutCanonicalizer {
                 )
                 .await?;
             }
-            RolloutItem::EventMsg(EventMsg::UserMessage(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(event),
+                ..
+            } => {
                 if self
                     .active_turn
                     .as_ref()
@@ -208,7 +219,10 @@ impl LegacyRolloutCanonicalizer {
                 self.reasoning = None;
                 self.write_completed_item(writer, &timestamp, item).await?;
             }
-            RolloutItem::EventMsg(EventMsg::AgentReasoning(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::AgentReasoning(event),
+                ..
+            } => {
                 self.write_reasoning(
                     writer,
                     &timestamp,
@@ -218,7 +232,10 @@ impl LegacyRolloutCanonicalizer {
                 )
                 .await?;
             }
-            RolloutItem::EventMsg(EventMsg::AgentReasoningRawContent(event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::AgentReasoningRawContent(event),
+                ..
+            } => {
                 self.write_reasoning(
                     writer,
                     &timestamp,
@@ -228,7 +245,10 @@ impl LegacyRolloutCanonicalizer {
                 )
                 .await?;
             }
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(mut event)) => {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(mut event),
+                ..
+            } => {
                 event.thread_id = self.thread_id;
                 self.reasoning = None;
                 self.write_item(
@@ -238,7 +258,7 @@ impl LegacyRolloutCanonicalizer {
                 )
                 .await?;
             }
-            RolloutItem::EventMsg(event) => {
+            RolloutItem::EventMsg { event, .. } => {
                 if let Some((item, turn_id)) =
                     legacy_event::completed_item(&event, &mut || self.next_item_id())?
                 {

@@ -4047,7 +4047,7 @@ async fn start_new_context_window_persists_checkpoint_state(clear_tools: bool) {
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::RealtimeItem(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg { .. } => None,
     });
     let mut expected_history = live_history.annotated_items().to_vec();
     // Compaction's parallel metadata vector represents absent entries as default metadata.
@@ -4152,7 +4152,7 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::RealtimeItem(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg { .. } => None,
     });
     let persisted_item = persisted_item.expect("forked response item should be persisted");
     assert_eq!(
@@ -5926,9 +5926,10 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
     let snapshots = items
         .into_iter()
         .filter_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                Some((event.thread_id, event.thread_settings))
-            }
+            RolloutItem::EventMsg {
+                event: EventMsg::ThreadSettingsApplied(event),
+                ..
+            } => Some((event.thread_id, event.thread_settings)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -6150,7 +6151,10 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         RolloutItem::Compacted(compacted),
         RolloutItem::WorldState(saved_world_state),
         RolloutItem::TurnContext(saved_turn_context),
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(saved_settings)),
+        RolloutItem::EventMsg {
+            event: EventMsg::ThreadSettingsApplied(saved_settings),
+            ..
+        },
     ] = compaction_items.as_slice()
     else {
         panic!("unexpected compaction records: {compaction_items:#?}");

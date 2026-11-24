@@ -1559,7 +1559,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg { .. } => None,
     })
 }
 

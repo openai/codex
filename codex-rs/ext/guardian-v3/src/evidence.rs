@@ -377,7 +377,11 @@ fn review_original(
             }
             message.complete
         }
-        RolloutItem::SessionMeta(_) | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::EventMsg {
+            event: EventMsg::ThreadRolledBack(_),
+            ..
+        } => {
             anyhow::bail!("evidence history was replaced");
         }
         RolloutItem::RetainedContext(RetainedContextEvent::AcceptedFileAudio { .. })
@@ -389,7 +393,7 @@ fn review_original(
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::WorldState(_)
         | RolloutItem::SecurityRiskScore(_)
-        | RolloutItem::EventMsg(_)
+        | RolloutItem::EventMsg { .. }
         | RolloutItem::RealtimeItem(_) => false,
     };
     if !include {

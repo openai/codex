@@ -2451,15 +2451,19 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         .get_rollout_items()
         .iter()
         .find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(completed)) => match &completed.item {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(completed),
+                ..
+            } => match &completed.item {
                 TurnItem::SubAgentActivity(activity) if activity.id == SPAWN_CALL_ID => {
                     Some((activity.model.clone(), activity.reasoning_effort.clone()))
                 }
                 _ => None,
             },
-            RolloutItem::EventMsg(EventMsg::SubAgentActivity(activity))
-                if activity.event_id == SPAWN_CALL_ID =>
-            {
+            RolloutItem::EventMsg {
+                event: EventMsg::SubAgentActivity(activity),
+                ..
+            } if activity.event_id == SPAWN_CALL_ID => {
                 Some((activity.model.clone(), activity.reasoning_effort.clone()))
             }
             _ => None,
@@ -2938,7 +2942,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
         assert!(
             !rollout.get_rollout_items().iter().any(|item| matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::SubAgentActivity(activity))
+                RolloutItem::EventMsg { event: EventMsg::SubAgentActivity(activity), .. }
                     if activity.kind == SubAgentActivityKind::Completed
             )),
             "legacy completed activity should not be persisted without its parent turn ID"
@@ -2947,14 +2951,16 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             .get_rollout_items()
             .iter()
             .find_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::ItemCompleted(completed))
-                    if matches!(
-                        &completed.item,
-                        TurnItem::SubAgentActivity(SubAgentActivityItem {
-                            kind: SubAgentActivityKind::Completed,
-                            ..
-                        })
-                    ) =>
+                RolloutItem::EventMsg {
+                    event: EventMsg::ItemCompleted(completed),
+                    ..
+                } if matches!(
+                    &completed.item,
+                    TurnItem::SubAgentActivity(SubAgentActivityItem {
+                        kind: SubAgentActivityKind::Completed,
+                        ..
+                    })
+                ) =>
                 {
                     Some(completed)
                 }

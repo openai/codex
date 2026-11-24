@@ -312,7 +312,10 @@ mod tests {
             .iter()
             .rev()
             .find_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => Some(event),
+                RolloutItem::EventMsg {
+                    event: EventMsg::TurnComplete(event),
+                    ..
+                } => Some(event),
                 _ => None,
             });
         assert_eq!(
@@ -356,8 +359,14 @@ mod tests {
             .rollout_items
             .iter()
             .filter(|item| match item {
-                RolloutItem::EventMsg(EventMsg::UserMessage(event)) => event.message == request,
-                RolloutItem::EventMsg(EventMsg::AgentMessage(event)) => event.message == answer,
+                RolloutItem::EventMsg {
+                    event: EventMsg::UserMessage(event),
+                    ..
+                } => event.message == request,
+                RolloutItem::EventMsg {
+                    event: EventMsg::AgentMessage(event),
+                    ..
+                } => event.message == answer,
                 _ => false,
             })
             .count();
@@ -446,7 +455,10 @@ mod tests {
             .expect("load")
             .expect("session");
         let imported_user_message = imported.rollout_items.iter().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::UserMessage(event)) => Some(event.message.as_str()),
+            RolloutItem::EventMsg {
+                event: EventMsg::UserMessage(event),
+                ..
+            } => Some(event.message.as_str()),
             _ => None,
         });
 
@@ -541,7 +553,10 @@ mod tests {
             .rollout_items
             .iter()
             .find_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TokenCount(event)) => event.info.clone(),
+                RolloutItem::EventMsg {
+                    event: EventMsg::TokenCount(event),
+                    ..
+                } => event.info.clone(),
                 _ => None,
             })
             .expect("token count event");

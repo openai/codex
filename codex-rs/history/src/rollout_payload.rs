@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use super::CodexHarnessMetadata;
 use super::CompactedItem;
@@ -8,6 +9,7 @@ use super::McpResourceOriginCheckpoint;
 use super::RealtimeItem;
 use super::ResponseItem;
 use super::ResponseItemEnvelope;
+use super::RolloutEventMetadata;
 use super::RolloutItem;
 use super::SecurityRiskScore;
 use super::SessionMetaLine;
@@ -27,7 +29,17 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
+use serde::de::DeserializeSeed;
+use serde::de::Error as _;
+use serde::de::MapAccess;
+use serde::de::Visitor;
+use serde::de::value::MapAccessDeserializer;
+use serde::de::value::StringDeserializer;
+use serde::ser::Error as _;
+use serde_json::Value;
 
 const CODE_MODE_DELIVERY_COMPLETE: &str = "codex:code-mode-delivery:v1:complete";
 const CODE_MODE_DELIVERY_INCOMPLETE: &str = "codex:code-mode-delivery:v1:incomplete:";
@@ -74,11 +86,116 @@ pub(super) enum RolloutItemWire<'a> {
         payload: Cow<'a, SecurityRiskScore>,
     },
     EventMsg {
-        payload: Cow<'a, EventMsg>,
+        #[schemars(with = "EventMsg")]
+        payload: RolloutEventPayload<'a>,
     },
     RealtimeItem {
         payload: Cow<'a, RealtimeItem>,
     },
+}
+
+/// Encodes protocol events and legacy audio rejection metadata in the rollout format.
+pub(super) struct RolloutEventPayload<'a> {
+    event: Cow<'a, EventMsg>,
+    rejected_audio_file_ids: Cow<'a, [String]>,
+}
+
+impl Serialize for RolloutEventPayload<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.rejected_audio_file_ids.is_empty() {
+            return self.event.serialize(serializer);
+        }
+        if !matches!(self.event.as_ref(), EventMsg::TurnComplete(event) if event.error.is_some()) {
+            return Err(S::Error::custom("audio rejection requires a failed turn"));
+        }
+        // Keep the original rollout format readable during downgrade.
+        let mut payload = serde_json::to_value(&self.event).map_err(S::Error::custom)?;
+        let error = payload["error"]
+            .as_object_mut()
+            .ok_or_else(|| S::Error::custom("audio rejection requires a failed turn"))?;
+        error.insert(
+            "rejected_audio_file_ids".to_owned(),
+            serde_json::to_value(&self.rejected_audio_file_ids).map_err(S::Error::custom)?,
+        );
+        payload.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RolloutEventPayload<'_> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(RolloutEventVisitor)
+    }
+}
+
+struct RolloutEventVisitor;
+
+impl<'de> Visitor<'de> for RolloutEventVisitor {
+    type Value = RolloutEventPayload<'static>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a rollout event payload")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        let mut map = RolloutEventMap {
+            map,
+            error_field: false,
+            rejected_audio_file_ids: None,
+        };
+        let event = EventMsg::deserialize(MapAccessDeserializer::new(&mut map))?;
+        let rejected_audio_file_ids = if matches!(&event, EventMsg::TurnComplete(_)) {
+            map.rejected_audio_file_ids
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(A::Error::custom)?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Ok(RolloutEventPayload {
+            event: Cow::Owned(event),
+            rejected_audio_file_ids: Cow::Owned(rejected_audio_file_ids),
+        })
+    }
+}
+
+/// Forward the original event fields to Serde and inspect only the legacy error.
+struct RolloutEventMap<A> {
+    map: A,
+    error_field: bool,
+    rejected_audio_file_ids: Option<Value>,
+}
+
+impl<'de, A: MapAccess<'de>> MapAccess<'de> for RolloutEventMap<A> {
+    type Error = A::Error;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, Self::Error> {
+        let Some(key) = self.map.next_key::<String>()? else {
+            return Ok(None);
+        };
+        self.error_field = key == "error";
+        seed.deserialize(StringDeserializer::new(key)).map(Some)
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(
+        &mut self,
+        seed: V,
+    ) -> Result<V::Value, Self::Error> {
+        if self.error_field {
+            let error: Value = self.map.next_value()?;
+            self.rejected_audio_file_ids = error.get("rejected_audio_file_ids").cloned();
+            seed.deserialize(error).map_err(Self::Error::custom)
+        } else {
+            self.map.next_value_seed(seed)
+        }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        self.map.size_hint()
+    }
 }
 
 fn serialize_turn_context<S>(context: &TurnContextItem, serializer: S) -> Result<S::Ok, S::Error>
@@ -270,8 +387,15 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::SecurityRiskScore(payload) => Self::SecurityRiskScore {
                 payload: Cow::Borrowed(payload),
             },
-            RolloutItem::EventMsg(payload) => Self::EventMsg {
-                payload: Cow::Borrowed(payload),
+            RolloutItem::EventMsg { event, metadata } => Self::EventMsg {
+                payload: RolloutEventPayload {
+                    event: Cow::Borrowed(event),
+                    rejected_audio_file_ids: Cow::Borrowed(
+                        metadata
+                            .as_ref()
+                            .map_or(&[], |metadata| metadata.rejected_audio_file_ids.as_slice()),
+                    ),
+                },
             },
             RolloutItem::RealtimeItem(payload) => Self::RealtimeItem {
                 payload: Cow::Borrowed(payload),
@@ -360,7 +484,14 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
             RolloutItemWire::SecurityRiskScore { payload } => {
                 Self::SecurityRiskScore(payload.into_owned())
             }
-            RolloutItemWire::EventMsg { payload } => Self::EventMsg(payload.into_owned()),
+            RolloutItemWire::EventMsg { payload } => Self::EventMsg {
+                event: payload.event.into_owned(),
+                metadata: (!payload.rejected_audio_file_ids.is_empty()).then(|| {
+                    RolloutEventMetadata {
+                        rejected_audio_file_ids: payload.rejected_audio_file_ids.into_owned(),
+                    }
+                }),
+            },
             RolloutItemWire::RealtimeItem { payload } => Self::RealtimeItem(payload.into_owned()),
         }
     }

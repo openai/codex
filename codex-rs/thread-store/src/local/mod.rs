@@ -2274,7 +2274,7 @@ mod tests {
         assert!(history.items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "external history item"
+                RolloutItem::EventMsg { event: EventMsg::UserMessage(event), .. } if event.message == "external history item"
             )
         }));
     }
@@ -2317,7 +2317,7 @@ mod tests {
         assert!(thread.history.expect("history").items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "Hello from user"
+                RolloutItem::EventMsg { event: EventMsg::UserMessage(event), .. } if event.message == "Hello from user"
             )
         }));
 
@@ -2408,7 +2408,7 @@ mod tests {
         assert!(history.items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "archived live history item"
+                RolloutItem::EventMsg { event: EventMsg::UserMessage(event), .. } if event.message == "archived live history item"
             )
         }));
     }
@@ -2454,7 +2454,13 @@ mod tests {
                 .expect("history")
                 .items
                 .iter()
-                .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))))
+                .filter(|item| matches!(
+                    item,
+                    RolloutItem::EventMsg {
+                        event: EventMsg::UserMessage(_),
+                        ..
+                    }
+                ))
                 .count(),
             1
         );
@@ -2581,14 +2587,14 @@ mod tests {
         assert!(items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
+                RolloutItem::EventMsg { event: EventMsg::ItemCompleted(event), .. }
                     if event.turn_id == "turn-1"
             )
         }));
         assert!(!items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::UserMessage(event))
+                RolloutItem::EventMsg { event: EventMsg::UserMessage(event), .. }
                     if event.message == "legacy event should not persist"
             )
         }));
@@ -2656,7 +2662,7 @@ mod tests {
         assert!(items.iter().any(|item| {
             matches!(
                 item,
-                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == expected
+                RolloutItem::EventMsg { event: EventMsg::UserMessage(event), .. } if event.message == expected
             )
         }));
     }

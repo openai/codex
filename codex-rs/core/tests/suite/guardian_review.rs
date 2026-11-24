@@ -1346,7 +1346,10 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
     let guardian_context_windows = guardian_rollout
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.model_context_window),
+            RolloutItem::EventMsg {
+                event: EventMsg::TurnStarted(event),
+                ..
+            } => Some(event.model_context_window),
             _ => None,
         })
         .collect::<Vec<_>>();

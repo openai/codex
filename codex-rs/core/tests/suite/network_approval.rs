@@ -1917,7 +1917,7 @@ async fn unattributed_network_request_uses_active_turn_environment_fallback(
                     })
                     .await?;
                 if history.items.iter().any(|item| {
-                    matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(event)) if event.error.is_some())
+                    matches!(item, RolloutItem::EventMsg { event: EventMsg::TurnComplete(event), .. } if event.error.is_some())
                 }) {
                     return Ok::<(), anyhow::Error>(());
                 }

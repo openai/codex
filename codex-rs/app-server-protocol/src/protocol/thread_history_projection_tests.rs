@@ -1,3 +1,4 @@
+use codex_history::RolloutEventMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -79,11 +80,10 @@ fn projects_failed_turn_completion_as_snapshot() {
         misalignment: None,
         message: "request failed".to_string(),
         codex_error_info: None,
-        rejected_audio_file_ids: Vec::new(),
     };
 
-    let changes = project(RolloutItem::EventMsg(EventMsg::TurnComplete(
-        TurnCompleteEvent {
+    let changes = project(RolloutItem::EventMsg {
+        event: EventMsg::TurnComplete(TurnCompleteEvent {
             root_turn_id: None,
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
@@ -92,8 +92,11 @@ fn projects_failed_turn_completion_as_snapshot() {
             completed_at: Some(20),
             duration_ms: Some(10_000),
             time_to_first_token_ms: None,
-        },
-    )));
+        }),
+        metadata: Some(RolloutEventMetadata {
+            rejected_audio_file_ids: vec!["file_rejected".into()],
+        }),
+    });
 
     assert_eq!(
         changes,

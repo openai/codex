@@ -1233,7 +1233,10 @@ async fn any_new_input_interrupts_sleep(input: WaitInput) {
         .lines()
         .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
         .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match event.item {
+            RolloutItem::EventMsg {
+                event: EventMsg::ItemCompleted(event),
+                ..
+            } => match event.item {
                 TurnItem::Extension(ExtensionItem::Sleep(item)) => Some(item),
                 _ => None,
             },

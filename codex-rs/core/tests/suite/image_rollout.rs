@@ -598,8 +598,10 @@ async fn uploaded_images_preserve_user_message_display_history() -> anyhow::Resu
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let mut persisted_user_items = Vec::new();
     for line in rollout_text.lines() {
-        if let RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) =
-            codex_rollout::parse_rollout_line(line)?.item
+        if let RolloutItem::EventMsg {
+            event: EventMsg::ItemCompleted(event),
+            ..
+        } = codex_rollout::parse_rollout_line(line)?.item
             && let TurnItem::UserMessage(item) = event.item
         {
             persisted_user_items.push(item);

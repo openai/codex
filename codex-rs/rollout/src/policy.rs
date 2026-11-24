@@ -30,12 +30,16 @@ pub fn persisted_rollout_item(
         }
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => Some(Cow::Borrowed(item)),
-        RolloutItem::EventMsg(ev) => {
-            persisted_event_msg(ev, history_mode).map(|event| match event {
-                Cow::Borrowed(_) => Cow::Borrowed(item),
-                Cow::Owned(event) => Cow::Owned(RolloutItem::EventMsg(event)),
-            })
-        }
+        RolloutItem::EventMsg {
+            event: ev,
+            metadata,
+        } => persisted_event_msg(ev, history_mode).map(|event| match event {
+            Cow::Borrowed(_) => Cow::Borrowed(item),
+            Cow::Owned(event) => Cow::Owned(RolloutItem::EventMsg {
+                event,
+                metadata: metadata.clone(),
+            }),
+        }),
         RolloutItem::RealtimeItem(_) => {
             matches!(history_mode, ThreadHistoryMode::Paginated).then_some(Cow::Borrowed(item))
         }

@@ -122,7 +122,7 @@ pub(crate) fn serialize_tiered_input(
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg { .. } => None,
         };
         let Some(mut item) = item else { continue };
         if let ResponseItem::Message { content, .. } = &mut item {

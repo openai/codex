@@ -423,7 +423,7 @@ mod job {
                 | RolloutItem::WorldState(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
-                | RolloutItem::EventMsg(_) => None,
+                | RolloutItem::EventMsg { .. } => None,
             })
             .collect::<Vec<_>>();
         let serialized = serde_json::to_string(&filtered).map_err(|err| {
