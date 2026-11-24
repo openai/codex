@@ -60,6 +60,11 @@ impl SuspendContext {
     /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
+        // A launcher can supply a PTY without making it our controlling terminal.
+        // Leave the TUI intact if we couldn't verify ownership on resume.
+        if unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
             let _ = super::ALTERNATE_SCREEN.leave(&mut stdout());
@@ -206,7 +211,7 @@ impl PreparedResumeAction {
     }
 }
 
-/// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
+/// Release the terminal and suspend the job until it resumes in the foreground.
 fn suspend_process() -> Result<()> {
     static JOB_RESUMED: AtomicBool = AtomicBool::new(false);
     extern "C" fn record_job_resumed(_signal: libc::c_int) {
@@ -277,6 +282,27 @@ fn suspend_process() -> Result<()> {
     } else {
         Err(std::io::Error::last_os_error())
     };
+    // bg resumes the process without the terminal. A subsequent fg can hand
+    // it back without another SIGCONT. Only query ownership here: even a
+    // kernel-generated SIGTTOU could arrive after that handoff.
+    let job = unsafe { libc::getpgrp() };
+    loop {
+        let foreground = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+        if foreground == job {
+            break;
+        }
+        if foreground == -1
+            && matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ENOTTY | libc::EBADF | libc::EIO | libc::ENXIO)
+            )
+        {
+            // We lost the controlling terminal after releasing it. Returning
+            // would restart input and redraw, even on error.
+            std::process::exit(1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     suspend_result
         .and(restore_mask_result)
         .and(restore_result)
