@@ -164,7 +164,7 @@ async fn searches_live_and_unsubscribed_guardian_posts() -> anyhow::Result<()> {
             /*byte_limit*/ 8_000,
         );
         let result = search.handle(call.clone()).await?;
-        let output = result.code_mode_result(&call.payload);
+        let output = result.code_mode_result(&call.payload).into_json();
         assert_eq!(result.log_output(), output.to_string());
         let page: codex_message_board::Page<codex_message_board::PostPreview> =
             serde_json::from_value(output)?;
@@ -225,7 +225,7 @@ async fn lists_only_the_reviewers_own_subscriptions_across_pages() -> anyhow::Re
         let call = reviewer_tool_call(&name, &arguments, /*byte_limit*/ 96);
         let result = tool.handle(call.clone()).await?;
         Ok(serde_json::from_value(
-            result.code_mode_result(&call.payload),
+            result.code_mode_result(&call.payload).into_json(),
         )?)
     };
 

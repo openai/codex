@@ -55,6 +55,7 @@ pub use session::CodeModeSessionOptions;
 pub use session::CodeModeSessionProvider;
 pub use session::CodeModeSessionProviderFuture;
 pub use session::CodeModeSessionResultFuture;
+pub use session::CodeModeToolResult;
 pub use session::NoopCodeModeSessionDelegate;
 pub use session::NotificationFuture;
 pub use session::StartedCell;

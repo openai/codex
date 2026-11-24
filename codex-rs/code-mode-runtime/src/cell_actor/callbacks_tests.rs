@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
+use codex_code_mode_protocol::CodeModeToolResult;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
@@ -24,7 +25,7 @@ impl CellHost for PanickingCallbackHost {
         &self,
         _invocation: CellToolCall,
         _cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
+    ) -> Result<CodeModeToolResult, String> {
         panic!("tool callback panic probe");
     }
 

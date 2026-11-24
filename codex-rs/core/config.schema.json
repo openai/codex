@@ -934,6 +934,9 @@
             "code_mode_interrupt": {
               "type": "boolean"
             },
+            "code_mode_mcp_result_dedup": {
+              "type": "boolean"
+            },
             "code_mode_only": {
               "type": "boolean"
             },
@@ -8339,6 +8342,9 @@
           "type": "boolean"
         },
         "code_mode_interrupt": {
+          "type": "boolean"
+        },
+        "code_mode_mcp_result_dedup": {
           "type": "boolean"
         },
         "code_mode_only": {

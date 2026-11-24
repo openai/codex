@@ -72,6 +72,7 @@ async fn rejects_oversized_identifiers_and_subscription_filters() {
             outcome: Some(proto::complete_tool_call_request::Outcome::Succeeded(
                 proto::ToolCallSucceeded {
                     output_json: b"null".to_vec(),
+                    ..Default::default()
                 },
             )),
         }))

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
 use serde_json::json;
@@ -12,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 pub(crate) struct RecordingDelegate {
+    pub(crate) results_by_input: HashMap<serde_json::Value, CodeModeToolResult>,
     pub(crate) invocations: Mutex<Vec<CodeModeNestedToolCall>>,
     pub(crate) notifications: Mutex<Vec<(String, CellId, String)>>,
     pub(crate) notification_delivered: Notify,
@@ -24,11 +27,17 @@ impl CodeModeSessionDelegate for RecordingDelegate {
         invocation: CodeModeNestedToolCall,
         _cancellation: CancellationToken,
     ) -> ToolInvocationFuture<'a> {
+        let result = invocation
+            .input
+            .as_ref()
+            .and_then(|input| self.results_by_input.get(input))
+            .cloned()
+            .unwrap_or_else(|| CodeModeToolResult::from(json!({ "value": "output" })));
         self.invocations
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(invocation);
-        Box::pin(async { Ok(json!({ "value": "output" })) })
+        Box::pin(async move { Ok(result) })
     }
 
     fn notify<'a>(

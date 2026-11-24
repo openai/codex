@@ -20,9 +20,30 @@ pub type CodeModeSessionResultFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 pub type CodeModeSessionProviderFuture<'a> =
     CodeModeSessionResultFuture<'a, Arc<dyn CodeModeSession>>;
-pub type ToolInvocationFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<JsonValue, String>> + Send + 'a>>;
+pub type ToolInvocationFuture<'a> = CodeModeSessionResultFuture<'a, CodeModeToolResult>;
 pub type NotificationFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+
+/// A nested call's JSON value and how the runtime should treat it when printed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodeModeToolResult {
+    Json(JsonValue),
+    McpCallToolResult(JsonValue),
+}
+
+impl CodeModeToolResult {
+    /// Returns the full script-visible value without its format tag.
+    pub fn into_json(self) -> JsonValue {
+        match self {
+            Self::Json(value) | Self::McpCallToolResult(value) => value,
+        }
+    }
+}
+
+impl From<JsonValue> for CodeModeToolResult {
+    fn from(value: JsonValue) -> Self {
+        Self::Json(value)
+    }
+}
 
 /// Optional resource limits shared by every cell in one code-mode session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

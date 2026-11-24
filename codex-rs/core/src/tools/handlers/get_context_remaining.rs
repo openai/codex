@@ -8,12 +8,12 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::get_context_remaining_spec::GET_CONTEXT_REMAINING_TOOL_NAME;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_code_mode::CodeModeToolResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ToolMessage;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use serde_json::Value as JsonValue;
 use serde_json::json;
 
 #[derive(Debug, Clone)]
@@ -50,10 +50,10 @@ impl ToolOutput for GetContextRemainingOutput {
             .to_response_item(call_id, payload)
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        json!({
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
+        CodeModeToolResult::from(json!({
             "tokens_left": self.tokens_left,
-        })
+        }))
     }
 }
 

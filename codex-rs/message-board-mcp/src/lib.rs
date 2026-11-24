@@ -126,7 +126,7 @@ impl ServerHandler for MessageBoardMcpServer {
         };
         let result = match executor.handle(call).await {
             Ok(output) => {
-                let value = output.code_mode_result(&payload);
+                let value = output.code_mode_result(&payload).into_json();
                 let mut result = if value.is_object() {
                     CallToolResult::structured(value)
                 } else {

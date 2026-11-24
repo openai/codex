@@ -104,7 +104,7 @@ fn tool_dispatch_result(
             })
         }
         ToolCallSource::CodeMode { .. } => Some(ToolDispatchResult::CodeModeResponse {
-            value: result.code_mode_result(payload),
+            value: result.code_mode_result(payload).into_json(),
         }),
     }
 }

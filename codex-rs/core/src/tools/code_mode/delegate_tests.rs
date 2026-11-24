@@ -8,6 +8,7 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
 use tokio_util::sync::CancellationToken;
@@ -174,7 +175,10 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
     })
     .await?
     .map_err(anyhow::Error::msg)?;
-    assert_eq!(result, serde_json::json!("audit-probe-ok"));
+    assert_eq!(
+        result,
+        CodeModeToolResult::from(serde_json::json!("audit-probe-ok"))
+    );
     let records = records.lock().unwrap();
     let [(fields, has_turn_ancestor)] = records.as_slice() else {
         panic!("expected one nested dispatch span, got {records:?}");

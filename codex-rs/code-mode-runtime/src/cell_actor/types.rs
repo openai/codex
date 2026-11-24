@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::time::Instant;
 
+use codex_code_mode_protocol::CodeModeToolResult;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -43,7 +44,7 @@ pub(crate) trait CellHost: Send + Sync + 'static {
         &self,
         invocation: CellToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl Future<Output = Result<JsonValue, String>> + Send;
+    ) -> impl Future<Output = Result<CodeModeToolResult, String>> + Send;
 
     fn notify(
         &self,

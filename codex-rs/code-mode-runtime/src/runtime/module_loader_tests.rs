@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc as std_mpsc;
 
+use codex_code_mode_protocol::CodeModeToolResult;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -48,7 +49,8 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
         v8::Global::new(scope, promise)
     };
     let response = json!({"content": [{"type": "text", "text": "tool result"}]});
-    resolve_tool_response(scope, "tool", Ok(response.clone())).expect("resolve tool promise");
+    let result = CodeModeToolResult::McpCallToolResult(response.clone());
+    resolve_tool_response(scope, "tool", Ok(result)).expect("resolve tool promise");
     scope.perform_microtask_checkpoint();
     scope.low_memory_notification();
 
@@ -57,6 +59,7 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
         let promise = v8::Local::new(scope, &promise);
         assert_eq!(promise.state(), v8::PromiseState::Fulfilled);
         let result = promise.result(scope);
+        assert!(super::super::mcp_result::can_omit_fallback(scope, result));
         assert_eq!(v8_value_to_json(scope, result), Ok(Some(response)));
         v8::Weak::new(scope, result)
     };

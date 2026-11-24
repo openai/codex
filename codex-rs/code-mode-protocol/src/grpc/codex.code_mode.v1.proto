@@ -151,6 +151,13 @@ message CompleteToolCallRequest {
 
 message ToolCallSucceeded {
   bytes output_json = 1;
+  ToolResultFormat result_format = 2;
+}
+
+enum ToolResultFormat {
+  // The default preserves the full JSON value when the format is omitted or unknown.
+  TOOL_RESULT_FORMAT_JSON = 0;
+  TOOL_RESULT_FORMAT_MCP_CALL_TOOL_RESULT = 1;
 }
 
 message ToolCallFailed {

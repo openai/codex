@@ -71,7 +71,7 @@ fn mcp_code_mode_result_omits_private_metadata() {
 
     assert_eq!(
         result,
-        serde_json::json!({
+        CodeModeToolResult::McpCallToolResult(serde_json::json!({
             "content": [{
                 "type": "text",
                 "text": "ignored",
@@ -81,7 +81,7 @@ fn mcp_code_mode_result_omits_private_metadata() {
                 "content": "done",
             },
             "isError": false,
-        })
+        }))
     );
     assert_eq!(output.meta, Some(serde_json::json!({ "source": "mcp" })));
 }
@@ -276,7 +276,7 @@ fn mcp_tool_output_code_mode_result_preserves_content_without_private_metadata(
 
     assert_eq!(
         result,
-        serde_json::json!({
+        CodeModeToolResult::McpCallToolResult(serde_json::json!({
             "content": [{
                 "type": "text",
                 "text": "ignored",
@@ -285,7 +285,7 @@ fn mcp_tool_output_code_mode_result_preserves_content_without_private_metadata(
                 "content": "large structured value ".repeat(1_000),
             },
             "isError": false,
-        })
+        }))
     );
     assert_eq!(
         output.result.meta,

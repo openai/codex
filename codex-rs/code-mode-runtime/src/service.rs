@@ -14,6 +14,7 @@ use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::CodeModeSessionOptions;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
 use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::ExecuteToPendingOutcome;
@@ -25,7 +26,6 @@ use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::WaitToPendingOutcome;
 use codex_code_mode_protocol::WaitToPendingRequest;
-use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -421,7 +421,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
         &self,
         invocation: runtime::NestedToolCall,
         cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
+    ) -> Result<CodeModeToolResult, String> {
         self.delegate
             .invoke_tool(
                 CodeModeNestedToolCall {

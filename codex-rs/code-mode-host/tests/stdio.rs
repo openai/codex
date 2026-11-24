@@ -16,6 +16,7 @@ use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::NotificationFuture;
@@ -60,7 +61,7 @@ impl CodeModeSessionDelegate for OversizedResultDelegate {
         _invocation: CodeModeNestedToolCall,
         _cancellation_token: CancellationToken,
     ) -> ToolInvocationFuture<'a> {
-        Box::pin(async { Ok(json!("x".repeat(MAX_FRAME_BYTES))) })
+        Box::pin(async { Ok(CodeModeToolResult::from(json!("x".repeat(MAX_FRAME_BYTES)))) })
     }
 
     fn notify<'a>(
@@ -114,7 +115,7 @@ impl CodeModeSessionDelegate for CancellationDelegate {
                     .await
                     .map_err(|_| "slow tool barrier closed".to_string())?;
                 permit.forget();
-                return Ok(json!({ "tool": tool_name }));
+                return Ok(CodeModeToolResult::from(json!({ "tool": tool_name })));
             }
             if tool_name == "tool_call_slow" {
                 self.slow_cancellation
@@ -135,7 +136,7 @@ impl CodeModeSessionDelegate for CancellationDelegate {
                 .await
                 .map_err(|_| "fast tool release closed".to_string())?;
             permit.forget();
-            Ok(json!({ "tool": tool_name }))
+            Ok(CodeModeToolResult::from(json!({ "tool": tool_name })))
         })
     }
 

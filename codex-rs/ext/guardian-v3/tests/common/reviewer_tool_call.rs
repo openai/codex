@@ -22,7 +22,7 @@ pub(crate) async fn invoke(
         .with_context(|| format!("missing reviewer tool {name}"))?;
     let call = reviewer_tool_call(&tool.tool_name(), &arguments, /*byte_limit*/ 8_000);
     let result = tool.handle(call.clone()).await?;
-    Ok(result.code_mode_result(&call.payload))
+    Ok(result.code_mode_result(&call.payload).into_json())
 }
 
 pub(crate) fn reviewer_tool_call(

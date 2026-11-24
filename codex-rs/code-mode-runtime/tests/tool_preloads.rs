@@ -9,6 +9,7 @@ use codex_code_mode_runtime::CellId;
 use codex_code_mode_runtime::CodeModeNestedToolCall;
 use codex_code_mode_runtime::CodeModeSessionDelegate;
 use codex_code_mode_runtime::CodeModeToolKind;
+use codex_code_mode_runtime::CodeModeToolResult;
 use codex_code_mode_runtime::ExecuteRequest;
 use codex_code_mode_runtime::FunctionCallOutputContentItem;
 use codex_code_mode_runtime::InProcessCodeModeSession;
@@ -39,7 +40,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(invocation.tool_name);
-        Box::pin(async { Ok(json!({"ok": true})) })
+        Box::pin(async { Ok(CodeModeToolResult::from(json!({"ok": true}))) })
     }
 
     fn notify<'a>(

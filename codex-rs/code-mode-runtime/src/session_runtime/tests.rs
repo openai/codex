@@ -24,8 +24,8 @@ impl SessionRuntimeDelegate for RecordingDelegate {
         &self,
         _invocation: NestedToolCall,
         _cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
-        Ok(JsonValue::Null)
+    ) -> Result<CodeModeToolResult, String> {
+        Ok(CodeModeToolResult::from(JsonValue::Null))
     }
 
     async fn notify(
@@ -46,8 +46,8 @@ impl SessionRuntimeDelegate for PanickingClosedDelegate {
         &self,
         _invocation: NestedToolCall,
         _cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
-        Ok(JsonValue::Null)
+    ) -> Result<CodeModeToolResult, String> {
+        Ok(CodeModeToolResult::from(JsonValue::Null))
     }
 
     async fn notify(

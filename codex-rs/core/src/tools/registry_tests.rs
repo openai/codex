@@ -746,7 +746,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
 
     assert_eq!(
         result.code_mode_result(),
-        serde_json::json!({ "typed": true })
+        CodeModeToolResult::Json(serde_json::json!({ "typed": true }))
     );
 }
 
@@ -783,12 +783,17 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
     };
-    let original_result = result.original.code_mode_result(&payload);
     assert_eq!(
         result.tool_result_metadata(),
         ToolResultMetadata::new(&metadata)
     );
-    assert_eq!(result.code_mode_result(&payload), original_result);
+    assert_eq!(
+        result.code_mode_result(&payload),
+        CodeModeToolResult::McpCallToolResult(serde_json::json!({
+            "content": [{"type": "text", "text": "original result"}],
+            "isError": tool_error,
+        }))
+    );
 }
 
 #[tokio::test]

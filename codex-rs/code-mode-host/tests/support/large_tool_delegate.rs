@@ -1,6 +1,7 @@
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
 use codex_protocol::ToolName;
@@ -22,7 +23,7 @@ impl CodeModeSessionDelegate for LargeToolResultDelegate {
     ) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
             if invocation.tool_name == ToolName::plain("fast") {
-                return Ok(json!({ "value": "isolated" }));
+                return Ok(CodeModeToolResult::from(json!({ "value": "isolated" })));
             }
             assert_eq!(invocation.tool_name, ToolName::plain("large"));
             self.started.add_permits(/*n*/ 1);
@@ -31,7 +32,9 @@ impl CodeModeSessionDelegate for LargeToolResultDelegate {
                 .await
                 .map_err(|_| "large tool release closed".to_string())?
                 .forget();
-            Ok(json!({ "value": "x".repeat(8 * 1024 * 1024) }))
+            Ok(CodeModeToolResult::from(
+                json!({ "value": "x".repeat(8 * 1024 * 1024) }),
+            ))
         })
     }
 

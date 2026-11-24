@@ -1,3 +1,4 @@
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::grpc;
 use pretty_assertions::assert_eq;
 use prost::Message;
@@ -9,7 +10,12 @@ use super::request_with_maximum;
 fn completion_size_includes_the_protobuf_envelope() {
     let output = serde_json::Value::String("a".repeat(100));
     let raw_json_bytes = serde_json::to_vec(&output).expect("valid JSON").len();
-    let completion = request_with_maximum("session", "invocation", Ok(output), raw_json_bytes);
+    let completion = request_with_maximum(
+        "session",
+        "invocation",
+        Ok(CodeModeToolResult::from(output)),
+        raw_json_bytes,
+    );
 
     assert!(matches!(
         completion.outcome,
@@ -33,7 +39,7 @@ fn delegate_errors_larger_than_64_kib_are_preserved() {
 
 #[test]
 fn completion_at_exact_message_limit_is_accepted() {
-    let value = serde_json::json!({ "ok": true });
+    let value = CodeModeToolResult::McpCallToolResult(serde_json::json!({ "content": [] }));
     let expected = request("session", "invocation", Ok(value.clone()));
     let actual = request_with_maximum("session", "invocation", Ok(value), expected.encoded_len());
 

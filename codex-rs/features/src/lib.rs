@@ -156,6 +156,8 @@ pub enum Feature {
     CodeMode,
     /// Expose ranked tool discovery inside JavaScript code mode.
     CodeModeToolSearch,
+    /// Omit duplicate MCP text fallbacks when Code Mode prints the original result.
+    CodeModeMcpResultDedup,
     /// Removed compatibility flag for the configurable code-mode exec yield timeout.
     CodeModeBufferedExec,
     /// Run JavaScript code mode in the standalone host process.
@@ -1391,6 +1393,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModeToolSearch,
         key: "code_mode_tool_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeMcpResultDedup,
+        key: "code_mode_mcp_result_dedup",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -1,4 +1,4 @@
-use serde_json::Value as JsonValue;
+use codex_code_mode_protocol::CodeModeToolResult;
 
 use super::CompletionState;
 use super::RuntimeState;
@@ -50,7 +50,7 @@ pub(super) fn evaluate_main_module(
 pub(super) fn resolve_tool_response(
     scope: &mut v8::PinScope<'_, '_>,
     id: &str,
-    response: Result<JsonValue, String>,
+    response: Result<CodeModeToolResult, String>,
 ) -> Result<(), String> {
     let resolver = {
         let state = scope
@@ -67,8 +67,12 @@ pub(super) fn resolve_tool_response(
     let resolver = v8::Local::new(&tc, &resolver);
     match response {
         Ok(result) => {
-            let value = json_to_v8(&mut tc, &result)
+            let is_mcp = matches!(result, CodeModeToolResult::McpCallToolResult(_));
+            let value = json_to_v8(&mut tc, &result.into_json())
                 .ok_or_else(|| "failed to serialize tool response".to_string())?;
+            if is_mcp {
+                super::mcp_result::mark(&mut tc, value);
+            }
             resolver.resolve(&tc, value);
         }
         Err(error_text) => {

@@ -87,7 +87,9 @@ pub(super) fn text_callback(
     } else {
         args.get(0)
     };
+    let can_omit_fallback = super::mcp_result::can_omit_fallback(scope, value);
     let text = match serialize_output_text(scope, value) {
+        Ok(text) if can_omit_fallback => super::mcp_result::without_fallback(&text).unwrap_or(text),
         Ok(text) => text,
         Err(error_text) => {
             throw_type_error(scope, &error_text);

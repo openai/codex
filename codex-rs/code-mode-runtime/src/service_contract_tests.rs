@@ -119,7 +119,7 @@ impl CodeModeSessionDelegate for BlockingDelegate {
             tokio::select! {
                 _ = self.tool_release.notified() => {
                     self.tool_finished.store(true, Ordering::Release);
-                    Ok(serde_json::Value::Null)
+                    Ok(CodeModeToolResult::from(serde_json::Value::Null))
                 }
                 _ = cancellation_token.cancelled() => {
                     self.tool_finished.store(true, Ordering::Release);

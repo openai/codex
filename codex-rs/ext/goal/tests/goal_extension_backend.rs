@@ -69,7 +69,7 @@ async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Re
         }),
     );
     let output = create_tool.handle(invocation.clone()).await?;
-    let result = output.code_mode_result(&invocation.payload);
+    let result = output.code_mode_result(&invocation.payload).into_json();
     assert_eq!(
         result,
         json!({
@@ -142,7 +142,7 @@ async fn installed_goal_tools_apply_maximum_token_budget() -> anyhow::Result<()>
     );
     let output = create_tool.handle(invocation.clone()).await?;
     assert_eq!(
-        output.code_mode_result(&invocation.payload)["goal"]["tokenBudget"],
+        output.code_mode_result(&invocation.payload).into_json()["goal"]["tokenBudget"],
         json!(100)
     );
     Ok(())
@@ -250,7 +250,7 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
         json!({ "objective": "replacement goal" }),
     );
     let output = create_tool.handle(invocation.clone()).await?;
-    let result = output.code_mode_result(&invocation.payload);
+    let result = output.code_mode_result(&invocation.payload).into_json();
 
     assert_eq!(json!("replacement goal"), result["goal"]["objective"]);
     assert_eq!(json!("active"), result["goal"]["status"]);
@@ -588,7 +588,7 @@ async fn subagent_usage_resets_when_root_goal_is_replaced() -> anyhow::Result<()
         .await?;
     assert_eq!(
         json!(25),
-        completed.code_mode_result(&completion.payload)["goal"]["tokensUsed"]
+        completed.code_mode_result(&completion.payload).into_json()["goal"]["tokensUsed"]
     );
 
     child
@@ -1140,7 +1140,7 @@ async fn update_goal_can_stop_and_accounts_final_progress() -> anyhow::Result<()
             json!({ "status": status }),
         );
         let output = update_tool.handle(invocation.clone()).await?;
-        let result = output.code_mode_result(&invocation.payload);
+        let result = output.code_mode_result(&invocation.payload).into_json();
 
         assert_eq!(
             result,

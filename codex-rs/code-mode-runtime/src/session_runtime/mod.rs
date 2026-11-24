@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_code_mode_protocol::CodeModeToolResult;
 pub(crate) use codex_code_mode_protocol::FunctionCallOutputContentItem as OutputItem;
 use opentelemetry::context::FutureExt;
 use serde_json::Value as JsonValue;
@@ -256,7 +257,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
         &self,
         invocation: CellToolCall,
         cancellation_token: CancellationToken,
-    ) -> Result<JsonValue, String> {
+    ) -> Result<CodeModeToolResult, String> {
         self.delegate
             .invoke_tool(
                 NestedToolCall {

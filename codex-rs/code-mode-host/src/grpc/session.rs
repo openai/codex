@@ -13,13 +13,13 @@ use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionOptions;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_runtime::InProcessCodeModeSession;
 use codex_code_mode_runtime::ToolPreload;
-use serde_json::Value as JsonValue;
 use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
@@ -91,7 +91,7 @@ pub(super) struct ToolSubscription {
 
 pub(super) struct PendingInvocation {
     pub(super) subscription_id: Uuid,
-    pub(super) response: oneshot::Sender<Result<JsonValue, String>>,
+    pub(super) response: oneshot::Sender<Result<CodeModeToolResult, String>>,
 }
 
 #[derive(Default)]

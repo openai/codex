@@ -8,6 +8,7 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
@@ -40,7 +41,7 @@ impl CodeModeSessionDelegate for SlowDelegate {
     ) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
             tokio::select! {
-                _ = self.release.notified() => Ok(json!("slow")),
+                _ = self.release.notified() => Ok(CodeModeToolResult::from(json!("slow"))),
                 _ = cancellation.cancelled() => Err("cancelled".to_string()),
             }
         })

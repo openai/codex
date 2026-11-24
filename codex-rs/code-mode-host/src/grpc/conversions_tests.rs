@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::MissingCodeModeHostDuration;
@@ -12,7 +13,23 @@ use tonic::Code;
 
 use super::execute_request;
 use super::execution_outcome;
+use super::tool_result;
 use super::wait_response;
+
+#[test]
+fn missing_and_unknown_tool_result_formats_preserve_plain_json() {
+    let value = serde_json::json!({"content": [], "structuredContent": {}});
+    for result_format in [0, i32::MAX] {
+        let reply = proto::ToolCallSucceeded {
+            output_json: serde_json::to_vec(&value).unwrap(),
+            result_format,
+        };
+        assert_eq!(
+            tool_result(&reply).unwrap(),
+            CodeModeToolResult::Json(value.clone())
+        );
+    }
+}
 
 #[test]
 fn rejects_missing_names_unknown_tool_kinds_and_invalid_json_schemas() {

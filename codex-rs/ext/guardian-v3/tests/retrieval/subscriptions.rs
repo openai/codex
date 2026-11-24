@@ -96,7 +96,7 @@ async fn subscription_tools_only_change_the_callers_channels() -> anyhow::Result
         let result = tool.handle(call.clone()).await;
         if succeeds {
             let result = result?;
-            let response = result.code_mode_result(&call.payload);
+            let response = result.code_mode_result(&call.payload).into_json();
             assert_eq!(result.log_output(), response.to_string());
             assert_eq!(
                 response,

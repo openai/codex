@@ -101,7 +101,7 @@ async fn discovery_and_calls_reuse_board_schemas_identity_and_bounded_results() 
             .await
             .unwrap();
         let mut expected =
-            CallToolResult::structured(native_read.code_mode_result(&payload.payload));
+            CallToolResult::structured(native_read.code_mode_result(&payload.payload).into_json());
         // The negotiated legacy wire format omits the newer resultType discriminator.
         expected.result_type = None;
         assert_eq!(read, expected);

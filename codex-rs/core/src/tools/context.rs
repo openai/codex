@@ -7,6 +7,7 @@ use crate::tools::executed_tool_calls::PendingResultBody;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::output::CapturedStream;
 use crate::unified_exec::resolve_max_tokens;
+use codex_code_mode::CodeModeToolResult;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::ResponseItemId;
 use codex_protocol::mcp::CallToolResult;
@@ -215,7 +216,7 @@ impl ToolOutput for McpToolOutput {
         }
     }
 
-    fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
+    fn code_mode_result(&self, payload: &ToolPayload) -> CodeModeToolResult {
         self.result.code_mode_result(payload)
     }
 
@@ -402,8 +403,8 @@ impl ToolOutput for ApplyPatchToolOutput {
         Some(JsonValue::String(self.text.clone()))
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        JsonValue::Object(serde_json::Map::new())
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
+        CodeModeToolResult::from(JsonValue::Object(serde_json::Map::new()))
     }
 }
 
@@ -514,7 +515,7 @@ impl ToolOutput for ExecCommandToolOutput {
         ))
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -541,9 +542,10 @@ impl ToolOutput for ExecCommandToolOutput {
             },
         };
 
-        serde_json::to_value(result).unwrap_or_else(|err| {
+        let value = serde_json::to_value(result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize exec result: {err}"))
-        })
+        });
+        CodeModeToolResult::from(value)
     }
 }
 

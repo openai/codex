@@ -12,6 +12,7 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_code_mode::CodeModeToolResult;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
 use codex_protocol::items::CollabAgentToolCallStatus;
@@ -23,7 +24,6 @@ use codex_protocol::protocol::SubAgentActivityKind;
 use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
 
 pub(crate) use followup_task::Handler as FollowupTaskHandler;
 pub(crate) use interrupt_agent::Handler as InterruptAgentHandler;

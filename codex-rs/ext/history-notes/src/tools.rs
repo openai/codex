@@ -33,6 +33,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::HistoryToolMessages;
 use codex_protocol::openai_models::NotesToolMessages;
 use codex_protocol::openai_models::ToolMessage;
+use codex_tools::CodeModeToolResult;
 use codex_tools::JsonToolOutput;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -300,8 +301,10 @@ impl ToolOutput for HistoryNotesToolOutput {
         }
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
-        Value::String("History tools are unavailable in code mode.".to_string())
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
+        CodeModeToolResult::from(Value::String(
+            "History tools are unavailable in code mode.".to_string(),
+        ))
     }
 }
 

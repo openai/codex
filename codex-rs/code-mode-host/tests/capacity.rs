@@ -7,6 +7,7 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
@@ -42,7 +43,7 @@ impl CodeModeSessionDelegate for BlockingDelegate {
             tokio::select! {
                 permit = self.release.acquire() => {
                     permit.map_err(|error| error.to_string())?.forget();
-                    Ok(json!("done"))
+                    Ok(CodeModeToolResult::from(json!("done")))
                 }
                 _ = cancellation.cancelled() => Err("cancelled".to_string()),
             }

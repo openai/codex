@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::grpc;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::FutureExt;
@@ -206,7 +207,7 @@ impl SessionInner {
         &self,
         invocation_id: String,
         cancellation: CancellationToken,
-        result: Result<serde_json::Value, String>,
+        result: Result<CodeModeToolResult, String>,
     ) {
         let request = completion::request(&self.id, &invocation_id, result);
         tokio::select! {

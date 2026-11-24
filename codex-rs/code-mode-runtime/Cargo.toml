@@ -23,7 +23,9 @@ codex-utils-string = { workspace = true }
 deno_core_icudata = { workspace = true }
 futures = { workspace = true, features = ["executor", "std"] }
 opentelemetry = { workspace = true }
-serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_with = { workspace = true, features = ["macros"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["codec", "compat", "rt"] }
 tracing = { workspace = true }

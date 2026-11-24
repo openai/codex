@@ -7,6 +7,7 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::RuntimeResponse;
@@ -52,7 +53,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
             self.contexts
                 .send(codex_otel::current_span_w3c_trace_context().expect("context after await"))
                 .expect("context receiver remains open");
-            Ok(serde_json::json!("ready"))
+            Ok(CodeModeToolResult::from(serde_json::json!("ready")))
         })
     }
 

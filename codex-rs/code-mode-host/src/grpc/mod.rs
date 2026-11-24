@@ -193,11 +193,9 @@ impl GrpcCodeModeHost {
         let session = self.state.session(&request.session_id)?;
         let invocation_id = validation::uuid(&request.invocation_id, "tool invocation ID")?;
         let result = match request.outcome {
-            Some(proto::complete_tool_call_request::Outcome::Succeeded(result)) => Ok(
-                serde_json::from_slice(&result.output_json).map_err(|error| {
-                    Status::invalid_argument(format!("invalid code-mode tool output JSON: {error}"))
-                })?,
-            ),
+            Some(proto::complete_tool_call_request::Outcome::Succeeded(result)) => {
+                Ok(conversions::tool_result(&result)?)
+            }
             Some(proto::complete_tool_call_request::Outcome::Failed(error)) => Err(error.message),
             None => {
                 return Err(Status::invalid_argument(

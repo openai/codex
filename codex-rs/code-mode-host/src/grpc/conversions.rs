@@ -1,6 +1,7 @@
 use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
@@ -86,6 +87,17 @@ fn tool_definition(definition: proto::ToolDefinition) -> Result<ToolDefinition, 
         input_schema: json_field(definition.input_schema_json, "input schema")?,
         input_schema_max_bytes: None,
         output_schema: json_field(definition.output_schema_json, "output schema")?,
+    })
+}
+
+/// Prost defaults missing or unrecognized formats to plain JSON.
+pub(super) fn tool_result(result: &proto::ToolCallSucceeded) -> Result<CodeModeToolResult, Status> {
+    let value = serde_json::from_slice(&result.output_json).map_err(|error| {
+        Status::invalid_argument(format!("invalid code-mode tool output JSON: {error}"))
+    })?;
+    Ok(match result.result_format() {
+        proto::ToolResultFormat::Json => CodeModeToolResult::Json(value),
+        proto::ToolResultFormat::McpCallToolResult => CodeModeToolResult::McpCallToolResult(value),
     })
 }
 

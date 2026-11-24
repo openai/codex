@@ -141,7 +141,7 @@ impl ToolOutput for CloseAgentResult {
         tool_output_response_item(call_id, payload, self, Some(true), "close_agent")
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
         tool_output_code_mode_result(self, "close_agent")
     }
 }

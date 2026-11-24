@@ -5,6 +5,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_code_mode::CodeModeToolResult;
 use codex_otel::SessionTelemetry;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -54,13 +55,14 @@ where
         .to_response_item(call_id, payload)
 }
 
-pub(crate) fn tool_output_code_mode_result<T>(value: &T, tool_name: &str) -> JsonValue
+pub(crate) fn tool_output_code_mode_result<T>(value: &T, tool_name: &str) -> CodeModeToolResult
 where
     T: Serialize,
 {
-    serde_json::to_value(value).unwrap_or_else(|err| {
+    let value = serde_json::to_value(value).unwrap_or_else(|err| {
         JsonValue::String(format!("failed to serialize {tool_name} result: {err}"))
-    })
+    });
+    CodeModeToolResult::from(value)
 }
 
 pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {

@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::sync::PoisonError;
 
 use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_protocol::ToolName;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use prost::Message;
-use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
@@ -92,7 +92,7 @@ impl GrpcSession {
         execution_id: String,
         invocation_id: Uuid,
         input_json: Option<Vec<u8>>,
-        response: oneshot::Sender<Result<JsonValue, String>>,
+        response: oneshot::Sender<Result<CodeModeToolResult, String>>,
         cancellation: &CancellationToken,
     ) -> Result<(), String> {
         let cell_id = invocation.cell_id.to_string();
@@ -215,7 +215,7 @@ impl GrpcSession {
     pub(super) fn complete_invocation(
         &self,
         invocation_id: Uuid,
-        result: Result<JsonValue, String>,
+        result: Result<CodeModeToolResult, String>,
     ) -> Result<(), Status> {
         let response = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);

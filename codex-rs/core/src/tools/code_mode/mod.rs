@@ -20,7 +20,9 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::RuntimeResponse;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_tool_call_id::ToolCallId;
@@ -358,7 +360,7 @@ fn submit_nested_tool(
     call_id: ToolCallId,
     cancellation_token: CancellationToken,
 ) -> Result<
-    impl std::future::Future<Output = Result<JsonValue, FunctionCallError>> + Send + 'static,
+    impl std::future::Future<Output = Result<CodeModeToolResult, FunctionCallError>> + Send + 'static,
     FunctionCallError,
 > {
     let dispatch_started = std::time::Instant::now();
@@ -423,6 +425,11 @@ fn submit_nested_tool(
             call_id: call.call_id.to_string(),
             cell_id: cell_id.to_string(),
         });
+    let dedup_mcp_result = step_context
+        .turn
+        .config
+        .features
+        .enabled(Feature::CodeModeMcpResultDedup);
     let result = tool_runtime.handle_tool_call_with_source(
         step_context,
         call,
@@ -433,7 +440,14 @@ fn submit_nested_tool(
         cancellation_token,
         Arc::default(),
     );
-    Ok(async move { Ok(result.await?.code_mode_result()) })
+    Ok(async move {
+        Ok(match result.await?.code_mode_result() {
+            CodeModeToolResult::McpCallToolResult(value) if !dedup_mcp_result => {
+                CodeModeToolResult::Json(value)
+            }
+            result => result,
+        })
+    })
 }
 
 fn build_nested_tool_payload(

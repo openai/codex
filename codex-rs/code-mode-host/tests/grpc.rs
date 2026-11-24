@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::PoisonError;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
+use codex_code_mode::CodeModeToolResult;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
@@ -213,6 +215,103 @@ async fn grpc_endpoints_reject_credentials_without_disclosing_them() {
         assert!(!error.contains("alice"));
         assert!(!error.contains("secret"));
     }
+}
+
+#[tokio::test]
+async fn text_omits_duplicate_fallback_only_for_the_original_mcp_result() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let session = GrpcCodeModeSessionProvider::new(host.endpoint)
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let fallback = r#"{ "rows": [ { "z": "ok", "a": 1.0 } ] }"#;
+    let raw = json!({
+        "content": [{"type": "text", "text": fallback}],
+        "structuredContent": {"rows": [{"a": 1, "z": "ok"}]},
+        "isError": false,
+    });
+    let mut req = request(
+        r#"
+const [mcp, plain] = await Promise.all([
+    tools.lookup({ format: "mcp" }),
+    tools.lookup({ format: "json" }),
+]);
+text(mcp);
+text(mcp);
+text(JSON.stringify(mcp));
+text({ ...mcp });
+text(plain);
+store("saved", mcp);
+text(load("saved"));
+await tools.lookup(mcp);
+content(mcp.content);
+mcp.structuredContent = { edited: true };
+text(mcp);
+mcp.toJSON = function () { delete this.toJSON; return plain; };
+text(mcp);
+let reads = 0;
+Object.setPrototypeOf(mcp, {
+    get toJSON() {
+        reads++;
+        return () => plain;
+    },
+});
+text(mcp);
+text(reads);
+"#,
+    );
+    req.enabled_tools = vec![tool("lookup")];
+    let delegate = Arc::new(RecordingDelegate {
+        results_by_input: HashMap::from([
+            (
+                json!({"format": "mcp"}),
+                CodeModeToolResult::McpCallToolResult(raw.clone()),
+            ),
+            (
+                json!({"format": "json"}),
+                CodeModeToolResult::Json(raw.clone()),
+            ),
+        ]),
+        ..Default::default()
+    });
+    let response = execute(&session, req, delegate.clone()).await?;
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: None,
+        ..
+    } = response
+    else {
+        panic!("unexpected response {response:?}");
+    };
+    let reduced = json!({"structuredContent": raw["structuredContent"], "isError": false});
+    let mut edited = raw.clone();
+    edited["structuredContent"] = json!({"edited": true});
+    let expected = [
+        reduced.to_string(),
+        reduced.to_string(),
+        raw.to_string(),
+        raw.to_string(),
+        raw.to_string(),
+        raw.to_string(),
+        fallback.to_string(),
+        edited.to_string(),
+        raw.to_string(),
+        raw.to_string(),
+        "1".to_string(),
+    ]
+    .map(|text| FunctionCallOutputContentItem::InputText { text });
+    assert_eq!(content_items, expected);
+    assert_eq!(
+        delegate
+            .invocations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last()
+            .and_then(|call| call.input.as_ref()),
+        Some(&raw)
+    );
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
 }
 
 #[tokio::test]

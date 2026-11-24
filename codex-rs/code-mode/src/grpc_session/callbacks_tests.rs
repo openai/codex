@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use codex_code_mode_protocol::CodeModeOutputTruncation;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::grpc;
 use http_body_util::Full;
 use pretty_assertions::assert_eq;
@@ -42,7 +43,7 @@ async fn missing_invocation_completion_racing_cancellation_preserves_session() {
         .complete_tool_call(
             "invocation".to_string(),
             cancellation,
-            Ok(serde_json::Value::Null),
+            Ok(CodeModeToolResult::from(serde_json::Value::Null)),
         )
         .await;
 
@@ -104,7 +105,7 @@ async fn cancelled_completion_does_not_wait_for_delivery_capacity() {
     let completion = session.complete_tool_call(
         "queued".to_string(),
         cancellation.clone(),
-        Ok(serde_json::Value::Null),
+        Ok(CodeModeToolResult::from(serde_json::Value::Null)),
     );
     tokio::pin!(completion);
     assert!(futures::poll!(completion.as_mut()).is_pending());

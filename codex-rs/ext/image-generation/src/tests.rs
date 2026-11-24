@@ -604,7 +604,7 @@ fn generated_output_returns_generated_image_helper_input_in_code_mode() {
     };
 
     assert_eq!(
-        output.code_mode_result(&function_payload()),
+        output.code_mode_result(&function_payload()).into_json(),
         serde_json::json!({
             "image_url": format!("data:image/png;base64,{RESULT}"),
             "output_hint": "generated image save hint",
@@ -621,7 +621,7 @@ fn generated_output_omits_oversized_output_hint() {
     };
 
     assert_eq!(
-        output.code_mode_result(&function_payload()),
+        output.code_mode_result(&function_payload()).into_json(),
         serde_json::json!({
             "image_url": format!("data:image/png;base64,{RESULT}"),
         })

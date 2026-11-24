@@ -18,6 +18,7 @@ use crate::FunctionCallOutputContentItem;
 use crate::ToolDefinition;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
+use codex_code_mode_protocol::CodeModeToolResult;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_protocol::ToolName;
@@ -500,7 +501,7 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
         self.tool_started.notify_one();
         Box::pin(async move {
             tokio::select! {
-                _ = self.tool_release.notified() => Ok(JsonValue::Null),
+                _ = self.tool_release.notified() => Ok(CodeModeToolResult::from(JsonValue::Null)),
                 _ = cancellation_token.cancelled() => Err("cancelled".to_string()),
             }
         })

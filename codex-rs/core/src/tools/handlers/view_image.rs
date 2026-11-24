@@ -1,3 +1,4 @@
+use codex_code_mode::CodeModeToolResult;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_protocol::items::ImageViewItem;
@@ -273,15 +274,16 @@ impl ToolOutput for ViewImageOutput {
         }
     }
 
-    fn code_mode_result(&self, _payload: &ToolPayload) -> serde_json::Value {
-        if self.unified_image_budget {
+    fn code_mode_result(&self, _payload: &ToolPayload) -> CodeModeToolResult {
+        let value = if self.unified_image_budget {
             serde_json::json!({ "image_url": self.image_url })
         } else {
             serde_json::json!({
                 "image_url": self.image_url,
                 "detail": self.image_detail
             })
-        }
+        };
+        CodeModeToolResult::from(value)
     }
 }
 
@@ -365,9 +367,11 @@ mod tests {
             unified_image_budget: false,
         };
 
-        let result = output.code_mode_result(&ToolPayload::Function {
-            arguments: "{}".to_string(),
-        });
+        let result = output
+            .code_mode_result(&ToolPayload::Function {
+                arguments: "{}".to_string(),
+            })
+            .into_json();
 
         assert_eq!(
             result,

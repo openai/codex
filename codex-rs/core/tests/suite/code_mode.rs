@@ -7423,6 +7423,54 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     Ok(())
 }
 
+#[test_case(false; "default")]
+#[test_case(true; "enabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_deduplicates_printed_mcp_results_only_when_enabled(enabled: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount_searchable(&server).await?;
+    let result = serde_json::json!({
+        "isError": false,
+        "content": [{"type": "text", "text": r#"{"timezone":"UTC"}"#}],
+        "structuredContent": {"timezone": "UTC"},
+    });
+    let mut expected = result.clone();
+    if enabled {
+        expected.as_object_mut().unwrap().remove("content");
+    }
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "tools/call", "params": {"name": "calendar_timezone_option_99"}
+        })))
+        .respond_with(move |request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": body["id"], "result": result
+            }))
+        })
+        .with_priority(/*p*/ 1)
+        .mount(&server)
+        .await;
+    let builder = search_capable_apps_builder(apps.chatgpt_base_url).with_config(move |config| {
+        config.features.enable(Feature::CodeModeOnly).unwrap();
+        if enabled {
+            config
+                .features
+                .enable(Feature::CodeModeMcpResultDedup)
+                .unwrap();
+        }
+    });
+    let code =
+        r#"text(await tools.mcp__codex_apps__calendar_timezone_option_99({ timezone: "UTC" }));"#;
+    let (_test, follow_up) =
+        run_code_mode_turn_with_builder(&server, "Check the timezone", code, builder).await?;
+    let (output, _) = custom_tool_output_body_and_success(&follow_up.single_request(), "call-1");
+    assert_eq!(serde_json::from_str::<Value>(&output)?, expected);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_structured_mcp_tool_result_fields() -> Result<()> {
     skip_if_no_network!(Ok(()));

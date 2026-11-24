@@ -433,7 +433,7 @@ impl CoreToolRuntime for McpHandler {
             return;
         }
 
-        let result = result.code_mode_result(&invocation.payload);
+        let result = result.code_mode_result(&invocation.payload).into_json();
         let Some(content) = result.get("content").and_then(Value::as_array) else {
             return;
         };

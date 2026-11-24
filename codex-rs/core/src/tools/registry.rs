@@ -31,6 +31,7 @@ use crate::tools::router::tool_log_payload;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_analytics::ControlToolCallStatus;
+use codex_code_mode::CodeModeToolResult;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolPolicy;
 use codex_history::CodexHarnessMetadata;
@@ -357,7 +358,7 @@ impl AnyToolResult {
         }
     }
 
-    pub(crate) fn code_mode_result(self) -> serde_json::Value {
+    pub(crate) fn code_mode_result(self) -> CodeModeToolResult {
         let Self {
             payload, result, ..
         } = self;
@@ -391,7 +392,7 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         self.model_visible.to_response_item(call_id, payload)
     }
 
-    fn code_mode_result(&self, payload: &ToolPayload) -> Value {
+    fn code_mode_result(&self, payload: &ToolPayload) -> CodeModeToolResult {
         self.original.code_mode_result(payload)
     }
 
