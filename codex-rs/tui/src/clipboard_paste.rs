@@ -3,6 +3,8 @@
 #[cfg(target_os = "macos")]
 mod macos;
 pub(crate) mod text;
+#[cfg(windows)]
+mod windows;
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -123,6 +125,11 @@ fn read_clipboard_image(
     #[cfg(target_os = "macos")]
     if let Some(image) = macos::clipboard_image() {
         return Ok(image);
+    }
+
+    #[cfg(windows)]
+    if let Some(result) = windows::clipboard_image() {
+        return result;
     }
 
     let _span = tracing::debug_span!("get_image").entered();
