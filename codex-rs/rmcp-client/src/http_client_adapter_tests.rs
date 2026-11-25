@@ -708,3 +708,618 @@ async fn rejection_of_a_reply_cannot_answer_a_request_with_the_same_id() -> anyh
     }
     Ok(())
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reply404Case {
+    Reconnect,
+    UnboundedInitializedFailure,
+    ReconnectTimeout,
+    ReplacementExpired,
+    InitializedTimeout,
+    InitializeSseTimeout,
+    InitializeSseSuccess,
+    SaturatedShutdown,
+}
+
+struct FloodGateHttpClient {
+    inner: codex_exec_server::RouteAwareHttpClient,
+    started: tokio::sync::Notify,
+    release: tokio_util::sync::CancellationToken,
+    expiry_started: tokio::sync::Notify,
+    expiry_release: tokio_util::sync::CancellationToken,
+    stall_initialize_sse: bool,
+}
+
+impl codex_exec_server::HttpClient for FloodGateHttpClient {
+    fn http_request(
+        &self,
+        params: codex_exec_server::HttpRequestParams,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<codex_exec_server::HttpRequestResponse, codex_exec_server::ExecServerError>,
+    > {
+        codex_exec_server::HttpClient::http_request(&self.inner, params)
+    }
+
+    fn http_request_stream(
+        &self,
+        params: codex_exec_server::HttpRequestParams,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            (
+                codex_exec_server::HttpRequestResponse,
+                codex_exec_server::HttpResponseBodyStream,
+            ),
+            codex_exec_server::ExecServerError,
+        >,
+    > {
+        let body = params
+            .body
+            .as_ref()
+            .and_then(|body| serde_json::from_slice::<serde_json::Value>(&body.0).ok());
+        let flood = body.as_ref().is_some_and(|body| {
+            body["method"] == "tools/call" && body["params"]["name"] == "flood"
+        });
+        let fresh = body.as_ref().is_some_and(|body| {
+            body["method"] == "tools/call" && body["params"]["name"] == "fresh"
+        });
+        let expiry = body
+            .as_ref()
+            .is_some_and(|body| body.get("method").is_none() && body["id"] == "prompt-1");
+        let initialize = body
+            .as_ref()
+            .is_some_and(|body| body["method"] == "initialize");
+        Box::pin(async move {
+            let pending_params = (self.stall_initialize_sse && initialize).then(|| params.clone());
+            let mut response =
+                codex_exec_server::HttpClient::http_request_stream(&self.inner, params).await?;
+            if let Some(mut pending_params) = pending_params
+                && response.0.headers.iter().any(|header| {
+                    header.name.eq_ignore_ascii_case("mcp-session-id")
+                        && header.value == "new-session"
+                })
+            {
+                use tokio::io::AsyncWriteExt as _;
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                pending_params.url = format!("http://{}", listener.local_addr().unwrap());
+                // Only the recovery deadline should terminate this stalled body.
+                pending_params.timeout_ms = None;
+                tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+                        .await
+                        .unwrap();
+                    let _ = tokio::io::copy(&mut socket, &mut tokio::io::sink()).await;
+                });
+                response.1 =
+                    codex_exec_server::HttpClient::http_request_stream(&self.inner, pending_params)
+                        .await?
+                        .1;
+            }
+            if expiry && !self.expiry_release.is_cancelled() {
+                self.expiry_started.notify_one();
+                self.expiry_release.cancelled().await;
+            }
+            if flood || (fresh && !self.release.is_cancelled()) {
+                self.started.notify_one();
+                self.release.cancelled().await;
+            }
+            Ok(response)
+        })
+    }
+}
+
+#[tokio::test]
+async fn reply_404_closes_two_calls_with_a_full_inbound_queue() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::SaturatedShutdown).await
+}
+
+#[tokio::test]
+async fn reply_404_closes_parent_without_replay() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::Reconnect).await
+}
+
+#[tokio::test]
+async fn unbounded_recovery_cleans_up_failed_initialization() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::UnboundedInitializedFailure).await
+}
+
+#[tokio::test]
+async fn fresh_tool_timeout_includes_session_recovery_handshake() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::ReconnectTimeout).await
+}
+
+#[tokio::test]
+async fn replacement_404_fails_without_another_reconnect() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::ReplacementExpired).await
+}
+
+#[tokio::test]
+async fn cancelled_initialized_notification_deletes_allocated_session() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::InitializedTimeout).await
+}
+
+#[tokio::test]
+async fn cancelled_recovery_initialize_sse_deletes_allocated_session() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::InitializeSseTimeout).await
+}
+
+#[tokio::test]
+async fn healthy_recovery_initialize_sse_keeps_allocated_session() -> anyhow::Result<()> {
+    reply_404_recovery(Reply404Case::InitializeSseSuccess).await
+}
+
+async fn reply_404_recovery(case: Reply404Case) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use codex_exec_server::RouteAwareHttpClient;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use rmcp::model::ClientCapabilities;
+    use rmcp::model::ElicitationAction;
+    use rmcp::model::Implementation;
+    use rmcp::model::InitializeRequestParams;
+    use rmcp::model::ProtocolVersion;
+    use serde_json::Value;
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use tokio::sync::Notify;
+    use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
+    use tokio::time::timeout;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::Request;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    let initializations = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&initializations);
+    let slow_started = Arc::new(Notify::new());
+    let on_slow = Arc::clone(&slow_started);
+    let sibling_started = Arc::new(Notify::new());
+    let on_sibling = Arc::clone(&sibling_started);
+    Mock::given(method("POST")).and(path("/mcp")).respond_with(move |request: &Request| {
+        let body: Value = request.body_json().unwrap();
+        let session = request.headers.get("mcp-session-id").and_then(|value| value.to_str().ok());
+        match body["method"].as_str() {
+            Some("initialize") => {
+                let n = count.fetch_add(1, Ordering::Relaxed);
+                let body = json!({
+                    "jsonrpc":"2.0", "id":body["id"], "result":{
+                        "protocolVersion":body["params"]["protocolVersion"], "capabilities":{"tools":{}}, "serverInfo":{"name":"fixture","version":"1"}
+                    }
+                });
+                let result = ResponseTemplate::new(200).insert_header("mcp-session-id", if n == 0 {"old-session"} else if n > 1 && case == Reply404Case::InitializeSseTimeout {"followup-session"} else {"new-session"});
+                let result = if n == 1 && matches!(case, Reply404Case::InitializeSseTimeout | Reply404Case::InitializeSseSuccess) { result.set_body_raw(format!("event: message\ndata: {body}\n\n"), "text/event-stream") } else { result.set_body_json(body) };
+                if n == 1 && case == Reply404Case::ReconnectTimeout { result.set_delay(Duration::from_secs(2)) } else { result }
+            }
+            Some("notifications/initialized") if count.load(Ordering::Relaxed) == 2 && case == Reply404Case::InitializedTimeout => ResponseTemplate::new(202).set_delay(Duration::from_secs(2)),
+            Some("notifications/initialized") if count.load(Ordering::Relaxed) == 2 && case == Reply404Case::UnboundedInitializedFailure => ResponseTemplate::new(200).set_body_raw("", "text/event-stream"),
+            Some("notifications/initialized") => ResponseTemplate::new(202),
+            Some("tools/call") if body["params"]["name"] == "wait" => {
+                let prompt = json!({"jsonrpc":"2.0","id":"prompt-1","method":"elicitation/create","params":{
+                    "mode":"form","message":"Continue?","requestedSchema":{"type":"object","properties":{}}
+                }});
+                let mut events = format!("retry: 1\nid: cursor-1\nevent: message\ndata: {prompt}\n\n");
+                if case == Reply404Case::SaturatedShutdown {
+                    let mut second = prompt;
+                    second["id"] = json!("prompt-2");
+                    events.push_str(&format!("event: message\ndata: {second}\n\n"));
+                }
+                ResponseTemplate::new(200).set_body_raw(events,"text/event-stream")
+            }
+            Some("tools/call") if body["params"]["name"] == "sibling" => {
+                on_sibling.notify_one();
+                ResponseTemplate::new(200).set_delay(Duration::from_secs(30))
+            }
+            Some("tools/call") if body["params"]["name"] == "flood" => {
+                let event = json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"});
+                ResponseTemplate::new(200).set_body_raw(format!("event: message\ndata: {event}\n\n").repeat(64),"text/event-stream")
+            }
+            Some("tools/call") if session == Some("old-session") || (case == Reply404Case::ReplacementExpired && body["params"]["name"] == "fresh") => ResponseTemplate::new(404),
+            Some("tools/call") => ResponseTemplate::new(200).set_body_json(json!({"jsonrpc":"2.0","id":body["id"],"result":{"content":[{"type":"text","text":"fresh succeeded"}]}})),
+            None if body["id"] == "prompt-1" => ResponseTemplate::new(404),
+            None if body["id"] == "prompt-2" => {
+                on_slow.notify_one();
+                ResponseTemplate::new(202).set_delay(Duration::from_secs(30))
+            }
+            _ => ResponseTemplate::new(400),
+        }
+    }).mount(&server).await;
+    let resumed = Arc::new(Notify::new());
+    let on_resume = Arc::clone(&resumed);
+    let resumes = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            if request
+                .headers
+                .get("last-event-id")
+                .is_some_and(|id| id == "cursor-1")
+            {
+                if resumes.fetch_add(1, Ordering::Relaxed) > 0 {
+                    on_resume.notify_one();
+                }
+                ResponseTemplate::new(404)
+            } else {
+                ResponseTemplate::new(405)
+            }
+        })
+        .mount(&server)
+        .await;
+    let deleted = Arc::new(Notify::new());
+    let old_deleted = Arc::new(Notify::new());
+    let on_delete = Arc::clone(&deleted);
+    let on_old_delete = Arc::clone(&old_deleted);
+    Mock::given(method("DELETE"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            if request
+                .headers
+                .get("mcp-session-id")
+                .is_some_and(|id| id == "new-session")
+            {
+                on_delete.notify_one();
+            } else {
+                on_old_delete.notify_one();
+            }
+            ResponseTemplate::new(200)
+        })
+        .mount(&server)
+        .await;
+
+    let http = Arc::new(FloodGateHttpClient {
+        inner: RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        )),
+        started: Notify::new(),
+        release: Default::default(),
+        expiry_started: Notify::new(),
+        expiry_release: Default::default(),
+        stall_initialize_sse: case == Reply404Case::InitializeSseTimeout,
+    });
+    if case != Reply404Case::SaturatedShutdown {
+        http.expiry_release.cancel();
+    }
+    if !matches!(
+        case,
+        Reply404Case::SaturatedShutdown | Reply404Case::ReplacementExpired
+    ) {
+        http.release.cancel();
+    }
+    let client = Arc::new(
+        crate::RmcpClient::new_streamable_http_client(
+            "fixture",
+            &format!("{}/mcp", server.uri()),
+            Some("fixture-token".to_string()),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Default::default(),
+            Default::default(),
+            http.clone(),
+            /*auth_provider*/ None,
+        )
+        .await?,
+    );
+    let (route_tx, mut route_rx) = mpsc::unbounded_channel();
+    client
+        .initialize(
+            InitializeRequestParams::new(
+                ClientCapabilities::default(),
+                Implementation::new("codex-test", "1"),
+            )
+            .with_protocol_version(ProtocolVersion::V_2025_11_25),
+            Some(Duration::from_secs(5)),
+            Box::new(move |_, _| {
+                let (tx, rx) = oneshot::channel();
+                let (ready_tx, ready_rx) = oneshot::channel();
+                route_tx.send((tx, ready_rx)).unwrap();
+                Box::pin(async move {
+                    let response = rx.await?;
+                    let _ = ready_tx.send(());
+                    Ok(response)
+                })
+            }),
+        )
+        .await?;
+    let parent_client = Arc::clone(&client);
+    let parent = tokio::spawn(async move {
+        parent_client
+            .call_tool(
+                "wait".into(),
+                /*arguments*/ None,
+                |_| Ok(None),
+                Some(Duration::from_secs(
+                    if case == Reply404Case::SaturatedShutdown {
+                        20
+                    } else {
+                        5
+                    },
+                )),
+            )
+            .await
+    });
+    let (reply, _) = timeout(Duration::from_secs(3), route_rx.recv())
+        .await?
+        .expect("elicitation reached user");
+    timeout(Duration::from_secs(3), resumed.notified()).await?;
+    assert!(
+        !parent.is_finished(),
+        "resume 404 must not complete the parent before the user replies"
+    );
+    let (flood, second) = if case == Reply404Case::SaturatedShutdown {
+        let second = timeout(Duration::from_secs(3), route_rx.recv())
+            .await
+            .context("second elicitation was not routed")?
+            .expect("second elicitation reached user");
+        let flood_client = Arc::clone(&client);
+        let flood = tokio::spawn(async move {
+            flood_client
+                .call_tool(
+                    "flood".into(),
+                    /*arguments*/ None,
+                    |_| Ok(None),
+                    Some(Duration::from_secs(20)),
+                )
+                .await
+        });
+        timeout(Duration::from_secs(3), http.started.notified())
+            .await
+            .context("flood did not reach HTTP gate")?;
+        (Some(flood), Some(second))
+    } else {
+        (None, None)
+    };
+    reply
+        .send(crate::ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(json!({})),
+            meta: None,
+        })
+        .unwrap();
+    if let Some((second_reply, ready)) = second {
+        timeout(Duration::from_secs(3), http.expiry_started.notified())
+            .await
+            .context("first reply POST did not reach expiry gate")?;
+        second_reply
+            .send(crate::ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: Some(json!({})),
+                meta: None,
+            })
+            .unwrap();
+        timeout(Duration::from_secs(3), ready)
+            .await
+            .context("second response handler did not finish")??;
+        http.expiry_release.cancel();
+        timeout(Duration::from_secs(3), slow_started.notified())
+            .await
+            .context("second reply POST did not start")?;
+        timeout(Duration::from_secs(3), async {
+            while !client.is_closed().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("reply 404 did not mark session closed")?;
+        // The service no longer receives; 64 events fill the SDK's 16-message inbound queue while the stalled reply drains.
+        http.release.cancel();
+    }
+    let error = timeout(
+        Duration::from_secs(if flood.is_some() { 9 } else { 3 }),
+        parent,
+    )
+    .await??
+    .expect_err("expired reply cannot replay the original call");
+    assert_eq!(crate::request_error_code(&error), Some("transport_closed"));
+    if let Some(flood) = flood {
+        let error = timeout(Duration::from_secs(1), flood)
+            .await??
+            .expect_err("concurrent old-session call must fail");
+        assert_eq!(crate::request_error_code(&error), Some("transport_closed"));
+        timeout(Duration::from_secs(2), old_deleted.notified())
+            .await
+            .expect("cancelled worker must release the old session");
+        client.shutdown().await;
+        return Ok(());
+    }
+
+    let budget = if case == Reply404Case::InitializeSseTimeout {
+        Duration::from_secs(1)
+    } else if matches!(
+        case,
+        Reply404Case::ReconnectTimeout | Reply404Case::InitializedTimeout
+    ) {
+        Duration::from_millis(250)
+    } else {
+        Duration::from_secs(2)
+    };
+    let fresh_client = Arc::clone(&client);
+    let fresh = tokio::spawn(async move {
+        fresh_client
+            .call_tool(
+                "fresh".into(),
+                /*arguments*/ None,
+                |_| Ok(None),
+                (case != Reply404Case::UnboundedInitializedFailure).then_some(budget),
+            )
+            .await
+    });
+    let sibling = if case == Reply404Case::ReplacementExpired {
+        timeout(Duration::from_secs(3), http.started.notified()).await?;
+        let sibling_client = Arc::clone(&client);
+        let sibling = tokio::spawn(async move {
+            sibling_client
+                .call_tool(
+                    "sibling".into(),
+                    /*arguments*/ None,
+                    |_| Ok(None),
+                    /*timeout*/ None,
+                )
+                .await
+        });
+        timeout(Duration::from_secs(3), sibling_started.notified()).await?;
+        http.release.cancel();
+        Some(sibling)
+    } else {
+        None
+    };
+    let fresh = timeout(Duration::from_secs(3), fresh).await??;
+    match case {
+        Reply404Case::Reconnect
+        | Reply404Case::UnboundedInitializedFailure
+        | Reply404Case::InitializeSseSuccess => {
+            assert_eq!(
+                fresh?.content,
+                vec![rmcp::model::ContentBlock::text("fresh succeeded")]
+            );
+        }
+        Reply404Case::ReconnectTimeout
+        | Reply404Case::InitializedTimeout
+        | Reply404Case::InitializeSseTimeout => {
+            assert_eq!(
+                crate::request_error_code(
+                    &fresh.expect_err("recovery must respect fresh call timeout")
+                ),
+                Some("request_timeout")
+            );
+        }
+        Reply404Case::SaturatedShutdown => unreachable!(),
+        Reply404Case::ReplacementExpired => {
+            assert_eq!(
+                crate::request_error_code(&fresh.expect_err("replacement expired")),
+                Some("transport_error")
+            );
+            assert_eq!(
+                initializations.load(Ordering::Relaxed),
+                2,
+                "fresh call must reconnect only once"
+            );
+        }
+    }
+    if let Some(sibling) = sibling {
+        let error = timeout(Duration::from_secs(8), sibling)
+            .await
+            .context("expired replacement left an unbounded sibling pending")??
+            .expect_err("expired replacement must fail sibling");
+        assert_eq!(crate::request_error_code(&error), Some("transport_closed"));
+    }
+    if matches!(
+        case,
+        Reply404Case::InitializedTimeout
+            | Reply404Case::UnboundedInitializedFailure
+            | Reply404Case::InitializeSseTimeout
+    ) {
+        timeout(Duration::from_secs(2), deleted.notified())
+            .await
+            .expect("allocated session DELETE must be attempted");
+    }
+    if !matches!(
+        case,
+        Reply404Case::Reconnect
+            | Reply404Case::UnboundedInitializedFailure
+            | Reply404Case::InitializeSseSuccess
+    ) {
+        let followup = timeout(
+            Duration::from_secs(1),
+            client.call_tool(
+                "followup".into(),
+                /*arguments*/ None,
+                |_| Ok(None),
+                Some(Duration::from_secs(2)),
+            ),
+        )
+        .await
+        .expect("recovery must release worker and semaphore")?;
+        assert_eq!(
+            followup.content,
+            vec![rmcp::model::ContentBlock::text("fresh succeeded")]
+        );
+    }
+    let requests = server.received_requests().await.unwrap();
+    let posts = requests
+        .iter()
+        .filter(|r| r.method == "POST")
+        .map(|r| (r, r.body_json::<Value>().unwrap()))
+        .collect::<Vec<_>>();
+    let replies = posts
+        .iter()
+        .filter(|(_, body)| body.get("method").is_none())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        replies.len(),
+        1,
+        "no other prompt replies or approval replays"
+    );
+    assert_eq!(replies[0].0.headers["mcp-session-id"], "old-session");
+    assert_eq!(replies[0].1["id"], "prompt-1");
+    assert_eq!(replies[0].1["result"]["action"], "accept");
+    assert_eq!(
+        posts
+            .iter()
+            .filter(|(_, b)| b["method"] == "tools/call" && b["params"]["name"] == "wait")
+            .count(),
+        1
+    );
+    assert_eq!(
+        posts
+            .iter()
+            .filter(|(_, b)| b["method"] == "tools/call" && b["params"]["name"] == "fresh")
+            .count(),
+        usize::from(matches!(
+            case,
+            Reply404Case::Reconnect
+                | Reply404Case::UnboundedInitializedFailure
+                | Reply404Case::ReplacementExpired
+                | Reply404Case::InitializeSseSuccess
+        ))
+    );
+    assert_eq!(
+        initializations.load(Ordering::Relaxed),
+        if matches!(
+            case,
+            Reply404Case::Reconnect | Reply404Case::InitializeSseSuccess
+        ) {
+            2
+        } else {
+            3
+        }
+    );
+    if matches!(
+        case,
+        Reply404Case::InitializedTimeout
+            | Reply404Case::UnboundedInitializedFailure
+            | Reply404Case::InitializeSseTimeout
+    ) {
+        let deletes = requests
+            .iter()
+            .filter(|r| {
+                r.method == "DELETE"
+                    && r.headers
+                        .get("mcp-session-id")
+                        .is_some_and(|id| id == "new-session")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].headers["authorization"], "Bearer fixture-token");
+    }
+    if case == Reply404Case::InitializeSseSuccess {
+        assert!(
+            !requests.iter().any(|request| request.method == "DELETE"
+                && request
+                    .headers
+                    .get("mcp-session-id")
+                    .is_some_and(|id| id == "new-session")),
+            "healthy SSE initialization must not delete the active session"
+        );
+    }
+    client.shutdown().await;
+    Ok(())
+}

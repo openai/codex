@@ -57,6 +57,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::bounded_stdio_transport::MAX_MCP_STDIO_LINE_BYTES;
@@ -71,6 +72,7 @@ const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 const LEGACY_HTTP_PREVALIDATION_ERROR_CODE: ErrorCode = ErrorCode(-32000);
 const EVENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const INITIALIZED_SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamableHttpRedirectMode {
@@ -89,6 +91,7 @@ pub(crate) struct StreamableHttpClientAdapter {
     has_configured_headers: bool,
     redirect_mode: StreamableHttpRedirectMode,
     initialize_deadline: Arc<Mutex<Option<Instant>>>,
+    initialize_cancellation: Option<CancellationToken>,
     // The SDK sends handshakes on its worker without request metadata.
     handshake_trace: Option<W3cTraceContext>,
 }
@@ -141,7 +144,30 @@ impl StreamableHttpClientAdapter {
             has_configured_headers,
             redirect_mode,
             initialize_deadline,
+            initialize_cancellation: None,
             handshake_trace: crate::trace_context::current_w3c_trace_context(),
+        }
+    }
+
+    pub(crate) fn enable_recovery_cancellation(&mut self) -> CancellationToken {
+        self.initialize_cancellation
+            .insert(CancellationToken::new())
+            .clone()
+    }
+
+    async fn cleanup_session(
+        &self,
+        uri: Arc<str>,
+        session: Arc<str>,
+        auth: Option<String>,
+        headers: HashMap<HeaderName, HeaderValue>,
+    ) {
+        let delete = self.delete_session(uri, session, auth, headers);
+        if !matches!(
+            tokio::time::timeout(INITIALIZED_SESSION_CLEANUP_TIMEOUT, delete).await,
+            Ok(Ok(()))
+        ) {
+            tracing::warn!("failed to clean up cancelled MCP initialization session");
         }
     }
 
@@ -150,17 +176,18 @@ impl StreamableHttpClientAdapter {
     }
 }
 
-impl StreamableHttpClient for StreamableHttpClientAdapter {
-    type Error = StreamableHttpClientAdapterError;
-
-    async fn post_message(
+impl StreamableHttpClientAdapter {
+    async fn post_message_inner(
         &self,
         uri: Arc<str>,
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
-    ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+    ) -> std::result::Result<
+        StreamableHttpPostResponse,
+        StreamableHttpError<StreamableHttpClientAdapterError>,
+    > {
         if let JsonRpcMessage::Notification(notification) = &message
             && let ClientNotification::CancelledNotification(cancelled) = &notification.notification
             && let Some(request_id) = cancelled.params.request_id.as_ref()
@@ -228,23 +255,20 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             mcp_method.as_deref(),
             Some("initialize" | "notifications/initialized")
         ) || is_discovery_request;
-        let timeout_ms = if is_handshake_request {
-            self.initialize_deadline
+        let timeout_ms = if is_handshake_request && self.initialize_cancellation.is_none() {
+            let deadline = *self
+                .initialize_deadline
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .map(|deadline| {
-                    u64::try_from(
-                        deadline
-                            .saturating_duration_since(Instant::now())
-                            .as_millis(),
-                    )
-                    .unwrap_or(u64::MAX)
-                    .max(1)
-                })
+                .unwrap_or_else(PoisonError::into_inner);
+            deadline.map(|deadline| {
+                let millis = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis();
+                u64::try_from(millis).unwrap_or(u64::MAX).max(1)
+            })
         } else {
             None
         };
-
         let body = serde_json::to_value(&message).map_err(StreamableHttpError::Deserialize)?;
         let handshake_trace = if is_discovery_request || mcp_method.as_deref() == Some("initialize")
         {
@@ -259,6 +283,25 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         );
         let body = serde_json::to_vec(&body).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
+        let timeout_ms = if is_handshake_request && self.initialize_cancellation.is_some() {
+            let remaining = self
+                .initialize_deadline
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            match remaining {
+                Some(remaining) if remaining.is_zero() => {
+                    return Err(StreamableHttpError::TransportChannelClosed);
+                }
+                Some(remaining) => Some(
+                    u64::try_from(remaining.as_nanos().div_ceil(/*rhs*/ 1_000_000))
+                        .unwrap_or(u64::MAX),
+                ),
+                None => None,
+            }
+        } else {
+            timeout_ms
+        };
 
         let request = self
             .http_client
@@ -536,6 +579,100 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 ))))
             }
         }
+    }
+}
+
+impl StreamableHttpClient for StreamableHttpClientAdapter {
+    type Error = StreamableHttpClientAdapterError;
+
+    async fn post_message(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let Some(initialize_cancellation) = &self.initialize_cancellation else {
+            return self
+                .post_message_inner(uri, message, session_id, auth_token, custom_headers)
+                .await;
+        };
+        let method = match &message {
+            JsonRpcMessage::Request(request) => Some(request.request.method()),
+            JsonRpcMessage::Notification(notification) => match &notification.notification {
+                ClientNotification::InitializedNotification(notification) => {
+                    Some(notification.method.as_str())
+                }
+                ClientNotification::CustomNotification(notification) => {
+                    Some(notification.method.as_str())
+                }
+                _ => None,
+            },
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_) => None,
+        };
+        let handshake = matches!(method, Some("initialize" | "notifications/initialized"))
+            || method == Some(DiscoverRequestMethod::VALUE);
+        let initialize_cleanup = (method == Some("initialize"))
+            .then(|| (Arc::clone(&uri), auth_token.clone(), custom_headers.clone()));
+        let cleanup = session_id
+            .as_ref()
+            .filter(|_| method == Some("notifications/initialized"))
+            .map(|session| {
+                (
+                    Arc::clone(&uri),
+                    Arc::clone(session),
+                    auth_token.clone(),
+                    custom_headers.clone(),
+                )
+            });
+        let post = self.post_message_inner(uri, message, session_id, auth_token, custom_headers);
+        let result = if handshake {
+            tokio::select! {
+                biased;
+                _ = initialize_cancellation.cancelled() => {
+                    Err(StreamableHttpError::TransportChannelClosed)
+                }
+                result = post => result,
+            }
+        } else {
+            post.await
+        };
+        let result = match result {
+            Ok(StreamableHttpPostResponse::Sse(events, session)) if handshake => {
+                let cancelled = initialize_cancellation.clone().cancelled_owned();
+                let events = events.take_until(cancelled);
+                // RMCP stops polling after the initialize response and takes session ownership.
+                // Reaching EOF first leaves cleanup to us, including on cancellation.
+                let events = if let (Some((uri, auth, headers)), Some(id)) =
+                    (initialize_cleanup, session.as_ref())
+                {
+                    let client = self.clone();
+                    let id = Arc::from(id.as_str());
+                    let cleanup = stream::once(async move {
+                        client.cleanup_session(uri, id, auth, headers).await;
+                        None
+                    })
+                    .filter_map(futures::future::ready);
+                    events.chain(cleanup).boxed()
+                } else {
+                    events.boxed()
+                };
+                Ok(StreamableHttpPostResponse::Sse(events, session))
+            }
+            result => result,
+        };
+        // The SDK rejects an SSE response to notifications/initialized before its
+        // ordinary session cleanup. Request/body errors can race worker cancellation.
+        // An OAuth wrapper can still refresh and retry an authentication challenge.
+        if let Some((uri, session, auth_token, headers)) = cleanup
+            && (result.is_err() || matches!(&result, Ok(StreamableHttpPostResponse::Sse(..))))
+            && !matches!(&result, Err(StreamableHttpError::AuthRequired(_)))
+        {
+            self.cleanup_session(uri, session, auth_token, headers)
+                .await;
+        }
+        result
     }
 
     async fn delete_session(

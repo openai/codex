@@ -211,19 +211,18 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         DefaultKeyringStore,
         /*oauth_config*/ None,
     ));
-    let client = AuthClient::new(
-        StreamableHttpClientAdapter::new(
-            Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
-                OutboundProxyPolicy::ReqwestDefault,
-            ))),
-            HeaderMap::new(),
-            /*auth_provider*/ None,
-            /*has_configured_headers*/ false,
-            StreamableHttpRedirectMode::Legacy,
-            Arc::default(),
-        ),
-        manager,
+    let mut adapter = StreamableHttpClientAdapter::new(
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        HeaderMap::new(),
+        /*auth_provider*/ None,
+        /*has_configured_headers*/ false,
+        StreamableHttpRedirectMode::Legacy,
+        Arc::default(),
     );
+    adapter.enable_recovery_cancellation();
+    let client = AuthClient::new(adapter, manager);
     let mut durable = initial.clone();
     durable
         .token_response
@@ -237,6 +236,7 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
 
     Mock::given(method("POST"))
         .and(path("/mcp"))
+        .and(header("mcp-session-id", "session-a"))
         .and(header("authorization", "Bearer access-token"))
         .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer"))
         .expect(1)
@@ -256,6 +256,7 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         .await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
+        .and(header("mcp-session-id", "session-a"))
         .and(header("authorization", "Bearer refreshed-access-token"))
         .respond_with(move |_: &wiremock::Request| {
             let saved = load_oauth_tokens_from_file(&durable.server_name, &durable.url)
@@ -271,13 +272,19 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("DELETE"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
     client
         .post_message(
             initial.url.into(),
             serde_json::from_value(
-                serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+                serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
             )?,
-            /*session_id*/ None,
+            Some("session-a".into()),
             /*auth_token*/ None,
             Default::default(),
         )

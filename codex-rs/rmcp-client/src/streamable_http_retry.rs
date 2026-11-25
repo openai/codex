@@ -11,6 +11,7 @@ use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
@@ -18,6 +19,7 @@ use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::oauth::OAuthRuntime;
 
 use super::InitializeContext;
+use super::InitializeMode;
 use super::PendingTransport;
 use super::RmcpClient;
 
@@ -27,6 +29,7 @@ pub(super) const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 type InitializedConnection = (
     Arc<RunningService<RoleClient, ElicitationClientService>>,
     Option<OAuthRuntime>,
+    CancellationToken,
 );
 
 impl RmcpClient {
@@ -35,14 +38,16 @@ impl RmcpClient {
         &'a self,
         initial_transport: PendingTransport,
         initialize_context: &'a InitializeContext,
+        mode: InitializeMode,
     ) -> BoxFuture<'a, Result<InitializedConnection>> {
-        Box::pin(self.connect_with_retries(initial_transport, initialize_context))
+        Box::pin(self.connect_with_retries(initial_transport, initialize_context, mode))
     }
 
     async fn connect_with_retries(
         &self,
         initial_transport: PendingTransport,
         initialize_context: &InitializeContext,
+        mode: InitializeMode,
     ) -> Result<InitializedConnection> {
         let timeout = initialize_context.timeout;
         let should_retry = match &initial_transport {
@@ -68,11 +73,11 @@ impl RmcpClient {
                     match remaining {
                         Some(remaining) => time::timeout(
                             remaining,
-                            Self::create_pending_transport(&self.transport_recipe),
+                            Self::pending_transport_for(&self.transport_recipe, mode),
                         )
                         .await
                         .map_err(|_| initialize_timeout_error(timeout, remaining))??,
-                        None => Self::create_pending_transport(&self.transport_recipe).await?,
+                        None => Self::pending_transport_for(&self.transport_recipe, mode).await?,
                     }
                 }
             };
@@ -85,7 +90,15 @@ impl RmcpClient {
                     *deadline += refresh_started_at.elapsed();
                 }
             }
-            let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
+            let mut attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
+            if let InitializeMode::ExpiredReplyRecovery(Some(deadline)) = mode {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(initialize_timeout_error(timeout, remaining));
+                }
+                attempt_timeout =
+                    Some(attempt_timeout.map_or(remaining, |init| init.min(remaining)));
+            }
 
             match self
                 .connect_pending_transport(transport, initialize_context, attempt_timeout)
