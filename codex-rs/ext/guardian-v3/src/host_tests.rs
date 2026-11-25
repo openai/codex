@@ -4,7 +4,7 @@ use crate::EvidenceCursor;
 use anyhow::Context;
 use board_host::PausedClockHost;
 use board_host::board_host;
-use codex_core::guardian_review::PendingReviewWrites;
+use codex_core::guardian_review::PreserveReviewWrites;
 use codex_history::CodexHarnessMetadata;
 use codex_history::HistoryInitialization;
 use codex_history::ResponseItemEnvelope;
@@ -121,7 +121,7 @@ async fn activity_routes_committed_posts_in_source_order(in_memory: bool) -> any
     };
     std::fs::write(home.path().join("config.toml"), settings)?;
     let test = test_codex()
-        .with_thread_extension(PendingReviewWrites::default())
+        .with_thread_extension(PreserveReviewWrites)
         .with_home(home)
         .with_history_mode(ThreadHistoryMode::Paginated)
         .with_model_info_override("gpt-5.6-luna", |_| {})

@@ -27,7 +27,7 @@ use crate::UpdateThreadMetadataParams;
 use crate::local::test_support::test_config;
 
 #[tokio::test]
-async fn acknowledged_history_is_readable_after_metadata_failure() {
+async fn appended_history_is_readable_after_metadata_failure() {
     let (_home, store, runtime) = store_with_runtime().await;
     let thread_id = ThreadId::new();
     let mut params = create_thread_params(thread_id);
@@ -44,13 +44,11 @@ async fn acknowledged_history_is_readable_after_metadata_failure() {
         phase: None,
     });
     let items = [RolloutItem::ResponseItem(message.clone().into())];
-    let mut acknowledged = false;
     let error = live
-        .append_items_with_ack(&items, || acknowledged = true)
+        .append_items(&items)
         .await
         .expect_err("surface the metadata failure");
     assert!(error.to_string().contains("failed to read thread metadata"));
-    assert!(acknowledged);
     store.flush_thread(thread_id).await.expect("flush history");
     let start = HistoryPosition {
         thread_id,

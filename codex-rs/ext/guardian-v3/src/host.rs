@@ -10,7 +10,7 @@ use std::sync::Weak;
 use anyhow::Context;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::guardian_review::PendingReviewWrites;
+use codex_core::guardian_review::PreserveReviewWrites;
 use codex_core::guardian_review::ReviewRetrieval;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
@@ -266,12 +266,12 @@ impl ThreadLifecycleContributor<Config> for Host {
         &'a self,
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
-        // Track writes before the manager publishes the root to concurrent callers.
+        // Let accepted instructions outlive an interrupted turn on this root.
         if !input.config.ephemeral
             && !input.session_source.is_internal()
             && input.thread_store.level_id() == input.session_store.level_id()
         {
-            input.thread_store.get_or_init(PendingReviewWrites::default);
+            input.thread_store.insert(PreserveReviewWrites);
         }
         Box::pin(std::future::ready(()))
     }

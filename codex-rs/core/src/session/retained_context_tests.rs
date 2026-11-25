@@ -6,15 +6,12 @@ use codex_history::RetainedContextEvent;
 use codex_history::RetainedUserMessage;
 use codex_history::RolloutItem;
 use codex_protocol::protocol::EventMsg;
-use core_test_support::responses::user_message_item;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
 use super::thread_settings;
-use crate::guardian_review::PendingReviewWrites;
-use crate::guardian_review::ReviewPreparationError;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::session::tests::attach_thread_persistence;
 use crate::session::tests::make_session_and_context;
@@ -31,37 +28,9 @@ fn delivered_message() -> RetainedUserMessage {
 }
 
 #[tokio::test]
-async fn guardian_waits_for_detached_confirmed_delivery() {
-    let (mut session, _) = make_session_and_context().await;
-    attach_thread_persistence(&mut session).await;
-    let writes = Arc::new(PendingReviewWrites::default());
-    session.pending_review_writes = Some(Arc::clone(&writes));
-    let session = Arc::new(session);
-    let checkpoint = thread_settings::acquire_persistence_lock(&session).await;
-    let (recording, _) = session.record_delivered_assistant_message(delivered_message());
-    let waiting = writes.wait();
-    tokio::pin!(waiting);
-    assert!(futures::poll!(waiting.as_mut()).is_pending());
-    drop(checkpoint);
-    waiting.await.expect("confirmed delivery appended");
-    recording.await.expect("delivery task finished");
-}
-
-#[test_case(false; "complete history")]
-#[test_case(true; "earlier write unconfirmed")]
-#[tokio::test]
-async fn guardian_retains_an_accepted_answer_when_the_tool_is_cancelled(
-    earlier_write_unconfirmed: bool,
-) -> anyhow::Result<()> {
+async fn guardian_retains_an_accepted_answer_when_the_tool_is_cancelled() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
-    let writes = Arc::new(PendingReviewWrites::default());
-    session.pending_review_writes = Some(Arc::clone(&writes));
-    if earlier_write_unconfirmed {
-        // Without a live writer the instruction is recorded but its receipt goes unconfirmed.
-        session
-            .record_conversation_items(&turn, turn.model_info(), &[user_message_item("Wait.")])
-            .await;
-    }
+    session.preserve_review_writes = true;
     let path = attach_thread_persistence(&mut session).await;
     *session.active_turn.lock().await = Some(Default::default());
     let (tx, events) = async_channel::unbounded();
@@ -95,14 +64,6 @@ async fn guardian_retains_an_accepted_answer_when_the_tool_is_cancelled(
     flushed?;
     assert!(appended);
     session.drain_code_mode_messages().await;
-    if earlier_write_unconfirmed {
-        assert_eq!(
-            writes.wait().await,
-            Err(ReviewPreparationError::HistoryWriteUnconfirmed)
-        );
-    } else {
-        writes.wait().await?;
-    }
 
     let history = RolloutRecorder::get_rollout_history(&path).await?;
     let events = history

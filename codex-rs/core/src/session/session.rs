@@ -16,7 +16,7 @@ use crate::agents_md_manager::SessionInstructions;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::guardian_review::PendingReviewWrites;
+use crate::guardian_review::PreserveReviewWrites;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::mcp_tool_call::McpToolApprovalContext;
 use crate::responses_metadata::CodexResponsesMetadata;
@@ -77,8 +77,8 @@ pub(crate) struct Session {
     pub(crate) context_ids: ThreadContextIds,
     pub(crate) agent_runtime: AgentRuntimeServices,
     pub(crate) outcome_reporting: Option<AgentOutcomeReporting>,
-    /// Installed by a thread-start contributor and fixed for this session's lifetime.
-    pub(super) pending_review_writes: Option<Arc<PendingReviewWrites>>,
+    /// Finish saving review evidence even if the turn that recorded it is interrupted.
+    pub(super) preserve_review_writes: bool,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     /// Installed by Guardian before its first review; forwards items and cancellation without
@@ -2047,7 +2047,10 @@ impl Session {
                 context_ids,
                 agent_runtime,
                 outcome_reporting,
-                pending_review_writes: services.thread_extension_data.get(),
+                preserve_review_writes: services
+                    .thread_extension_data
+                    .get::<PreserveReviewWrites>()
+                    .is_some(),
                 installation_id,
                 tx_event: tx_event.clone(),
                 parent_observer_event_tx: OnceLock::new(),

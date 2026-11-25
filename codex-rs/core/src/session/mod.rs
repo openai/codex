@@ -340,7 +340,6 @@ mod rollout_reconstruction_tests;
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::guardian_review::ReviewWrite;
 use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpManager;
 use crate::mcp::McpThreadIdentity;
@@ -3777,9 +3776,9 @@ impl Session {
             is_blocking: args.is_blocking,
             auto_resolution_ms: args.auto_resolution_ms,
         };
-        // Only a tracked root takes ownership of the prompt before the tool resumes.
+        // Roots that preserve review evidence verify the answer before the tool resumes.
         let mut verify_on_return = verify.then(|| prompt.clone());
-        let verify_on_accept = verify_on_return.take_if(|_| self.pending_review_writes.is_some());
+        let verify_on_accept = verify_on_return.take_if(|_| self.preserve_review_writes);
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3852,7 +3851,7 @@ impl Session {
                     acceptance_order,
                     recording: None,
                 };
-                // Publish tracked evidence before waking the cancellable tool waiter.
+                // Publish the answer before waking the cancellable tool waiter.
                 if let Some(event) = accepted.verified_answer(pending.verify_on_accept) {
                     accepted.recording = self.start_retained_context(event).await;
                 }
@@ -4229,9 +4228,9 @@ impl Session {
         let has_user_turn_boundary = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        // Prepare settings before publishing tracked evidence so there is no await
+        // Prepare settings before publishing review evidence so there is no await
         // between recording the revision and handing the append to the session.
-        let prepare_before_recording = realtime.is_some() || self.pending_review_writes.is_some();
+        let prepare_before_recording = realtime.is_some() || self.preserve_review_writes;
         let mut early_guard = if prepare_before_recording
             && has_user_turn_boundary
             && self.reference_context_item().await.is_none()
@@ -4330,12 +4329,10 @@ impl Session {
                 state
                     .pending_audio_duration_ids
                     .extend(file_audio::file_ids(&items).cloned());
-                let (_, write) = ReviewWrite::record(
-                    self.pending_review_writes.as_deref(),
-                    &mut state.history,
-                    |history| history.record_annotated_items(&mut items, policy),
-                );
-                review_write = write.and_then(|write| self.track_review_write(write));
+                let ((), token) = self.record_review_evidence(&mut state.history, |history| {
+                    history.record_annotated_items(&mut items, policy);
+                });
+                review_write = token;
             }
             if initial_settings_pending {
                 state.take_initial_settings_pending();
@@ -5611,21 +5608,11 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) -> bool {
-        self.persist_rollout_items_with_ack(items, /*write*/ None)
-            .await
-    }
-
-    async fn persist_rollout_items_with_ack(
-        &self,
-        items: &[RolloutItem],
-        write: Option<ReviewWrite>,
-    ) -> bool {
         Self::append_rollout_items(
             self.live_thread(),
             &self.services.local_agent_runtime,
             self.thread_id,
             items,
-            write,
         )
         .await
     }
@@ -5636,16 +5623,9 @@ impl Session {
         runtime: &crate::agent::control::LocalAgentRuntime,
         thread_id: ThreadId,
         items: &[RolloutItem],
-        write: Option<ReviewWrite>,
     ) -> bool {
         if let Some(live_thread) = live_thread
-            && let Err(e) = live_thread
-                .append_items_with_ack(items, move || {
-                    if let Some(write) = write {
-                        write.confirm();
-                    }
-                })
-                .await
+            && let Err(e) = live_thread.append_items(items).await
         {
             error!("failed to record rollout items: {e:#}");
             if runtime.suspension_root().is_some() {

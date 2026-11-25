@@ -1,88 +1,15 @@
 //! Host adapter types and assessment results for synchronous Guardian review.
 //! The extension supplies agent startup and owns the reviewer pool and its lifecycle.
 
-use crate::context_manager::ContextManager;
 pub use crate::guardian::GuardianReviewSession;
 pub use crate::guardian::GuardianReviewState;
 pub use crate::guardian::PreparedGuardianContext;
 pub use crate::guardian::prepare_review_prewarm;
 pub use crate::mcp_tool_call::conversation_history::conversation_history_tools;
-use std::sync::Mutex;
-use std::sync::PoisonError;
-use tokio::sync::watch;
 
-/// Tracks root evidence that is visible in memory and still awaiting a history append.
-/// Only reviewers that read persisted history install this tracker.
-#[derive(Default)]
-pub struct PendingReviewWrites {
-    pending: Mutex<Vec<watch::Receiver<bool>>>,
-}
-
-/// An evidence write that the session must finish. After a failed append, we
-/// still preserve later writes, but can no longer confirm a complete history.
-pub(crate) struct ReviewWrite {
-    receipt: Option<watch::Sender<bool>>,
-}
-
-impl ReviewWrite {
-    /// Record under the session lock so a reviewer cannot see the new revision
-    /// before its pending write is registered.
-    pub(crate) fn record<T>(
-        writes: Option<&PendingReviewWrites>,
-        history: &mut ContextManager,
-        record: impl FnOnce(&mut ContextManager) -> T,
-    ) -> (T, Option<Self>) {
-        let Some(writes) = writes else {
-            return (record(history), None);
-        };
-        let before = history.guardian_revisions();
-        let result = record(history);
-        let write = (history.guardian_revisions() != before).then(|| writes.begin());
-        (result, write)
-    }
-
-    pub(crate) fn confirm(self) {
-        if let Some(receipt) = self.receipt {
-            receipt.send_replace(true);
-        }
-    }
-}
-
-impl PendingReviewWrites {
-    fn begin(&self) -> ReviewWrite {
-        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-        pending.retain(|write| !*write.borrow());
-        // A dropped or failed append leaves a gap for this root's lifetime.
-        if pending
-            .iter()
-            .any(|write| write.has_changed().is_err() && !*write.borrow())
-        {
-            return ReviewWrite { receipt: None };
-        }
-        let (appended, write) = watch::channel(/*init*/ false);
-        pending.push(write);
-        ReviewWrite {
-            receipt: Some(appended),
-        }
-    }
-
-    /// Wait for writes already visible to this review. Later instructions are
-    /// covered by the reviewer's authorization recheck and its next attempt.
-    pub async fn wait(&self) -> Result<(), ReviewPreparationError> {
-        let pending = {
-            let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-            pending.retain(|write| !*write.borrow());
-            pending.clone()
-        };
-        for mut write in pending {
-            write
-                .wait_for(|appended| *appended)
-                .await
-                .map_err(|_| ReviewPreparationError::HistoryWriteUnconfirmed)?;
-        }
-        Ok(())
-    }
-}
+/// Opts a root into session-owned evidence saves that survive turn cancellation.
+/// Install at thread startup. Reviewers do not wait for these writes.
+pub struct PreserveReviewWrites;
 
 /// Retrieval guidance for the tools installed in a private verdict session.
 #[derive(Clone)]
@@ -118,10 +45,6 @@ pub fn reviewer_headers(config: &crate::config::Config) -> crate::CodexResponses
 pub enum ReviewPreparationError {
     #[error("Guardian board evidence is unavailable")]
     EvidenceUnavailable,
-    #[error(
-        "An instruction may not have been saved. Reload the root thread, check the history and resend any missing instructions before retrying."
-    )]
-    HistoryWriteUnconfirmed,
     #[error("timed out preparing Guardian review")]
     PreparationTimedOut,
     #[error("reviewer is unavailable")]

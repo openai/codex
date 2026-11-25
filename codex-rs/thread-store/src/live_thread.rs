@@ -235,24 +235,8 @@ impl LiveThread {
         ))
     }
 
+    #[tracing::instrument(level = "trace", skip_all, fields(item_count = raw_items.len()))]
     pub async fn append_items(&self, raw_items: &[RolloutItem]) -> ThreadStoreResult<()> {
-        self.append_items_with_ack(raw_items, || {}).await
-    }
-
-    /// Calls `on_append` synchronously once the store accepts a nonempty batch of
-    /// persistable items. A later metadata error or cancellation does not undo that
-    /// acknowledgment. Metadata errors still propagate to the caller.
-    #[tracing::instrument(
-        name = "append_items",
-        level = "trace",
-        skip_all,
-        fields(item_count = raw_items.len())
-    )]
-    pub async fn append_items_with_ack(
-        &self,
-        raw_items: &[RolloutItem],
-        on_append: impl FnOnce() + Send,
-    ) -> ThreadStoreResult<()> {
         let items = self
             .persist_appended_items(raw_items)
             .await?
@@ -260,7 +244,6 @@ impl LiveThread {
         if items.is_empty() {
             return Ok(());
         }
-        on_append();
         if self.should_defer_rollout_metadata().await {
             let _ = self
                 .metadata_sync
