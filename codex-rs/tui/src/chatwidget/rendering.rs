@@ -266,6 +266,7 @@ impl ChatWidget {
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
             Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                bidi_layout: self.bidi_layout,
                 child: cell.as_ref(),
                 // The initial header becomes the first history cell, which has no leading separator.
                 top: if cell.as_any().is::<history_cell::SessionHeaderHistoryCell>() {
@@ -300,6 +301,7 @@ impl ChatWidget {
             flex.push(
                 /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    bidi_layout: self.bidi_layout,
                     child: cell.as_ref(),
                     top: 1,
                     right: active_cell_right_reserve,
@@ -312,6 +314,7 @@ impl ChatWidget {
             flex.push(
                 /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    bidi_layout: self.bidi_layout,
                     child: cell,
                     top: 1,
                     right: active_cell_right_reserve,
@@ -466,6 +469,7 @@ impl ChatWidget {
 }
 
 struct TranscriptAreaRenderable<'a> {
+    bidi_layout: bool,
     child: &'a dyn HistoryCell,
     top: u16,
     right: u16,
@@ -482,7 +486,10 @@ struct PersistentActiveCellLayout<'a> {
 impl Renderable for TranscriptAreaRenderable<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let area = self.child_area(area);
-        let lines = self.child.display_hyperlink_lines(area.width);
+        let mut lines = self.child.display_hyperlink_lines(area.width);
+        if self.bidi_layout {
+            crate::terminal_hyperlinks::bidi::paint_rows(&mut lines, usize::from(area.width));
+        }
         let paragraph = HyperlinkParagraph::new(&lines, Style::default());
         let y = if area.height == 0 {
             0

@@ -73,6 +73,7 @@ mod imp {
     /// Results from the TUI's one-shot startup terminal probe.
     #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
     pub(crate) struct StartupProbe {
+        pub(crate) implicit_bidi: Option<bool>,
         pub(crate) alternate_scroll_enabled: Option<bool>,
         pub(crate) cursor_position: Option<Position>,
         pub(crate) default_colors: Option<DefaultColors>,
@@ -319,6 +320,12 @@ mod imp {
         if keyboard_probe == StartupKeyboardEnhancementProbe::Query {
             query.extend_from_slice(b"\x1B[?u");
         }
+        // ECMA-48 mode 8 distinguishes terminal-managed (set) from application-managed
+        // (reset) ordering. A multiplexer cannot speak for its attached clients.
+        let probe_bidi = crate::terminal_capabilities::direct_terminal_name().is_some();
+        if probe_bidi {
+            query.extend_from_slice(b"\x1B[8$p");
+        }
         // Query before DA1 so its reply acts as a barrier even if mode 1007 is unsupported.
         query.extend_from_slice(b"\x1B[?1007$p");
         if probe_kitty_graphics {
@@ -341,11 +348,13 @@ mod imp {
             probe_kitty_graphics,
             &mut buffer,
         );
-        let (replay, kitty_graphics) = parse_startup_input(&buffer, probe_kitty_graphics);
+        let (replay, kitty_graphics, implicit_bidi) =
+            parse_startup_input(&buffer, probe_kitty_graphics, probe_bidi);
         crossterm::event::buffer_input(&replay)?;
         let saw_da1 = find_primary_device_attributes(&buffer).is_some();
         DA1_SUPPORTED.store(saw_da1, Ordering::Relaxed);
         result.map(|probe| StartupProbe {
+            implicit_bidi,
             kitty_graphics,
             ..probe
         })
@@ -715,6 +724,7 @@ mod imp {
                 default_colors: None,
                 keyboard_enhancement_supported: None,
                 prefer_inline_screen: Some(false),
+                implicit_bidi: None,
                 kitty_graphics: false,
             };
             let mut saw_supported_keyboard = false;
@@ -750,6 +760,7 @@ mod imp {
                     }),
                     keyboard_enhancement_supported: Some(true),
                     prefer_inline_screen: Some(false),
+                    implicit_bidi: None,
                     kitty_graphics: false,
                 }
             );
@@ -767,6 +778,7 @@ mod imp {
                 default_colors: None,
                 keyboard_enhancement_supported: None,
                 prefer_inline_screen: None,
+                implicit_bidi: None,
                 kitty_graphics: false,
             };
             let mut supported_keyboard = false;
@@ -847,14 +859,17 @@ mod imp {
                     }),
                     keyboard_enhancement_supported: Some(true),
                     prefer_inline_screen: Some(false),
+                    implicit_bidi: None,
                     kitty_graphics: false,
                 }
             );
             let mut expected_replay = vec![b'x'; 2_048];
             expected_replay.extend_from_slice(b"\x1B[20;10R\x1B[?64;1;2c\x1B[?7u");
             assert_eq!(
-                parse_startup_input(&buffer, /*probe_kitty_graphics*/ false),
-                (expected_replay, false)
+                parse_startup_input(
+                    &buffer, /*probe_kitty_graphics*/ false, /*probe_bidi*/ false
+                ),
+                (expected_replay, false, None)
             );
         }
 

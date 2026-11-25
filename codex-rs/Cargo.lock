@@ -5444,6 +5444,7 @@ dependencies = [
  "dunce",
  "futures",
  "http 1.4.0",
+ "icu_properties",
  "image",
  "insta",
  "itertools 0.14.0",

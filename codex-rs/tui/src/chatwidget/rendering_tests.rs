@@ -314,6 +314,7 @@ fn active_transcript_preserves_clipped_markdown_hyperlinks() {
         std::path::Path::new("/tmp"),
     );
     let renderable = TranscriptAreaRenderable {
+        bidi_layout: false,
         child: &cell,
         top: 1,
         right: 2,

@@ -1,0 +1,6 @@
+---
+source: tui/src/insert_history.rs
+expression: "rows[..2].join(\"\\n\")"
+---
+› ابحرم https://example.org/?a=1&b=2#help
+• (ابًحَرْمَ) Codex 123 لغش مث --file.rs حتفا

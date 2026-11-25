@@ -136,7 +136,7 @@ pub(crate) struct CopyLine {
     /// A visual separator inserted between sibling list items, never source content.
     pub(crate) omit: bool,
     runs: Vec<(Range<usize>, Vec<Inline>)>,
-    literal_ranges: Vec<Range<usize>>,
+    pub(crate) literal_ranges: Vec<Range<usize>>,
 }
 
 /// Keep literal prompt spacing when parsing only changed whitespace, and retain the source

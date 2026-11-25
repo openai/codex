@@ -594,6 +594,11 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
     let mut tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    #[cfg(unix)]
+    let implicit_bidi = startup_probe.implicit_bidi;
+    #[cfg(not(unix))]
+    let implicit_bidi = None;
+    tui.bidi_layout = terminal_capabilities::needs_bidi_layout(implicit_bidi);
     tui.virtual_image_base = session.virtual_image_base();
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     let initialized_terminal = InitializedTerminal {

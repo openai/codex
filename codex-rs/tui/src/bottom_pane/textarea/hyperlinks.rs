@@ -5,8 +5,8 @@ use super::wrapping::visible_prefix;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::source_text_width;
 use crate::terminal_hyperlinks::web_links_in_text;
-use crate::width::display_width;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -33,7 +33,7 @@ impl HyperlinkCache {
         let source_columns = lines
             .iter()
             .map(|line| {
-                source_column += display_width(&display_text[previous_start..line.start]);
+                source_column += source_text_width(&display_text[previous_start..line.start]);
                 previous_start = line.start;
                 source_column
             })
@@ -66,7 +66,7 @@ impl HyperlinkCache {
                 area.width,
             );
             let visible = text_for_display(raw_visible);
-            let line_end = source_column + display_width(visible.as_ref());
+            let line_end = source_column + source_text_width(visible.as_ref());
             let first_hyperlink = self
                 .hyperlinks
                 .partition_point(|hyperlink| hyperlink.columns.end <= source_column);

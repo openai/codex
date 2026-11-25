@@ -132,7 +132,10 @@ where
     // - Non-URL lines also flow through adaptive wrapping; behavior is
     //   equivalent to standard wrapping when no URL is present.
     let wrap_width = area.width.max(1) as usize;
-    let (wrapped, wrapped_rows) = wrap_history_hyperlink_lines(lines, wrap_width, wrap_policy);
+    let (mut wrapped, wrapped_rows) = wrap_history_hyperlink_lines(lines, wrap_width, wrap_policy);
+    if terminal.bidi_layout {
+        crate::terminal_hyperlinks::bidi::paint_rows(&mut wrapped, wrap_width);
+    }
     let wrapped_lines = wrapped_rows as u16;
     match mode {
         InsertHistoryMode::FullScreen => {
@@ -949,6 +952,61 @@ mod tests {
             assert_eq!(plain.fgcolor(), vt100::Color::Rgb(238, 238, 238));
             assert_ne!(code.fgcolor(), plain.fgcolor());
         });
+    }
+
+    #[test]
+    fn rtl_transcript_stream_matches_finalized_scrollback() {
+        use crate::history_cell::AgentMarkdownCell;
+        use crate::history_cell::HistoryCell;
+        use crate::history_cell::HistoryRenderMode;
+        use crate::history_cell::StreamingAgentTailCell;
+        use crate::history_cell::new_user_prompt;
+        use crate::streaming::controller::StreamController;
+        use crate::terminal_hyperlinks::bidi;
+        use pretty_assertions::assert_eq;
+        let cwd = std::path::Path::new(".");
+        let width = 48;
+        let mut stream =
+            StreamController::new(Some(usize::from(width) - 2), cwd, HistoryRenderMode::Rich);
+        stream.push("افتح `--file.rs` ثم ش");
+        stream.push("غل Codex 123 (مَرْحَبًا)");
+        let preview = stream.current_tail_lines();
+        let tail = StreamingAgentTailCell::new(preview, stream.tail_starts_stream());
+        let mut live = tail.display_hyperlink_lines(width);
+        bidi::paint_rows(&mut live, width.into());
+        let (committed, source) = stream.finalize();
+        let finalized = AgentMarkdownCell::new(source.unwrap(), cwd);
+        let question = "مرحبا https://example.org/?a=1&b=2#help";
+        let prompt = new_user_prompt(question.into(), vec![], vec![], vec![]);
+        let mut lines = prompt.display_hyperlink_lines(width);
+        lines.extend(committed.unwrap().display_hyperlink_lines(width));
+        lines.extend(finalized.display_hyperlink_lines(width));
+        let backend = VT100Backend::new(width, /*height*/ 12);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).unwrap();
+        term.bidi_layout = true;
+        term.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 11, width, /*height*/ 1,
+        ));
+        let size = term.last_known_screen_size;
+        insert_history_hyperlink_lines_with_mode_and_wrap_policy(
+            &mut term,
+            &lines,
+            InsertHistoryMode::Standard,
+            HistoryLineWrapPolicy::PreWrap,
+            size,
+        )
+        .unwrap();
+        let rows = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .filter(|row| !row.trim().is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1], rows[2]);
+        assert_eq!(live[0].line.to_string(), rows[1]);
+        insta::assert_snapshot!(rows[..2].join("\n"));
     }
 
     #[test]

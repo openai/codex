@@ -138,7 +138,7 @@ fn composer_wrapped_url_fragments_keep_the_complete_destination() {
 #[test]
 fn scrolled_url_fragments_keep_the_offscreen_destination() {
     let url = "https://example.test/alpha/beta/gamma/delta/epsilon";
-    let (_, state, buf) = render(url, /*width*/ 16, /*height*/ 2);
+    let (_, state, buf) = render(&format!("لا\n{url}"), /*width*/ 16, /*height*/ 2);
     let visible_url = linked_text(&assert_destination(&buf, url));
     assert!(state.scroll > 0);
     assert_ne!(visible_url, url);

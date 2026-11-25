@@ -147,6 +147,7 @@ where
     /// The backend used to interface with the terminal
     backend: B,
     pub(crate) virtual_image_base: Option<u32>,
+    pub(crate) bidi_layout: bool,
     /// Holds the results of the current and previous draw calls. The two are compared at the end
     /// of each draw pass to output the necessary updates to the terminal
     buffers: [Buffer; 2],
@@ -240,6 +241,7 @@ where
         Self {
             backend,
             virtual_image_base: None,
+            bidi_layout: false,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,

@@ -330,6 +330,7 @@ impl HistoryCell for UserHistoryCell {
             source.right_reserve = 1;
             source.copy_as_prose |= copy_as_prose;
         }
+        crate::terminal_hyperlinks::bidi::prepare_message(&mut lines);
         lines
     }
 
@@ -522,7 +523,8 @@ impl AgentMessageCell {
         }
     }
 
-    pub(crate) fn new_hyperlink_lines(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
+    pub(crate) fn new_hyperlink_lines(mut lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
+        crate::terminal_hyperlinks::bidi::prepare_message(&mut lines);
         Self {
             lines,
             is_first_line,
@@ -761,7 +763,9 @@ impl AgentMarkdownCell {
                     markdown,
                 )
             };
-            normalize_whitespace_only_hyperlink_lines(lines)
+            let mut lines = normalize_whitespace_only_hyperlink_lines(lines);
+            crate::terminal_hyperlinks::bidi::prepare_message(&mut lines);
+            lines
         };
 
         if let Some(rendered_lines) = &self.rendered_lines {
@@ -825,7 +829,8 @@ impl PartialEq for StreamingAgentTailCell {
 }
 
 impl StreamingAgentTailCell {
-    pub(crate) fn new(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
+    pub(crate) fn new(mut lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
+        crate::terminal_hyperlinks::bidi::prepare_message(&mut lines);
         Self {
             lines,
             is_first_line,

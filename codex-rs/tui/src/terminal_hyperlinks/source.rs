@@ -23,6 +23,9 @@ pub(crate) enum LineWrapPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LogicalLineSource {
     pub(crate) text: Arc<str>,
+    pub(crate) message: bool,
+    /// Paragraph embedding levels indexed by logical byte, shared across wrapped message rows.
+    pub(crate) bidi: Option<Arc<[unicode_bidi::Level]>>,
     pub(crate) copy: Option<Arc<crate::markdown_copy::CopyLine>>,
     /// Selectable label length and the original body, whose Markdown ranges exclude the label.
     pub(crate) labelled_body: Option<Arc<(usize, LogicalLineSource)>>,
@@ -47,6 +50,8 @@ impl LogicalLineSource {
         let end = text.len();
         Self {
             text: text.into(),
+            message: false,
+            bidi: None,
             copy: None,
             labelled_body: None,
             copy_as_prose: false,
@@ -108,6 +113,8 @@ impl LogicalLineSource {
         let end = displayed.end.clamp(source_start, source_end);
         Self {
             text: Arc::clone(&self.text),
+            message: self.message,
+            bidi: self.bidi.clone(),
             copy: self.copy.clone(),
             labelled_body: self.labelled_body.clone(),
             copy_as_prose: self.copy_as_prose,

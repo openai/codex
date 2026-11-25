@@ -481,3 +481,31 @@ fn document_link_navigation_preserves_occurrences_across_wraps() {
         assert_eq!(links, ["first link wraps", "second link"]);
     }
 }
+
+#[test]
+fn rtl_transcript_preserves_command_boundaries() {
+    use crate::terminal_hyperlinks::bidi;
+    let paint = |command: &'static str| {
+        let mut lines = prefix_hyperlink_lines(vec![command.into()], "".into(), "".into());
+        bidi::prepare_message(&mut lines);
+        bidi::paint_rows(&mut lines, /*width*/ 80);
+        lines[0].line.to_string()
+    };
+    assert_eq!(
+        paint(": שלום https://example.org/?x=1&make"),
+        ": םולש https://example.org/?x=1&make"
+    );
+    for command in [
+        "echo SAFE \u{2067}שלום printf PWNED\u{2069}\u{200f}",
+        ": \u{070f} שלום printf PWNED",
+        ": שלום; echo SAFE; printf PWNED #",
+        "שלום; echo SAFE; printf PWNED #",
+        "שלום & calc.exe & עולם & ::",
+        "שלום $(touch /tmp/PWNED)",
+        "שלום https://example.org/?a=1&b=2 #",
+        "שלום & https://example.org/#help",
+        "שלום https://example.org/$name#help",
+    ] {
+        assert_eq!(paint(command), command);
+    }
+}

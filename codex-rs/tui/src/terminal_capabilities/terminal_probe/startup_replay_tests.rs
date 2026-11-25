@@ -5,7 +5,10 @@ use super::parse_startup_input;
 use pretty_assertions::assert_eq;
 
 fn startup_replay_input(input: &[u8]) -> Vec<u8> {
-    parse_startup_input(input, /*probe_kitty_graphics*/ false).0
+    parse_startup_input(
+        input, /*probe_kitty_graphics*/ false, /*probe_bidi*/ false,
+    )
+    .0
 }
 
 #[test]
@@ -73,8 +76,30 @@ fn herdr_graphics_reply_selects_previews_without_replaying_the_response_as_keys(
     ] {
         let input = [paste.as_slice(), reply, b"typed"].concat();
         assert_eq!(
-            parse_startup_input(&input, /*probe_kitty_graphics*/ true),
-            ([paste.as_slice(), b"typed"].concat(), expected)
+            parse_startup_input(
+                &input, /*probe_kitty_graphics*/ true, /*probe_bidi*/ false
+            ),
+            ([paste.as_slice(), b"typed"].concat(), expected, None)
         );
+    }
+}
+
+#[test]
+fn bidi_replies_interleaved_with_paste_are_consumed_only_when_queried() {
+    for (mode, implicit) in [
+        (0, None),
+        (1, Some(true)),
+        (2, Some(false)),
+        (3, Some(true)),
+        (4, Some(false)),
+    ] {
+        let input = format!("typed\x1b[200~a\x1b[8;{mode}$yb\x1b[201~").into_bytes();
+        assert_eq!(
+            parse_startup_input(
+                &input, /*probe_kitty_graphics*/ false, /*probe_bidi*/ true
+            ),
+            (b"typed\x1b[200~ab\x1b[201~".to_vec(), false, implicit)
+        );
+        assert_eq!(startup_replay_input(&input), input);
     }
 }

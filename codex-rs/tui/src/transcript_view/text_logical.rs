@@ -9,7 +9,7 @@ use ratatui::text::Span;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::LogicalLineSource;
-use crate::width::display_width;
+use crate::terminal_hyperlinks::source_text_width;
 
 #[derive(Clone)]
 pub(super) struct LogicalLine {
@@ -66,7 +66,11 @@ impl LogicalLine {
         );
         let prefix = slice_line(&line.line, 0..source.prefix_bytes);
         let prefix_width = prefix.width();
-        let content_width = display_width(&source.text[source.range.clone()]);
+        let content_width = if line.hyperlinks.is_empty() {
+            0
+        } else {
+            source_text_width(&source.text[source.range.clone()])
+        };
         self.line.line.spans.extend(body.spans);
         self.line
             .hyperlinks

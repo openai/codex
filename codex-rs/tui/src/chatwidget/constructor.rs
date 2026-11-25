@@ -124,6 +124,7 @@ impl ChatWidget {
                 effects: local_settings.tui.effects,
                 skills: None,
             }),
+            bidi_layout: false,
             transcript: TranscriptState::new(active_cell),
             raw_output_mode: local_settings.tui.raw_output_mode,
             config,

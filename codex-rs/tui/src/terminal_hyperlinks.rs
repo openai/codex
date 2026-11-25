@@ -3,6 +3,7 @@
 //! Layout code measures and wraps ordinary ratatui lines. Hyperlink annotations are applied only
 //! when text reaches a terminal buffer or scrollback writer so OSC 8 bytes never affect geometry.
 
+pub(crate) mod bidi;
 mod paragraph;
 mod source;
 
@@ -321,8 +322,16 @@ pub(crate) fn lines_with_sources_eq(left: &[HyperlinkLine], right: &[HyperlinkLi
 }
 
 pub(crate) fn source_span_width(span: &Span<'_>) -> usize {
-    span.content
-        .graphemes(/*is_extended*/ true)
+    source_text_width(&span.content)
+}
+
+/// Link columns count painted graphemes, even when adjacent letters (lam-alef)
+/// measure as a single ligature in the whole string.
+pub(crate) fn source_text_width(text: &str) -> usize {
+    if text.is_ascii() {
+        return display_width(text);
+    }
+    text.graphemes(/*is_extended*/ true)
         .map(display_width)
         .sum()
 }
@@ -582,18 +591,21 @@ pub(crate) fn remap_source_wrapped_line(
         .map(|wrapped| {
             let line = line_to_static(&wrapped.line);
             let displayed = line_text(&line);
-            let prefix_columns = display_width(&displayed[..wrapped.prefix_bytes]);
+            let prefix_columns = source_text_width(&displayed[..wrapped.prefix_bytes]);
             // Some wrapping paths retain a one-past-the-end cursor sentinel. Span slicing already
             // clips that sentinel to the visible line; keep hyperlink and source projection on the
             // same bounded range instead of indexing past the flattened text.
             let range = wrapped.range.start.min(text.len())..wrapped.range.end.min(text.len());
-            source_column += display_width(&text[source_byte..range.start]);
-            let start = source_column;
-            let end = start + display_width(&text[range.clone()]);
-            source_byte = range.end;
-            source_column = end;
-            let hyperlinks =
-                project_hyperlink_columns(&source.hyperlinks, start..end, prefix_columns);
+            let hyperlinks = if source.hyperlinks.is_empty() {
+                Vec::new()
+            } else {
+                source_column += source_text_width(&text[source_byte..range.start]);
+                let start = source_column;
+                let end = start + source_text_width(&text[range.clone()]);
+                source_byte = range.end;
+                source_column = end;
+                project_hyperlink_columns(&source.hyperlinks, start..end, prefix_columns)
+            };
             HyperlinkLine {
                 line,
                 hyperlinks,
@@ -720,15 +732,10 @@ fn push_link_range(line: &mut HyperlinkLine, range: Range<usize>, link: &Termina
     line.hyperlinks.push(link.with_columns(range));
 }
 
-pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
-    let mut links = Vec::new();
-    let mut search_from = 0usize;
-    let mut source_byte = 0usize;
-    let mut source_column = 0usize;
-    for raw_token in text.split_whitespace() {
-        let Some(relative_start) = text[search_from..].find(raw_token) else {
-            continue;
-        };
+fn web_link_ranges(text: &str) -> impl Iterator<Item = (Range<usize>, String)> + '_ {
+    let mut search_from = 0;
+    text.split_whitespace().filter_map(move |raw_token| {
+        let relative_start = text[search_from..].find(raw_token)?;
         let raw_start = search_from + relative_start;
         search_from = raw_start + raw_token.len();
         let trimmed_start = raw_token
@@ -736,17 +743,24 @@ pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
             .unwrap_or(raw_token.len());
         let trimmed_end = trailing_url_end(&raw_token[trimmed_start..]) + trimmed_start;
         if trimmed_start >= trimmed_end {
-            continue;
+            return None;
         }
-        let candidate = &raw_token[trimmed_start..trimmed_end];
-        let Some(destination) = web_destination(candidate) else {
-            continue;
-        };
-        let candidate_start = raw_start + trimmed_start;
+        let range = raw_start + trimmed_start..raw_start + trimmed_end;
+        let destination = web_destination(&text[range.clone()])?;
+        Some((range, destination))
+    })
+}
+
+pub(crate) fn web_links_in_text(text: &str) -> Vec<TerminalHyperlink> {
+    let mut links = Vec::new();
+    let mut source_byte = 0usize;
+    let mut source_column = 0usize;
+    for (range, destination) in web_link_ranges(text) {
+        let candidate_start = range.start;
         // Measure disjoint prefixes so scanning a draft with many URLs stays linear.
-        source_column += display_width(&text[source_byte..candidate_start]);
+        source_column += source_text_width(&text[source_byte..candidate_start]);
         source_byte = candidate_start;
-        let end = source_column + display_width(candidate);
+        let end = source_column + source_text_width(&text[range]);
         links.push(TerminalHyperlink::web(source_column..end, destination));
     }
     links

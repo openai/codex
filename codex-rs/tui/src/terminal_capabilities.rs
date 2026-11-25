@@ -85,6 +85,38 @@ fn zellij_session() -> bool {
         .any(|key| std::env::var_os(key).is_some())
 }
 
+fn direct_stdout() -> bool {
+    std::io::stdout().is_terminal() && !screen_active()
+}
+
+fn is_direct_terminal(terminal: &TerminalInfo, term: Option<&str>) -> bool {
+    terminal.multiplexer.is_none()
+        && !term.is_some_and(|term| {
+            term == "dumb" || term.starts_with("screen") || term.starts_with("tmux")
+        })
+}
+
+fn direct_terminal_name() -> Option<TerminalName> {
+    let terminal = terminal_info();
+    (direct_stdout() && is_direct_terminal(&terminal, std::env::var("TERM").ok().as_deref()))
+        .then_some(terminal.name)
+}
+
+/// A terminal's explicit bidi mode overrides assumptions about its renderer.
+/// Silence or an unrecognized mode alone cannot rule out native or partial RTL.
+pub(crate) fn needs_bidi_layout(implicit_bidi: Option<bool>) -> bool {
+    let Some(name) = direct_terminal_name() else {
+        return false;
+    };
+    if let Some(implicit) = implicit_bidi {
+        return !implicit;
+    }
+    matches!(
+        name,
+        TerminalName::WindowsTerminal | TerminalName::Ghostty | TerminalName::Alacritty
+    )
+}
+
 #[cfg(unix)]
 pub(crate) fn should_probe_inline_screen() -> bool {
     terminal_info().multiplexer.is_none() && is_ssh_session()
@@ -282,11 +314,7 @@ pub(crate) enum WebLinkDisplay {
 }
 
 pub(crate) fn web_link_display(terminal: &TerminalInfo, term: Option<&str>) -> WebLinkDisplay {
-    if terminal.multiplexer.is_some()
-        || term.is_some_and(|term| {
-            term == "dumb" || term.starts_with("screen") || term.starts_with("tmux")
-        })
-    {
+    if !is_direct_terminal(terminal, term) {
         return WebLinkDisplay::WithDestination;
     }
     match terminal.name {
@@ -310,7 +338,7 @@ pub(crate) fn web_link_display(terminal: &TerminalInfo, term: Option<&str>) -> W
 }
 
 pub(crate) fn detect_web_link_display() -> WebLinkDisplay {
-    if !std::io::stdout().is_terminal() || screen_active() {
+    if !direct_stdout() {
         return WebLinkDisplay::WithDestination;
     }
     web_link_display(&terminal_info(), std::env::var("TERM").ok().as_deref())
