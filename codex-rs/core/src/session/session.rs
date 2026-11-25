@@ -1920,6 +1920,11 @@ impl Session {
                 workspace_routing.as_ref().clone(),
                 extensions.model_request_contributors().to_vec(),
             )
+            .with_guardian_reply_rendering(
+                thread_extension_data
+                    .get::<crate::client::QuoteGuardianReplies>()
+                    .is_some(),
+            )
             .with_budget_policy(budget_policy.clone())
             .with_executed_tool_calls(executed_tool_calls.clone())
             .with_restored_history(matches!(

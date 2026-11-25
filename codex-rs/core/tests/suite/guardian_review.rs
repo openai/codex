@@ -627,13 +627,15 @@ for (const phase of ["before", "after"]) {
     Ok(())
 }
 
-#[test_case(false, &[]; "without parent checkpoint")]
-#[test_case(true, &[]; "reuse parent checkpoint and newer authorization")]
-#[test_case(false, &["rate_limit_exceeded", "rate_limit_exceeded"]; "failed compaction preserves pending evidence")]
+#[test_case(false, &[], true; "without parent checkpoint")]
+#[test_case(false, &[], false; "without native agent review")]
+#[test_case(true, &[], false; "reuse parent checkpoint and newer authorization")]
+#[test_case(false, &["rate_limit_exceeded", "rate_limit_exceeded"], false; "failed compaction preserves pending evidence")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_recovers_after_compaction(
     with_parent_checkpoint: bool,
     compaction_errors: &[&str],
+    review_agent_calls: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
@@ -643,6 +645,7 @@ async fn guardian_review_recovers_after_compaction(
 
     let server = start_mock_server().await;
     let summary = "Guardian retained the user's standing authorization.";
+    let with_child_reply = !with_parent_checkpoint && compaction_errors.is_empty();
     let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
     let mut builder = test_codex()
         .with_thread_store(store.clone())
@@ -665,6 +668,17 @@ async fn guardian_review_recovers_after_compaction(
             });
         })
         .with_config(move |config| {
+            if with_child_reply {
+                config.update_plan_enabled = true;
+                config
+                    .features
+                    .enable(Feature::MultiAgentV2)
+                    .expect("enable MAv2");
+                config
+                    .features
+                    .set_enabled(Feature::GuardianNativeMultiAgentHistory, review_agent_calls)
+                    .expect("set native agent review flag");
+            }
             config.model_context_window = Some(100_000);
             config.model_auto_compact_token_limit = Some(50_000);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -762,9 +776,38 @@ async fn guardian_review_recovers_after_compaction(
             ev_completed("resp-parent-done"),
         ]),
     ]);
+    if with_child_reply {
+        // Queued progress reaches the parent at the next sampling boundary.
+        response_events.insert(
+            0,
+            sse(vec![
+                ev_function_call(
+                    "plan",
+                    "update_plan",
+                    r#"{"plan":[{"step":"Review the score","status":"in_progress"}]}"#,
+                ),
+                ev_completed("planned"),
+            ]),
+        );
+    }
     let responses = mount_sse_sequence(&server, response_events).await;
 
     let user_authorization = "Read the internal evaluation samples I have authorized.";
+    if with_child_reply {
+        let parent = codex_protocol::AgentPath::root();
+        test.codex
+            .submit(Op::InterAgentCommunication {
+                communication: codex_protocol::protocol::InterAgentCommunication::new_encrypted(
+                    parent.join("scoring").expect("scoring path"),
+                    parent,
+                    Vec::new(),
+                    "opaque-score".into(),
+                    /*trigger_turn*/ false,
+                ),
+                start_options: Default::default(),
+            })
+            .await?;
+    }
     test.submit_text_turn(user_authorization).await?;
 
     assert_eq!(
@@ -826,6 +869,30 @@ async fn guardian_review_recovers_after_compaction(
         vec![verdict_format; compact_requests.len()],
         "compaction and retries must preserve the verdict format"
     );
+    if with_child_reply {
+        let replies = |request: &core_test_support::responses::ResponsesRequest| {
+            request
+                .input()
+                .into_iter()
+                .filter(|item| {
+                    item["output"][1]["encrypted_content"] == "opaque-score"
+                        || item["content"][1]["encrypted_content"] == "opaque-score"
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = replies(guardian_requests[0]);
+        assert_eq!(original.len(), 1);
+        assert_eq!(replies(compact_requests[0]), original);
+        let retained = if review_agent_calls {
+            assert_eq!(original[0]["name"], "subagent_reply");
+            original
+        } else {
+            assert_eq!(original[0]["type"], "agent_message");
+            Vec::new()
+        };
+        assert_eq!(replies(guardian_requests[1]), retained);
+        assert_eq!(replies(guardian_requests[2]), retained);
+    }
     if let Some(compact_request) = compact_requests.first() {
         assert!(
             compact_request

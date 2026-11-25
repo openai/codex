@@ -164,6 +164,16 @@ impl PreparedGuardianContext {
             client_mcp_extensions: self.parent.services.client_mcp_extensions.clone(),
             ..crate::StartThreadOptions::new(config)
         };
+        if self
+            .context
+            .turn()
+            .config
+            .guardian_quotes_subagent_replies(&self.config.model_provider_id)
+        {
+            options
+                .thread_extension_init
+                .insert(crate::client::QuoteGuardianReplies);
+        }
         if let Some(inference) = &self.inference {
             options
                 .thread_extension_init

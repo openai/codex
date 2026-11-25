@@ -213,6 +213,7 @@ async fn build_and_install_compaction(
         prompt_input,
         prompt_input_metadata,
         compaction_output,
+        sess.services.model_client.quotes_guardian_replies(),
         sess.features().get(),
         if sess.enabled(Feature::CompactionImageBudget) {
             RetainedImageBudget::Enabled

@@ -1850,6 +1850,12 @@ impl Config {
                 .enabled(Feature::GuardianNativeMultiAgentHistory)
     }
 
+    /// Both the reviewed thread and the reviewer must support encrypted agent history.
+    pub fn guardian_quotes_subagent_replies(&self, reviewer_provider_id: &str) -> bool {
+        self.guardian_native_multi_agent_history_enabled()
+            && reviewer_provider_id == OPENAI_PROVIDER_ID
+    }
+
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)

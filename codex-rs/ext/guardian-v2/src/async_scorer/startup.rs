@@ -156,6 +156,7 @@ pub(super) async fn sampler_config(
             });
     let luna_compaction_hash = luna_model.and_then(|model| model.comp_hash.clone());
     Ok(LunaSamplerConfig {
+        quote_guardian_replies: input.config.guardian_quotes_subagent_replies(&provider_id),
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::for_provider(
             provider.info(),
             &provider_id,

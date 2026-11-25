@@ -558,6 +558,7 @@ fn build_v2_compacted_history(
     prompt_input: Vec<ResponseItem>,
     prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
     compaction_output: ResponseItem,
+    quote_guardian_replies: bool,
     features: &Features,
     image_budget: RetainedImageBudget,
     audio_durations: &FileAudioDurations,
@@ -576,7 +577,7 @@ fn build_v2_compacted_history(
     let retained = select_retained_items(
         &prompt_input,
         |item| {
-            is_retained_for_remote_compaction_v2(item, features)
+            is_retained_for_remote_compaction_v2(item, features, quote_guardian_replies)
                 || pending_sequence.is_some_and(|first| is_retained_pending_mail(item, first))
         },
         ResponseItemEnvelope::is_always_retained,
@@ -641,6 +642,7 @@ pub(crate) fn should_retain_client_item(item: &ResponseItemEnvelope, features: &
 fn is_retained_for_remote_compaction_v2(
     envelope: &ResponseItemEnvelope,
     features: &Features,
+    quote_guardian_replies: bool,
 ) -> bool {
     if should_retain_client_item(envelope, features) {
         return true;
@@ -667,8 +669,11 @@ fn is_retained_for_remote_compaction_v2(
             Some(AgentMessageInputContent::InputText { text })
                 if text.starts_with("Message Type: FINAL_ANSWER\n")
         );
-        return !is_descendant_progress
-            && !is_completion
+        // Guardian's copy is transcript evidence. Retain it whole within both
+        // the per-message cap and the shared window budget.
+        let quoted_reply = quote_guardian_replies
+            && codex_guardian_context::is_encrypted_subagent_reply(author, recipient, content);
+        return (quoted_reply || (!is_descendant_progress && !is_completion))
             && estimate_item_token_count(item) <= MAX_RETAINED_AGENT_MESSAGE_TOKENS;
     }
 
@@ -1017,6 +1022,7 @@ mod tests {
             input,
             metadata,
             output,
+            /*quote_guardian_replies*/ false,
             &Features::with_defaults(),
             RetainedImageBudget::Disabled,
             &FileAudioDurations::default(),
@@ -1145,6 +1151,7 @@ mod tests {
                     None,
                 ],
                 output.clone(),
+                /*quote_guardian_replies*/ false,
                 &features,
                 RetainedImageBudget::Disabled,
                 &FileAudioDurations::default(),

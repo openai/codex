@@ -17,12 +17,26 @@ async fn retained_websocket_requests_preserve_model_output_and_ids() -> Result<(
     ];
     let ws =
         responses::start_websocket_server(vec![Vec::new(), vec![events.clone(), events]]).await;
-    let sampler = connect_sampler(sampler_config(format!(
+    let mut config = sampler_config(format!(
         "http://{}/v1",
         ws.uri().trim_start_matches("ws://")
-    )))
-    .await?;
+    ));
+    config.quote_guardian_replies = true;
+    let sampler = connect_sampler(config).await?;
     let mut committed = sample_request("parent").input;
+    let root = codex_protocol::AgentPath::root();
+    let mut child = codex_protocol::protocol::InterAgentCommunication::new_encrypted(
+        root.join("scoring").expect("scoring path"),
+        root,
+        Vec::new(),
+        "opaque-score".into(),
+        /*trigger_turn*/ false,
+    )
+    .to_model_input_item();
+    child.set_id(Some(codex_protocol::ResponseItemId::with_suffix(
+        "amsg", "child",
+    )));
+    committed.push(child);
     let mut output = Vec::new();
     for _ in 0..2 {
         let (ready, score) = tokio::sync::oneshot::channel();
@@ -74,9 +88,20 @@ async fn retained_websocket_requests_preserve_model_output_and_ids() -> Result<(
     let first = requests[0].body_json();
     assert_eq!(first["include"], json!(["reasoning.encrypted_content"]));
     let second = requests[1].body_json();
-    assert_eq!(second["input"][0], first["input"][0]);
+    let reply = &first["input"][1];
+    assert_eq!(reply["type"], "function_call_output");
+    assert_eq!(reply["id"], "fco_child");
+    assert_eq!(reply["namespace"], "guardian");
+    assert_eq!(reply["name"], "subagent_reply");
+    assert!(reply.get("call_id").is_none());
     assert_eq!(
-        json!(&second["input"].as_array().unwrap()[1..1 + output.len()]),
+        reply["output"][1],
+        json!({"type": "encrypted_content", "encrypted_content": "opaque-score"})
+    );
+    assert_eq!(second["input"][0], first["input"][0]);
+    assert_eq!(&second["input"][1], reply);
+    assert_eq!(
+        json!(&second["input"].as_array().unwrap()[2..2 + output.len()]),
         serde_json::to_value(&output)?
     );
     Ok(())

@@ -47,6 +47,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 16;
 
 /// Host-owned provider, authentication, and attribution for one Luna connection.
 pub struct LunaSamplerConfig {
+    pub quote_guardian_replies: bool,
     /// Provider and credentials selected for the owning thread.
     pub provider: SharedModelProvider,
     /// Provider and feature policy shared with ordinary model requests.
@@ -332,12 +333,24 @@ impl LunaSampler {
             .map(|envelope| (envelope.item, envelope.metadata))
             .unzip();
         let mut execution = self.execution(&sampling, input, auth_owner);
+        // Only the request sees tool outputs. Restore native replies for transcript deduplication.
+        let mut native_replies = Vec::new();
+        if self.config.quote_guardian_replies {
+            for (index, item) in execution.request.input.iter_mut().enumerate() {
+                if let Some(output) = codex_guardian_context::subagent_reply_output(item) {
+                    native_replies.push((index, std::mem::replace(item, output)));
+                }
+            }
+        }
         execution.request.include = vec!["reasoning.encrypted_content".to_owned()];
         let mut telemetry = telemetry::SamplingTelemetry::new(
             self.config.metrics.clone(),
             sampling.pending_score.clone(),
         );
         let result = execution.run(&mut completion, &mut telemetry).await;
+        for (index, item) in native_replies {
+            execution.request.input[index] = item;
+        }
         execution
             .request
             .input

@@ -25,6 +25,9 @@ use transcript::ConversationTranscriptSection;
 
 mod audio_transcripts;
 mod native_tool_call;
+mod subagent_reply;
+pub use subagent_reply::is_encrypted_subagent_reply;
+pub use subagent_reply::subagent_reply_output;
 
 pub use action::ActionPresentation;
 pub use action::EnclosingCall;

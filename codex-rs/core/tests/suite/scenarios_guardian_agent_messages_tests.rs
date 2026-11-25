@@ -262,6 +262,34 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
     } else {
         test.submit_text_turn(prompt).await?;
     }
+    let with_child_reply = native_call_namespace == Some("functions");
+    let mut parent_replies = Vec::new();
+    let mut guardian_replies = Vec::new();
+    if with_child_reply {
+        let child = InterAgentCommunication::new_encrypted(
+            AgentPath::root().join("scoring").expect("scoring path"),
+            AgentPath::root(),
+            Vec::new(),
+            "opaque-score".into(),
+            /*trigger_turn*/ false,
+        );
+        parent_replies.push(serde_json::to_value(child.to_model_input_item())?);
+        guardian_replies.push(json!({
+            "type": "function_call_output",
+            "namespace": "guardian",
+            "name": "subagent_reply",
+            "output": [
+                {"type": "input_text", "text": "[assistant:/root/scoring → /root]\nMessage Type: MESSAGE\nTask name: /root\nSender: /root/scoring\nPayload:\n"},
+                {"type": "encrypted_content", "encrypted_content": "opaque-score"}
+            ]
+        }));
+        test.codex
+            .submit(Op::InterAgentCommunication {
+                communication: child,
+                start_options: Default::default(),
+            })
+            .await?;
+    }
     let communication = InterAgentCommunication::new_encrypted(
         AgentPath::root(),
         AgentPath::root().join("worker").expect("worker path"),
@@ -269,7 +297,9 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
         "opaque-parent-approval".into(),
         /*trigger_turn*/ true,
     );
-    let expected = serde_json::to_value(communication.to_model_input_item())?;
+    let handoff = serde_json::to_value(communication.to_model_input_item())?;
+    parent_replies.push(handoff.clone());
+    guardian_replies.push(handoff);
     // TurnComplete can arrive before the previous turn finishes teardown. Queue
     // the reply through the same mailbox path used by real agent messages.
     test.codex
@@ -321,22 +351,24 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
             })],
         );
     }
-    for request in reviews.iter().copied().chain(requests.last()) {
-        let messages = request
+    let replies = |request: &responses::ResponsesRequest| {
+        request
             .input()
             .into_iter()
-            .filter(|item| item["type"] == "agent_message")
-            .map(|mut item| {
-                item.as_object_mut()
-                    .expect("agent message should be an object")
-                    .remove("id");
-                item.as_object_mut()
-                    .expect("agent message should be an object")
-                    .remove("internal_chat_message_metadata_passthrough");
-                item
+            .filter(|item| {
+                item["type"] == "agent_message"
+                    || (item["type"] == "function_call_output" && item.get("call_id").is_none())
             })
-            .collect::<Vec<_>>();
-        assert_eq!(messages, vec![expected.clone()]);
+            .map(responses::strip_metadata_from_json)
+            .map(responses::strip_response_item_ids_from_json)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        replies(requests.last().expect("parent continuation")),
+        parent_replies
+    );
+    for review in &reviews {
+        assert_eq!(replies(review), guardian_replies);
     }
     if let Some(historical_call) = &historical_call {
         for request in reviews {
@@ -362,7 +394,11 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
                 .expect("review should contain the parent agent message");
             assert!(call_index < reply_index);
             assert_eq!(
-                request.inputs_of_type("function_call_output"),
+                request
+                    .inputs_of_type("function_call_output")
+                    .into_iter()
+                    .filter(|item| item.get("call_id").is_some())
+                    .collect::<Vec<_>>(),
                 vec![input[call_index + 1].clone()]
             );
             assert_eq!(
@@ -375,7 +411,9 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
             );
         }
     }
-    let description = if historical_call.is_some() {
+    let description = if with_child_reply {
+        "Guardian presents the encrypted child reply as a named tool output. The agent keeps the native reply. The encrypted parent handoff and historical send stay native across both reviews."
+    } else if historical_call.is_some() {
         "A historical MAv2 send_message call and an encrypted parent reply reach both Guardian reviews exactly once, in order. Calls retain their original IDs, namespace and encryption metadata, with a paired evidence-only output. The second review appends to the first request. Ciphertext and decisions are mocked; this verifies transport, not backend decryption or authorization outcomes."
     } else {
         "An encrypted parent reply is delivered as a native agent message. Both Guardian reviews contain it exactly once, in order, as agent evidence. Ciphertext and decisions are mocked; this scenario verifies transport, not backend decryption or authorization outcomes."
