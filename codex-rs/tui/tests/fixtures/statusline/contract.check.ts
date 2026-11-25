@@ -2,6 +2,7 @@ import type {
   CodeElement,
   ColElement,
   BoxElement,
+  SpacerElement,
   Color,
   RowElement,
   StatuslineItemId,
@@ -48,6 +49,11 @@ export function render(state: StatuslineState): UiTree {
 const indented: UiTree = { type: "text", props: { preserveWhitespace: true }, children: ["  ready"] };
 
 const summary: UiTree = { type: "text", props: { maxLines: 2 }, children: ["build results"] };
+
+const spacer: SpacerElement = { type: "spacer" };
+const emptySpacer: SpacerElement = { ...spacer, children: [] };
+// @ts-expect-error A spacer has no contents.
+const invalidSpacer: SpacerElement = { ...spacer, children: ["x"] };
 
 const stacked: BoxElement = { type: "box", props: { gap: 1 }, children: [summary, indented] };
 const horizontal: BoxElement = { ...stacked, props: { gap: 0, direction: "row", justify: "end" } };

@@ -30,6 +30,7 @@ impl std::str::FromStr for UiTree {
                 return Err(Self::Err::custom("UI tree exceeds 256 non-null nodes"));
             }
             match node {
+                UiNode::Spacer { .. } => {}
                 UiNode::String(text) => {
                     text_bytes += text.len();
                     if text_bytes > MAX_TEXT_BYTES {

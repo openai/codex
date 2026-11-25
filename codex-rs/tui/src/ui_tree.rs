@@ -47,6 +47,12 @@ pub(crate) enum UiNode {
         props: RowProps,
         children: Vec<Option<UiNode>>,
     },
+    /// Empty flex item sharing spare space on its parent's main axis.
+    Spacer {
+        #[serde(default, skip_serializing_if = "is_default")]
+        #[cfg_attr(test, ts(as = "Option<[(); 0]>", optional))]
+        children: [(); 0],
+    },
     Box {
         props: BoxProps,
         children: Vec<Option<UiNode>>,
@@ -174,7 +180,8 @@ impl TryFrom<&str> for LinkHref {
 
 /// A root row receives the available footer width. A row inside another row takes up to its content width.
 /// An explicit `justify` groups adjacent bare strings into one item. Use separate `text` or `row`
-/// elements to position fields independently. Omitting `justify` keeps gaps between authored children.
+/// elements to position fields independently. Rows with a direct spacer also group adjacent strings. Other rows with omitted
+/// `justify` keep gaps between authored children.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts", optional_fields = nullable))]

@@ -18,6 +18,7 @@ pub(super) struct RowPaint {
 #[derive(Debug, PartialEq)]
 pub(super) struct PreparedNode {
     pub(super) kind: NodeKind,
+    pub(super) stretches: bool,
     pub(super) widths: Widths,
 }
 
@@ -38,12 +39,14 @@ pub(super) enum NodeKind {
     Col {
         children: Vec<PreparedNode>,
         gap: u64,
+        spacers: usize,
     },
     Row {
         children: Vec<PreparedNode>,
         props: RowProps,
         paint: RowPaint,
     },
+    Spacer,
     Empty,
 }
 
@@ -77,6 +80,10 @@ impl Flow {
 
 impl PreparedNode {
     pub(super) fn from_node(node: UiNode, paint: Paint) -> Option<Self> {
+        let container = matches!(
+            node,
+            UiNode::Col { .. } | UiNode::Box { .. } | UiNode::Row { .. }
+        );
         let mut flow = Flow {
             paint: paint.clone(),
             ..Flow::default()
@@ -85,14 +92,19 @@ impl PreparedNode {
         Self::collect_inline(&mut flow, &mut inline, node, paint);
         flow.line.extend(Self::text(inline));
         let last = flow.take_line();
-        if flow.blocks.is_empty() {
-            return last;
-        }
-        flow.blocks.extend(last);
-        if flow.blocks.len() == 1 {
-            return flow.blocks.pop();
-        }
-        Some(Self::col(flow.blocks, /*gap*/ 0))
+        let mut node = if flow.blocks.is_empty() {
+            last?
+        } else {
+            flow.blocks.extend(last);
+            if flow.blocks.len() == 1 {
+                flow.blocks.pop()?
+            } else {
+                Self::col(flow.blocks, /*gap*/ 0)
+            }
+        };
+        // An inline wrapper interrupts cross-axis stretch.
+        node.stretches &= container;
+        Some(node)
     }
 
     // Emergency word breaks allow each chunk to fit independently. Flex rows
@@ -111,9 +123,10 @@ impl PreparedNode {
                 .map(Self::breakable_minimum)
                 .max()
                 .unwrap_or_default(),
-            NodeKind::Clamped { .. } | NodeKind::Row { .. } | NodeKind::Empty => {
-                self.widths.minimum
-            }
+            NodeKind::Clamped { .. }
+            | NodeKind::Row { .. }
+            | NodeKind::Spacer
+            | NodeKind::Empty => self.widths.minimum,
         }
     }
 
@@ -123,9 +136,18 @@ impl PreparedNode {
             widths.minimum = widths.minimum.max(child.widths.minimum);
             widths.preferred = widths.preferred.max(child.widths.preferred);
         }
+        let spacers = children
+            .iter()
+            .filter(|c| matches!(c.kind, NodeKind::Spacer))
+            .count();
         Self {
+            stretches: spacers > 0,
             widths,
-            kind: NodeKind::Col { children, gap },
+            kind: NodeKind::Col {
+                children,
+                gap,
+                spacers,
+            },
         }
     }
 
@@ -150,6 +172,7 @@ impl PreparedNode {
             widths.preferred = widths.preferred.max(width as u64);
         }
         Some(Self {
+            stretches: false,
             kind: NodeKind::Text(text),
             widths,
         })
@@ -181,6 +204,9 @@ impl PreparedNode {
         };
         Some(Self {
             widths,
+            stretches: children.iter().any(|c| {
+                c.stretches || (props.wrap == RowWrap::Wrap && matches!(c.kind, NodeKind::Spacer))
+            }),
             kind: NodeKind::Row {
                 children,
                 props,
@@ -214,7 +240,15 @@ impl PreparedNode {
     }
 
     fn flex_item(child: UiNode, paint: &Paint) -> Self {
+        if matches!(child, UiNode::Spacer { .. }) {
+            return Self {
+                stretches: false,
+                kind: NodeKind::Spacer,
+                widths: Widths::default(),
+            };
+        }
         Self::from_node(child, paint.clone()).unwrap_or_else(|| Self {
+            stretches: false,
             kind: NodeKind::Empty,
             widths: Widths::default(),
         })
@@ -225,6 +259,16 @@ impl PreparedNode {
         let children = match node {
             UiNode::String(raw) => {
                 inline.push_leaf(raw, paint);
+                return;
+            }
+            UiNode::Spacer { .. } => {
+                // Outside a flex container the empty div interrupts inline flow.
+                flow.finish_line(inline);
+                flow.blocks.push(Self {
+                    stretches: false,
+                    kind: NodeKind::Empty,
+                    widths: Widths::default(),
+                });
                 return;
             }
             UiNode::Code { children } => {
@@ -264,7 +308,12 @@ impl PreparedNode {
                 if let Some(color) = props.background {
                     paint.background = Some(color);
                 }
-                let children = if props.justify.is_some() {
+                let children = if props.justify.is_some()
+                    || children
+                        .iter()
+                        .flatten()
+                        .any(|n| matches!(n, UiNode::Spacer { .. }))
+                {
                     Self::flex_items(children, &paint)
                 } else {
                     // Existing providers apply the gap to each authored child.
@@ -293,6 +342,7 @@ impl PreparedNode {
                                 minimum: content.breakable_minimum(),
                                 preferred: content.widths.preferred,
                             },
+                            stretches: false,
                             kind: NodeKind::Clamped {
                                 content: Box::new(content),
                                 max_lines,

@@ -39,7 +39,7 @@ export type DirectedBox = { "direction": "row" } & RowProps | { "direction": "co
 
 export type DisplayMode = "standard" | "raw";
 
-export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "box", props: BoxProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
+export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "spacer", children?: [], } | { "type": "box", props: BoxProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
 
 export type FileSystem = { "type": "restricted" } | { "type": "unrestricted" };
 
@@ -66,7 +66,8 @@ export type RowJustify = "start" | "center" | "end" | "between";
 /**
  * A root row receives the available footer width. A row inside another row takes up to its content width.
  * An explicit `justify` groups adjacent bare strings into one item. Use separate `text` or `row`
- * elements to position fields independently. Omitting `justify` keeps gaps between authored children.
+ * elements to position fields independently. Rows with a direct spacer also group adjacent strings. Other rows with omitted
+ * `justify` keep gaps between authored children.
  */
 export type RowProps = {
 /**
@@ -123,6 +124,7 @@ export type LinkElement = Extract<Element, { type: "link" }>;
 export type RowElement = Extract<Element, { type: "row" }>;
 export type ColElement = Extract<Element, { type: "col" }>;
 export type BoxElement = Extract<Element, { type: "box" }>;
+export type SpacerElement = Extract<Element, { type: "spacer" }>;
 export type CodeElement = Extract<Element, { type: "code" }>;
 type BoxColumnProps = ColProps & { [K in Exclude<keyof RowProps, keyof ColProps>]?: never };
 export type RateLimitWindow = {
