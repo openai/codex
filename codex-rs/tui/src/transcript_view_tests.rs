@@ -1475,6 +1475,110 @@ fn collapsing_tool_group_refills_viewport() {
 }
 
 #[test]
+fn late_command_completion_keeps_tool_groups_independent() {
+    use codex_app_server_protocol::CommandExecutionSource;
+    use codex_protocol::models::MessagePhase::Commentary;
+
+    let command = || {
+        crate::exec_cell::new_active_exec_command(
+            "background".into(),
+            vec!["check".into()],
+            Vec::new(),
+            CommandExecutionSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        )
+    };
+    let mut view = TranscriptView::default();
+    let running = command();
+    let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+    parked_screen(&mut view, &cells, Some(&running));
+    assert!(view.toggle_disclosure_at(&cells, /*column*/ 4, /*row*/ 0));
+
+    // The running cell is already in history when the result arrives after commentary.
+    cells.push(Arc::new(running));
+    cells.push(assistant_message("Checking the result.", Some(Commentary)));
+    let mut completed = command();
+    completed.complete_call(
+        "background",
+        crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, String::new()),
+        std::time::Duration::ZERO,
+    );
+    view.jump_to_latest();
+    let live_result = parked_screen(&mut view, &cells, Some(&completed));
+    cells.push(Arc::new(completed));
+    let independent = parked_screen(&mut view, &cells, /*active*/ None);
+    assert!(
+        live_result.contains("▾ Running check") && live_result.contains("▸ Ran check"),
+        "{live_result}"
+    );
+    insta::assert_snapshot!(independent, @r"
+        ▾ Running check
+          Running check
+
+    • Checking the result.
+        ▸ Ran check
+    ");
+
+    let row = independent
+        .lines()
+        .position(|line| line.contains("Ran check"))
+        .unwrap() as u16;
+    assert!(view.toggle_disclosure_at(&cells, /*column*/ 4, row));
+    let both = parked_screen(&mut view, &cells, /*active*/ None);
+    assert!(
+        both.contains("▾ Running check") && both.contains("▾ Ran check"),
+        "{both}"
+    );
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    assert_eq!(
+        parked_screen(&mut view, &cells, /*active*/ None),
+        independent
+    );
+    assert!(view.toggle_disclosure_at(&cells, /*column*/ 4, /*row*/ 0));
+    let closed = parked_screen(&mut view, &cells, /*active*/ None);
+    assert!(
+        closed.contains("▸ Running check") && closed.contains("▸ Ran check"),
+        "{closed}"
+    );
+}
+
+#[test]
+fn late_tool_result_stays_independent_across_turns() {
+    let tool = || {
+        crate::history_cell::new_active_mcp_tool_call(
+            "lookup".into(),
+            crate::history_cell::McpInvocation {
+                environment_id: None,
+                server: "docs".into(),
+                tool: "search".into(),
+                arguments: None,
+            },
+            /*animations_enabled*/ false,
+        )
+    };
+    let mut cells = vec![prompt("Start a lookup"), Arc::new(tool())];
+    let mut view = TranscriptView::default();
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    turn_screen(&mut view, &cells);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+
+    cells.push(prompt("Continue"));
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    let mut result = tool();
+    result.complete(std::time::Duration::ZERO, Err("Offline".into()));
+    cells.push(Arc::new(result));
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    view.jump_to_latest();
+    let screen = turn_screen(&mut view, &cells);
+    assert!(
+        screen.contains("▾ Calling") && screen.contains("▸ Failed"),
+        "{screen}"
+    );
+}
+
+#[test]
 fn tool_groups_expand_independently_inside_a_completed_turn() {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::new_active_exec_command;

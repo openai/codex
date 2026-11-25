@@ -73,6 +73,8 @@ pub(super) struct TurnDetails {
     live: (Vec<String>, Vec<String>),
     pending: Vec<(usize, DynamicToolCallCell)>,
     indexed_snapshot: bool,
+    // Counts before the mutable tail, which is rebuilt whenever live activity changes.
+    prior_activity_counts: std::collections::HashMap<String, usize>,
 }
 
 struct Entry {
@@ -81,7 +83,7 @@ struct Entry {
     row: Option<TurnRow>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct ToolGroup {
     anchor: Option<usize>,
     ids: Vec<String>,
@@ -276,6 +278,34 @@ impl TurnDetails {
             }
         }
         group.finish(rows, cells);
+
+        // A tool can start in one group and finish in another. Assign repeated member
+        // IDs in chronological order so a late result never takes the original group's
+        // expansion or focus. Rebuild the live tail from the same prefix on every update.
+        let mut counts = std::collections::HashMap::new();
+        for entry in rows.iter_mut() {
+            let Some(TurnRow::Tools(group)) = &mut entry.row else {
+                continue;
+            };
+            for id in Arc::make_mut(group).ids.iter_mut().rev() {
+                if !id.starts_with("summary:") {
+                    continue;
+                }
+                let count = counts.entry(id.clone()).or_insert_with(|| {
+                    self.prior_activity_counts
+                        .get(id)
+                        .copied()
+                        .unwrap_or_default()
+                });
+                if *count > 0 {
+                    *id = format!("repeat:{count}:{id}");
+                }
+                *count += 1;
+            }
+        }
+        if !latest {
+            self.prior_activity_counts.extend(counts);
+        }
         if hidden_count > 0 {
             let label = completion
                 .and_then(FinalMessageSeparator::display_label)
@@ -374,6 +404,9 @@ impl TranscriptView {
                 != details.rows.get(start).map(|entry| entry.key)
         {
             start = 0;
+        }
+        if start == 0 {
+            details.prior_activity_counts.clear();
         }
         details.rows.truncate(start);
         details.pending.retain(|(index, _)| *index < start);
