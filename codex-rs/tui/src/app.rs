@@ -903,7 +903,9 @@ impl App {
             self.chat_widget.rendered_selection.borrow_mut().end_drag();
         }
         match &event {
+            // A terminal can report focus between mouse-down and mouse-up.
             TuiEvent::Draw
+            | TuiEvent::FocusGained
             | TuiEvent::Mouse(crossterm::event::MouseEvent {
                 kind: MouseEventKind::Up(_) | MouseEventKind::Moved,
                 ..

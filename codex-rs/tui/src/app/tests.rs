@@ -5660,13 +5660,13 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let buffer = tui.terminal.previous_buffer();
     let style = |x| buffer[(x, chooser.y)].style();
     assert_eq!([close_x - 1, close_x + 1].map(style), [style(close_x); 2]);
-    for kind in [down, release] {
-        boxed_future!(app.handle_tui_event(
-            &mut tui,
-            &mut app_server,
-            mouse(kind, close_x + 1, chooser.y)
-        ))
-        .await?;
+    // Rex reports focus again between the press and release of a single click.
+    for event in [
+        mouse(down, close_x + 1, chooser.y),
+        TuiEvent::FocusGained,
+        mouse(release, close_x + 1, chooser.y),
+    ] {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
     }
     let frame = side_frame(&mut app, &mut tui, even)?;
     let dialog = frame
