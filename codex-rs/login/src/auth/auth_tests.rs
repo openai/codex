@@ -1650,6 +1650,59 @@ impl ExternalAuth for RefreshingExternalAuth {
     }
 }
 
+#[tokio::test]
+async fn initial_external_auth_preserves_policy_until_owner_changes() {
+    let codex_home = tempdir().unwrap();
+    let controller = codex_http_client::NetworkPolicyController::default();
+    let policy = controller.policy();
+    assert!(controller.publish(
+        policy.revision(),
+        codex_http_client::DestinationPolicy::Restricted {
+            allowed_hosts: std::collections::BTreeSet::from(["allowed.example".to_string()]),
+        },
+    ));
+    let allowed = "https://allowed.example/".parse().unwrap();
+    let blocked = "https://blocked.example/".parse().unwrap();
+    let permit = policy.acquire(&allowed).unwrap();
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::Ephemeral,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        AuthRouteConfig::from_http_client_factory(
+            crate::test_support::transport_default_auth_route_config()
+                .http_client_factory()
+                .clone()
+                .with_network_policy(policy.clone()),
+        ),
+    )
+    .await
+    .with_initial_external_auth(Arc::new(RefreshingExternalAuth {
+        initial: CodexAuth::from_api_key("initial-owner"),
+        refreshed: CodexAuth::from_api_key("another-owner"),
+    }))
+    .await
+    .unwrap();
+
+    assert_eq!(
+        manager.auth_cached().unwrap().api_key(),
+        Some("initial-owner")
+    );
+    assert!(permit.check().is_ok());
+    assert!(policy.acquire(&allowed).is_ok());
+    assert!(policy.acquire(&blocked).is_err());
+
+    manager.refresh_token().await.unwrap();
+    assert_eq!(
+        manager.auth_cached().unwrap().api_key(),
+        Some("another-owner")
+    );
+    assert!(permit.check().is_err());
+    assert!(policy.acquire(&allowed).is_err());
+}
+
 fn external_header_auth(account_id: Option<&'static str>) -> CodexAuth {
     let mut headers = http::HeaderMap::new();
     headers.insert(

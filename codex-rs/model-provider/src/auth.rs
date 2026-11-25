@@ -16,6 +16,7 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
+use codex_login::AuthOwner;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuth;
 use codex_login::auth::AgentIdentityAuthError;
@@ -209,10 +210,19 @@ struct AuthManagerAuthProvider {
     // Startup auth is only the account-scoped identity anchor. Request
     // headers always come from the current AuthManager snapshot below.
     expected_auth: CodexAuth,
+    expected_api_owner: Option<AuthOwner>,
 }
 
 impl AuthManagerAuthProvider {
     fn is_expected_auth(&self, auth: &CodexAuth) -> bool {
+        if self.expected_auth.is_api_key_auth() {
+            // API WIF has no ChatGPT account ID. Its owner survives token renewal
+            // only within the same service account, organization, and project.
+            return auth.is_api_key_auth()
+                && self.expected_api_owner.as_ref().is_some_and(|owner| {
+                    self.auth_manager.auth_owner_for(auth).as_ref() == Some(owner)
+                });
+        }
         auth.uses_codex_backend()
             && auth.get_account_id() == self.expected_auth.get_account_id()
             && auth.get_chatgpt_user_id() == self.expected_auth.get_chatgpt_user_id()
@@ -550,9 +560,15 @@ pub fn auth_provider_from_auth_manager(
     auth_manager: Arc<AuthManager>,
     expected_auth: &CodexAuth,
 ) -> SharedAuthProvider {
+    let expected_api_owner = if expected_auth.is_api_key_auth() {
+        auth_manager.auth_owner_for(expected_auth)
+    } else {
+        None
+    };
     Arc::new(AuthManagerAuthProvider {
         auth_manager,
         expected_auth: expected_auth.clone(),
+        expected_api_owner,
     })
 }
 

@@ -5,6 +5,7 @@ use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::auth::AgentIdentityAuthRecord;
 use codex_login::auth::BedrockApiKeyAuth;
+use codex_login::auth::login_with_api_key;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -397,6 +398,63 @@ async fn auth_manager_provider_follows_refreshes_but_not_account_switches() {
         provider.apply_auth_headers(HeaderMap::new()).await,
         Err(AuthError::Transient(_))
     ));
+}
+
+#[tokio::test]
+async fn auth_manager_api_provider_stays_bound_to_its_initial_owner() {
+    let codex_home = tempfile::tempdir().unwrap();
+    login_with_api_key(
+        codex_home.path(),
+        "initial-token",
+        AuthCredentialsStoreMode::Ephemeral,
+        AuthKeyringBackendKind::default(),
+    )
+    .unwrap();
+    let manager = Arc::new(
+        AuthManager::new(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::Ephemeral,
+            /*forced_chatgpt_workspace_id*/ None,
+            /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
+            codex_login::test_support::transport_default_auth_route_config(),
+        )
+        .await,
+    );
+    let initial = manager.auth_cached().unwrap();
+    let provider = auth_provider_from_auth_manager(manager.clone(), &initial);
+    let headers = HeaderMap::from_iter([(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer initial-token"),
+    )]);
+    assert_eq!(provider.to_auth_headers().unwrap(), headers);
+    assert_eq!(
+        provider.apply_auth_headers(HeaderMap::new()).await.unwrap(),
+        headers
+    );
+
+    // A new login retires the original owner, even if its token is selected again.
+    for token in ["another-token", "initial-token"] {
+        login_with_api_key(
+            codex_home.path(),
+            token,
+            AuthCredentialsStoreMode::Ephemeral,
+            AuthKeyringBackendKind::default(),
+        )
+        .unwrap();
+        manager.reload().await;
+        assert_eq!(manager.auth_cached().unwrap().api_key(), Some(token));
+        assert!(matches!(
+            provider.to_auth_headers(),
+            Err(AuthError::Transient(_))
+        ));
+        assert!(matches!(
+            provider.apply_auth_headers(HeaderMap::new()).await,
+            Err(AuthError::Transient(_))
+        ));
+        assert!(!provider.refresh_after_unauthorized(headers.clone()).await);
+    }
 }
 
 #[derive(Clone, Copy)]

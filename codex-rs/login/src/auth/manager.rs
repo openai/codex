@@ -3255,6 +3255,19 @@ impl AuthManager {
         self.install_external_auth(external_auth).await
     }
 
+    async fn with_initial_external_auth(
+        mut self,
+        external_auth: Arc<dyn ExternalAuth>,
+    ) -> Result<Self, RefreshTokenError> {
+        // Hydrate startup credentials before this manager is shared. Initial WIF
+        // selection must not revoke policy composed for those credentials.
+        let owns_network_policy = self.owns_network_policy;
+        self.owns_network_policy = false;
+        self.install_external_auth(external_auth).await?;
+        self.owns_network_policy = owns_network_policy;
+        Ok(self)
+    }
+
     async fn install_external_auth(
         &self,
         external_auth: Arc<dyn ExternalAuth>,
@@ -3452,13 +3465,12 @@ impl AuthManager {
         manager.owns_network_policy =
             matches!(network_policy_ownership, NetworkPolicyOwnership::Primary);
         manager.workload_identity_selected = external_auth.is_some();
-        let manager = Arc::new(manager);
         if let Some(external_auth) = external_auth {
-            manager
-                .install_external_auth(Arc::new(external_auth))
+            manager = manager
+                .with_initial_external_auth(Arc::new(external_auth))
                 .await?;
         }
-        Ok(manager)
+        Ok(Arc::new(manager))
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
