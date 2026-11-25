@@ -11,7 +11,6 @@ workspace = true
 bitflags = { workspace = true }
 codex-attachment-store = { workspace = true }
 codex-code-mode = { workspace = true }
-codex-connectors = { workspace = true }
 codex-features = { workspace = true }
 codex-file-system = { workspace = true }
 codex-extension-items = { workspace = true }
@@ -27,7 +26,8 @@ rmcp = { workspace = true, default-features = false, features = [
     "server",
 ] }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["raw_value"] }
+# Keep large JSON numbers intact in tool arguments and results.
+serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 urlencoding = { workspace = true }

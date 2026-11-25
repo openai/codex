@@ -22,10 +22,8 @@ use codex_tools::RequestPluginInstallArgs;
 use codex_tools::RequestPluginInstallResult;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
-use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -544,6 +542,22 @@ async fn refresh_missing_requested_connectors(
             None
         }
     }
+}
+
+fn all_requested_connectors_picked_up(
+    expected_connector_ids: &[String],
+    accessible_connectors: &[AppInfo],
+) -> bool {
+    expected_connector_ids.iter().all(|connector_id| {
+        verified_connector_install_completed(connector_id, accessible_connectors)
+    })
+}
+
+fn verified_connector_install_completed(tool_id: &str, accessible_connectors: &[AppInfo]) -> bool {
+    accessible_connectors
+        .iter()
+        .find(|connector| connector.id == tool_id)
+        .is_some_and(|connector| connector.is_accessible)
 }
 
 fn verified_plugin_install_completed(

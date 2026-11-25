@@ -4,7 +4,6 @@ use crate::config::ConfigBuilder;
 use crate::plugins::plugins_manager_for_config;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
-use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
@@ -646,11 +645,15 @@ discoverables = [
     .await
     .expect("discoverable tools should load");
 
+    let id = "connector_gmail";
     assert_eq!(
         discoverable_tools,
-        vec![DiscoverableTool::from(plugin_connector_to_app_info(
-            "connector_gmail".to_string(),
-        ))]
+        vec![DiscoverableTool::from(DiscoverableConnectorInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            install_url: Some(connector_install_url(id, id)),
+        })]
     );
 }
 
@@ -685,10 +688,14 @@ apps = true
     .await
     .expect("discoverable tools should load");
 
+    let id = "asdk_app_databricks_workspace";
     assert_eq!(
         discoverable_tools,
-        vec![DiscoverableTool::from(plugin_connector_to_app_info(
-            "asdk_app_databricks_workspace".to_string(),
-        ))]
+        vec![DiscoverableTool::from(DiscoverableConnectorInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            install_url: Some(connector_install_url(id, id)),
+        })]
     );
 }

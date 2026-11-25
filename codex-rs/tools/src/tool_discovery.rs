@@ -1,4 +1,3 @@
-use codex_connectors::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -30,7 +29,7 @@ pub enum DiscoverableToolAction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiscoverableTool {
-    Connector(Box<AppInfo>),
+    Connector(Box<DiscoverableConnectorInfo>),
     Plugin(Box<DiscoverablePluginInfo>),
 }
 
@@ -64,8 +63,8 @@ impl DiscoverableTool {
     }
 }
 
-impl From<AppInfo> for DiscoverableTool {
-    fn from(value: AppInfo) -> Self {
+impl From<DiscoverableConnectorInfo> for DiscoverableTool {
+    fn from(value: DiscoverableConnectorInfo) -> Self {
         Self::Connector(Box::new(value))
     }
 }
@@ -88,6 +87,15 @@ pub fn filter_request_plugin_install_discoverable_tools_for_client(
         .into_iter()
         .filter(|tool| !matches!(tool, DiscoverableTool::Plugin(_)))
         .collect()
+}
+
+/// Connector metadata used to list suggestions and request installation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoverableConnectorInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub install_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

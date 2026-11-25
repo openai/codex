@@ -5348,7 +5348,6 @@ dependencies = [
  "bitflags 2.13.1",
  "codex-attachment-store",
  "codex-code-mode",
- "codex-connectors",
  "codex-extension-items",
  "codex-features",
  "codex-file-system",

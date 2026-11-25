@@ -13,6 +13,7 @@ use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_connectors::connector_runtime_context_key;
 use codex_exec_server::EnvironmentManager;
+use codex_tools::DiscoverableConnectorInfo;
 use codex_tools::DiscoverableTool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -85,7 +86,14 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         )
         .await
         .into_iter()
-        .map(DiscoverableTool::from);
+        .map(|connector| {
+            DiscoverableTool::from(DiscoverableConnectorInfo {
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+            })
+        });
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(
         config,
         plugins_manager,
