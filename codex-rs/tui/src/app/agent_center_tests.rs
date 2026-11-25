@@ -1361,12 +1361,53 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
     use crossterm::event::MouseEventKind::Down;
     use crossterm::event::MouseEventKind::Drag;
     use crossterm::event::MouseEventKind::Moved;
+    use crossterm::event::MouseEventKind::Up;
     let mut pointers = Vec::new();
-    for column in [divider.x, center.right(), center.right() + 1] {
+    for column in [
+        divider.x,
+        center.right(),
+        center.right() + 1,
+        center.right() + 2,
+    ] {
         crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, mouse(Moved, column)))
             .await?;
         pointers.push(tui.link_hover.shape);
     }
+    // Grab the padding cell. The divider should keep its one-column offset.
+    let gutter = center.right() + 1;
+    for event in [
+        mouse(Down(Left), gutter),
+        mouse(Drag(Left), gutter + 5),
+        TuiEvent::FocusGained,
+    ] {
+        crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+    }
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let preview = app.conversation_frame.command_center.unwrap().right();
+    assert_eq!(preview, center.right() + 5);
+    let accent = tui.terminal.previous_buffer()[(preview, 4)]
+        .style()
+        .add_modifier
+        .contains(ratatui::style::Modifier::BOLD);
+    crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, mouse(Up(Left), gutter + 8)))
+        .await?;
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let released = app.conversation_frame.command_center.unwrap().right();
+    assert_eq!(released, center.right() + 8);
+    // Focus loss can replace a release. Continue to route the focus event.
+    for event in [
+        mouse(Down(Left), released),
+        mouse(Drag(Left), center.right()),
+        TuiEvent::FocusLost,
+        TuiEvent::FocusGained,
+    ] {
+        crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+    }
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let interrupted = app.conversation_frame.command_center.unwrap().right();
+    assert_eq!(interrupted, center.right());
+    insta::assert_snapshot!(format!("preview {preview}, highlighted {accent}, release {released}, focus loss {interrupted}"), @"preview 41, highlighted true, release 44, focus loss 36");
+    // Reserve the simulated three-pane size for the sidebar press, after the preview draws.
     tui.screen_size_for_event(&TuiEvent::Resize(three_panes))?;
     crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, mouse(Down(Left), divider.x)))
         .await?;
@@ -1420,7 +1461,7 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
         crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
         pointers.push(tui.link_hover.shape);
     }
-    insta::assert_snapshot!(format!("{pointers:?}"), @"[Resize, Resize, Default, Resize, Resize]");
+    insta::assert_snapshot!(format!("{pointers:?}"), @"[Resize, Resize, Resize, Default, Resize, Resize]");
     let release = mouse(crossterm::event::MouseEventKind::Up(Left), resized);
     crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, release)).await?;
     crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;

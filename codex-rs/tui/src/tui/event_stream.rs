@@ -59,6 +59,9 @@ pub struct EventBroker<S: EventSource = CrosstermEventSource> {
 
 struct BrokerInput<S: EventSource> {
     source: EventBrokerState<S>,
+    // The first non-drag report (or end of input) belongs to the next poll, even
+    // if a different stream takes over the shared terminal.
+    lookahead: Poll<Option<EventResult>>,
     // Deliver focus changes captured during a thread transition before newer input.
     pending_focus: VecDeque<Event>,
     drain_failed: bool,
@@ -95,6 +98,7 @@ impl<S: EventSource + Default> EventBroker<S> {
             state: Mutex::new(BrokerInput {
                 source: EventBrokerState::Start,
                 pending_focus: VecDeque::new(),
+                lookahead: Poll::Pending,
                 drain_failed: false,
             }),
             resume_events_tx,
@@ -112,6 +116,12 @@ impl<S: EventSource + Default> EventBroker<S> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.source = EventBrokerState::Paused;
+        // Only focus reports survive an input boundary.
+        if let Poll::Ready(Some(Ok(event @ (Event::FocusGained | Event::FocusLost)))) =
+            std::mem::replace(&mut state.lookahead, Poll::Pending)
+        {
+            state.pending_focus.push_back(event);
+        }
     }
 
     /// Called with the event source paused. A terminal error must not expose stale keys.
@@ -189,6 +199,13 @@ impl EventSource for CrosstermEventSource {
     }
 }
 
+// Bound the amount of input consumed before the event loop can service a draw or backend event.
+const MAX_DRAG_REPORTS_PER_POLL: usize = 64;
+
+fn is_left_drag(event: &Event) -> bool {
+    matches!(event, Event::Mouse(mouse) if mouse.kind == crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left))
+}
+
 /// TuiEventStream is a struct for reading TUI events (draws and user input).
 /// Each instance has its own draw subscription (the draw channel is broadcast, so
 /// multiple receivers are fine), while crossterm input is funneled through a
@@ -202,6 +219,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
+    pub(crate) coalesce_divider_drags: bool,
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
@@ -223,6 +241,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             resume_stream,
             terminal_focused,
             poll_draw_first: false,
+            coalesce_divider_drags: false,
             #[cfg(unix)]
             suspend_context,
             #[cfg(unix)]
@@ -254,7 +273,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         return Poll::Ready(self.map_crossterm_event(event));
                     }
                 }
-                let events = match state.source.active_event_source_mut() {
+                let BrokerInput {
+                    source, lookahead, ..
+                } = &mut *state;
+                let events = match source.active_event_source_mut() {
                     Some(events) => events,
                     None => {
                         drop(state);
@@ -266,8 +288,29 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         }
                     }
                 };
-                match Pin::new(events).poll_next(cx) {
-                    Poll::Ready(Some(Ok(event))) => Some(event),
+                let next = match std::mem::replace(lookahead, Poll::Pending) {
+                    Poll::Ready(next) => Poll::Ready(next),
+                    Poll::Pending => Pin::new(&mut *events).poll_next(cx),
+                };
+                match next {
+                    Poll::Ready(Some(Ok(mut event))) => {
+                        if self.coalesce_divider_drags && is_left_drag(&event) {
+                            // Only a captured divider uses absolute positions. Selection and
+                            // scrolling need their full path. Bound work per poll for fairness.
+                            for _ in 1..MAX_DRAG_REPORTS_PER_POLL {
+                                match Pin::new(&mut *events).poll_next(cx) {
+                                    Poll::Ready(Some(Ok(next))) if is_left_drag(&next) => {
+                                        event = next
+                                    }
+                                    boundary => {
+                                        *lookahead = boundary;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(event)
+                    }
                     Poll::Ready(Some(Err(_))) | Poll::Ready(None) => {
                         state.source = EventBrokerState::Start;
                         return Poll::Ready(None);
@@ -504,6 +547,38 @@ mod tests {
             Some(TuiEvent::Key(actual)) => assert_eq!(actual, expected),
             other => panic!("expected key event, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_captured_divider_motion_is_coalesced_and_stops_at_input_boundaries() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+        let left = crossterm::event::MouseButton::Left;
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            column,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        let drag = |column| mouse(MouseEventKind::Drag(left), column);
+        for column in [10, 11, 12, 13] {
+            handle.send(Ok(Event::Mouse(drag(column))));
+        }
+        handle.send(Ok(Event::FocusLost));
+        handle.send(Ok(Event::Mouse(drag(14))));
+        let release = mouse(MouseEventKind::Up(left), 15);
+        handle.send(Ok(Event::Mouse(release)));
+        handle.send(Ok(Event::Key(KeyCode::Enter.into())));
+
+        // Outside divider capture, even adjacent selection motions stay distinct.
+        assert!(matches!(stream.next().await, Some(TuiEvent::Mouse(m)) if m == drag(10)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Mouse(m)) if m == drag(11)));
+        stream.coalesce_divider_drags = true;
+        assert!(matches!(stream.next().await, Some(TuiEvent::Mouse(m)) if m == drag(13)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::FocusLost)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Mouse(m)) if m == drag(14)));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Mouse(m)) if m == release));
+        assert!(matches!(stream.next().await, Some(TuiEvent::Key(k)) if k.code == KeyCode::Enter));
     }
 
     #[tokio::test(flavor = "current_thread")]

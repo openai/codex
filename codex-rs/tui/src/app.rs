@@ -899,8 +899,6 @@ impl App {
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) && tui::mouse_capture_disabled() {
             self.sidebar_press = None;
-            self.divider_drag = None;
-            self.agents_overview.workspace.divider_drag_viewport = None;
             self.chat_widget.end_composer_drag();
             self.chat_widget.rendered_selection.borrow_mut().end_drag();
         }
@@ -918,10 +916,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
             }
-            _ => {
-                self.sidebar_press = None;
-                self.agents_overview.workspace.divider_drag_viewport = None;
-            }
+            _ => self.sidebar_press = None,
         }
         self.transcript_view.bidi_layout = tui.terminal.bidi_layout;
         self.transcript_view.agent_links = self
@@ -1055,15 +1050,6 @@ impl App {
         if let TuiEvent::Mouse(mouse) = &event
             && self.handle_workspace_mouse(tui, *mouse)
         {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                && self
-                    .agents_overview
-                    .workspace
-                    .divider_drag_viewport
-                    .is_some()
-            {
-                self.refresh_link_hover(tui)?;
-            }
             return Ok(AppRunControl::Continue);
         }
         if matches!(&event, TuiEvent::Key(_))

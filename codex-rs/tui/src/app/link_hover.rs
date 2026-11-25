@@ -245,21 +245,25 @@ impl App {
             || self.overlay.is_some()
         {
             PointerShape::Default
+        } else if let Some(drag) = self.divider_drag {
+            sidebar_divider = !drag.is_center();
+            PointerShape::Resize
         } else if self.conversation_focus_available(tui)
-            && (self.divider_drag.is_some()
-                || tui.link_hover.mouse.is_some_and(|mouse| {
-                    self.conversation_frame
-                        .divider_area()
-                        .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
-                        && self.divider_is_settled(tui, viewport)
-                }))
+            && tui.link_hover.mouse.is_some_and(|mouse| {
+                self.conversation_frame
+                    .divider_area()
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                    && self.divider_is_settled(tui, viewport)
+            })
         {
             sidebar_divider = true;
             PointerShape::Resize
-        } else if self.agents_overview.workspace.divider_drag_viewport == Some(viewport)
-            || self
-                .hover_pointer(tui, tui.link_hover.mouse)
-                .is_some_and(|mouse| self.workspace_divider_at(viewport, mouse))
+        } else if self
+            .hover_pointer(tui, tui.link_hover.mouse)
+            .is_some_and(|mouse| {
+                self.center_divider_area(viewport)
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+            })
         {
             PointerShape::Resize
         } else if self.chat_widget.no_modal_or_popup_active()
@@ -272,7 +276,9 @@ impl App {
         } else {
             PointerShape::Default
         };
-        if sidebar_divider != tui.link_hover.sidebar_divider {
+        if sidebar_divider != tui.link_hover.sidebar_divider
+            || (shape == PointerShape::Resize) != (tui.link_hover.shape == PointerShape::Resize)
+        {
             tui.link_hover.sidebar_divider = sidebar_divider;
             tui.frame_requester().schedule_frame();
         }

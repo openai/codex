@@ -15,6 +15,11 @@ pub(crate) enum DocumentPosition {
 }
 
 impl TranscriptView {
+    /// During a live resize, wrap the already rendered file instead of parsing it at every width.
+    pub(crate) fn set_document_resize_preview(&mut self, active: bool) {
+        self.cache.set_document_resize_preview(active);
+    }
+
     pub(crate) fn document_position(&self) -> DocumentPosition {
         match self.position {
             Position::Reading(anchor) => DocumentPosition::Offset(anchor.offset),

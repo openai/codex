@@ -100,6 +100,7 @@ pub(super) struct DocumentRenderOptions<'a> {
     pub(super) motion: MotionMode,
     pub(super) frames: &'a tui::FrameRequester,
     pub(super) keymap: &'a RuntimeKeymap,
+    pub(super) resize_preview: bool,
     pub(super) resize_hint: Option<&'a str>,
     pub(super) image_protocol: Option<ImageProtocol>,
 }
@@ -392,6 +393,7 @@ impl Document {
             frames,
             keymap,
             resize_hint,
+            resize_preview,
             image_protocol,
         } = options;
         let buf = &mut *frame.buffer;
@@ -519,6 +521,7 @@ impl Document {
                 line_starts,
                 target,
             } => {
+                view.set_document_resize_preview(resize_preview);
                 view.set_keymap_bindings(keymap);
                 if view.tick_selection(cells) {
                     frames.schedule_frame_in(std::time::Duration::from_millis(45));

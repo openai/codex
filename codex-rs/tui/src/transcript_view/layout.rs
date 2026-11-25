@@ -118,6 +118,7 @@ fn is_rich_user_prompt(cell: &dyn HistoryCell, mode: HistoryRenderMode) -> bool 
 #[derive(Default)]
 pub(super) struct LayoutCache {
     entries: Vec<CachedLayout>,
+    document_resize_preview: bool,
     frame: u64,
     render_state: Option<RenderState>,
 }
@@ -331,6 +332,14 @@ impl TranscriptView {
 }
 
 impl LayoutCache {
+    pub(super) fn set_document_resize_preview(&mut self, active: bool) {
+        if self.document_resize_preview && !active {
+            // Markdown tables and other width-dependent content need an exact final layout.
+            self.clear();
+        }
+        self.document_resize_preview = active;
+    }
+
     pub(super) fn has_mutable_source(&self) -> bool {
         self.entries.iter().any(|entry| {
             entry
@@ -366,14 +375,20 @@ impl LayoutCache {
         let source = Arc::downgrade(cell);
         let animation_tick = cell.transcript_animation_tick();
         if let Some(index) = self.entries.iter().position(|entry| {
-            entry.width == width
+            (entry.width == width || self.document_resize_preview)
                 && entry.presentation == presentation
                 && entry.source.ptr_eq(&source)
                 && (entry.rendered_frame == self.frame
                     || (cell.has_stable_transcript_height()
                         && entry.animation_tick == animation_tick))
         }) {
-            let layout = Arc::clone(&self.entries[index].layout);
+            let entry = &mut self.entries[index];
+            if entry.width != width {
+                // Keep the document's styled source and links while the divider moves.
+                entry.layout = Arc::new(entry.layout.rewrap(width));
+                entry.width = width;
+            }
+            let layout = Arc::clone(&entry.layout);
             if index + 1 != self.entries.len() {
                 let entry = self.entries.remove(index);
                 self.entries.push(entry);

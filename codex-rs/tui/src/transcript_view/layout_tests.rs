@@ -78,6 +78,18 @@ fn layouts_refresh_for_width_animation_and_mutable_frames() {
             cell.renders.load(Ordering::Relaxed),
             3 + usize::from(mutable)
         );
+        // A document drag wraps cached text across widths. On release, restore
+        // width-specific rendering even when the last preview had the same width.
+        let before_drag = cell.renders.load(Ordering::Relaxed);
+        cache.set_document_resize_preview(/*active*/ true);
+        let narrow = get(&mut cache, /*width*/ 4);
+        assert!(narrow.row_count() > 1);
+        let wide = get(&mut cache, /*width*/ 10);
+        assert_eq!(wide.row_count(), 1);
+        assert_eq!(cell.renders.load(Ordering::Relaxed), before_drag);
+        cache.set_document_resize_preview(/*active*/ false);
+        get(&mut cache, /*width*/ 10);
+        assert_eq!(cell.renders.load(Ordering::Relaxed), before_drag + 1);
         crate::terminal_palette::with_test_default_colors(
             crate::terminal_probe::DefaultColors {
                 fg: (12, 34, 56),
@@ -88,7 +100,7 @@ fn layouts_refresh_for_width_animation_and_mutable_frames() {
                 get(&mut cache, /*width*/ 10);
                 assert_eq!(
                     cell.renders.load(Ordering::Relaxed),
-                    4 + usize::from(mutable)
+                    5 + usize::from(mutable)
                 );
             },
         );
