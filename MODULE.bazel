@@ -382,7 +382,7 @@ crate.from_cargo(
     ],
 )
 
-bazel_dep(name = "zstd", version = "1.5.7.bcr.2")
+bazel_dep(name = "zstd", version = "1.6.0")
 
 crate.annotation(
     # Debug builds must also embed assets instead of reading the worker's source tree.
