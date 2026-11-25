@@ -866,6 +866,13 @@ impl App {
         };
     }
 
+    pub(super) fn is_side_toggle(&self, key: KeyEvent) -> bool {
+        let bindings = &self.keymap.app.toggle_side_conversation;
+        bindings.is_pressed(key)
+            || bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))
+                && crate::key_hint::ctrl(KeyCode::Char('7')).is_press(key)
+    }
+
     pub(crate) async fn handle_shared_app_keymap_action(
         &mut self,
         tui: &mut tui::Tui,
@@ -877,11 +884,7 @@ impl App {
             self.chat_widget.open_warnings(&self.transcript_cells);
             return true;
         }
-        let side_toggle_bindings = &self.keymap.app.toggle_side_conversation;
-        if side_toggle_bindings.is_pressed(key_event)
-            || side_toggle_bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))
-                && crate::key_hint::ctrl(KeyCode::Char('7')).is_press(key_event)
-        {
+        if self.is_side_toggle(key_event) {
             if let Err(err) = self.toggle_side_conversation(tui, app_server).await {
                 self.chat_widget
                     .add_error_message(format!("Failed to switch side conversation: {err}"));

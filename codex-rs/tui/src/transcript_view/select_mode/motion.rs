@@ -96,6 +96,7 @@ impl TranscriptView {
             self.select_mode = Some(mode);
             return;
         };
+
         if let Some(mark) = &mut mode.mark {
             mark.active = next;
             mark.active_edges = None;

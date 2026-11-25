@@ -110,6 +110,32 @@ async fn select_enter_closes_and_remapped_action_marks_in_the_inline_overlay() -
 }
 
 #[test]
+fn copy_notice_completes_without_a_selection_and_ignores_stale_results() {
+    use crate::clipboard_copy::CopyStatus;
+    let mut overlay = transcript_overlay(Vec::new());
+    let area = Rect::new(0, 0, 48, 8);
+    let status = Rect::new(0, 4, 48, 1);
+    let mut buffer = Buffer::empty(area);
+    overlay.show_copy_notice(Ok(CopyStatus::Pending(7)));
+    overlay.finish_pending_copy(&(6, Err("stale".into())));
+    overlay.render(area, &mut buffer);
+    let pending = buffer_to_text(&buffer, status);
+    overlay.finish_pending_copy(&(7, Err("clipboard unavailable".into())));
+    overlay.render(area, &mut buffer);
+    let failure = buffer_to_text(&buffer, status);
+    overlay.show_copy_notice(Ok(CopyStatus::Pending(8)));
+    overlay.finish_pending_copy(&(8, Ok(CopyStatus::Confirmed)));
+    overlay.render(area, &mut buffer);
+    let success = buffer_to_text(&buffer, status);
+    insta::assert_snapshot!(format!("{pending}{failure}{success}"), @"
+    Copying selection…
+    Copy failed: clipboard unavailable
+    Copied selection to clipboard
+    ");
+    assert!(!overlay.is_done());
+}
+
+#[test]
 fn scrolling_prepend_and_resize_preserve_reading_content() {
     let cells = (0..30)
         .map(|index| {

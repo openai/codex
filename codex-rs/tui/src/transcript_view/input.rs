@@ -257,7 +257,7 @@ impl TranscriptView {
         if self.copy_mode.is_some() {
             return true;
         }
-        if self.select_mode.is_some() {
+        if self.is_select_mode() {
             return true;
         }
         if self.selection.is_some() {
@@ -293,7 +293,7 @@ impl TranscriptView {
         if let Some(action) = self.handle_copy_mode_key(key, cells) {
             return Some(action);
         }
-        if self.select_mode.is_some() {
+        if self.is_select_mode() {
             if self.is_search_editing() {
                 let (code, modifiers) =
                     crate::key_hint::normalize_key_parts(key.code, key.modifiers);

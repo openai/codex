@@ -116,6 +116,7 @@ pub(crate) struct TranscriptView {
     live_key: Option<(u16, ActiveCellTranscriptKey)>,
     live_continuation: bool,
     area: Rect,
+    last_rendered_width: u16,
     prompt_header_target: Option<(Rect, EntryKey)>,
     suppressed_prompt_header: Option<prompt_header::SuppressedHeader>,
     visible: Vec<VisibleRow>,
@@ -162,6 +163,7 @@ impl Default for TranscriptView {
             live_key: None,
             live_continuation: false,
             area: Rect::default(),
+            last_rendered_width: 0,
             prompt_header_target: None,
             suppressed_prompt_header: None,
             visible: Vec::new(),
@@ -229,7 +231,8 @@ impl TranscriptView {
         let suppressed_prompt_header = self.suppressed_prompt_header.take();
         Clear.render(area, buf);
         let previous_height = self.area.height;
-        let resized = self.area.width != area.width || self.area.bottom() != area.bottom();
+        let resized = self.last_rendered_width != area.width || self.area.bottom() != area.bottom();
+        self.last_rendered_width = area.width;
         let select_width_changed = self
             .visible
             .first()
@@ -651,7 +654,7 @@ impl TranscriptView {
     }
 
     pub(crate) fn has_active_interaction(&self) -> bool {
-        self.select_mode.is_some()
+        self.is_select_mode()
             || self.selection.is_some()
             || self.search.is_active()
             || self.is_activity_focused()

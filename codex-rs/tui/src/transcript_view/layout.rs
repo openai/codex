@@ -60,7 +60,7 @@ pub(super) fn activity_layout(
 }
 
 fn cell_content_layout(
-    cell: &dyn HistoryCell,
+    cell: &Arc<dyn HistoryCell>,
     width: u16,
     mode: HistoryRenderMode,
     presentation: CellPresentation,
@@ -83,8 +83,12 @@ fn cell_content_layout(
             shortcut,
         )
     } else {
-        let lines =
-            crate::history_cell::fullscreen_session_lines(cell, width, presentation.detailed, mode);
+        let lines = crate::history_cell::fullscreen_session_lines(
+            cell.as_ref(),
+            width,
+            presentation.detailed,
+            mode,
+        );
         TextLayout::new(bidi::session_lines(lines, presentation.bidi_layout), width)
     };
     if let Some(protocol) = presentation.image_protocol
@@ -300,7 +304,7 @@ impl TranscriptView {
                     self.cache
                         .has_visible_content(previous, width, previous_presentation, || {
                             cell_content_layout(
-                                previous.as_ref(),
+                                previous,
                                 width,
                                 mode,
                                 previous_presentation,
@@ -314,8 +318,7 @@ impl TranscriptView {
         presentation.shares_prompt_background = shares_prompt_background;
         presentation.turn_tip_space = self.turn_tip_key == Some(EntryKey::cell(cell));
         Some(self.cache.get(cell, width, presentation, || {
-            let mut layout =
-                cell_content_layout(cell.as_ref(), width, mode, presentation, shortcut);
+            let mut layout = cell_content_layout(cell, width, mode, presentation, shortcut);
             if shares_prompt_background {
                 layout = layout.without_leading_blank_row();
             }

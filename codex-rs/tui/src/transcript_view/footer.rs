@@ -52,6 +52,7 @@ impl TranscriptView {
                 is_interactive: true,
             });
         }
+
         if self.select_mode.is_some() {
             let hints = if let Some(hints) = self.block_mark_hints() {
                 hints

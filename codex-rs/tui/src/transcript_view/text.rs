@@ -24,12 +24,14 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_to_width;
 use crate::markdown_copy::table::TableLine;
+use crate::render::line_utils::line_to_borrowed;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::terminal_hyperlinks::LineWrapPolicy;
@@ -719,11 +721,15 @@ impl TextLayout {
                 Rect::new(area.x, area.y + screen_row, area.width, /*height*/ 1);
             buf.set_style(row_area, row.line.line.style);
             row_area.width = row.content_width;
-            HyperlinkParagraph::new(
-                std::slice::from_ref(row.painted_line()),
-                row.line.line.style,
-            )
-            .render(row_area, buf);
+            // The layout has already wrapped each row. Only links need the paragraph's
+            // projection into terminal columns.
+            let line = row.painted_line();
+            if line.hyperlinks.is_empty() {
+                Paragraph::new(line_to_borrowed(&line.line)).render(row_area, buf);
+            } else {
+                HyperlinkParagraph::new(std::slice::from_ref(line), row.line.line.style)
+                    .render(row_area, buf);
+            }
         }
     }
 

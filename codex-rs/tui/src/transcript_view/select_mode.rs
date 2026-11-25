@@ -350,9 +350,14 @@ impl TranscriptView {
         Some(ViewAction::Changed)
     }
 
+    pub(crate) fn finish_select_copy(&mut self) {
+        self.jump_to_latest();
+    }
+
     fn exit_select_mode(&mut self) -> ViewAction {
         self.end_select_mode();
         self.close_search_after_select_mode();
+
         ViewAction::ExitSelectMode
     }
 

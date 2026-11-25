@@ -104,7 +104,7 @@ impl App {
                 if self.backtrack.overlay_preview_active {
                     self.close_transcript_overlay(tui);
                 }
-                self.transcript_view.jump_to_latest();
+                self.transcript_view.finish_select_copy();
                 self.backtrack.select_exit_key = pending_exit_key;
             }
         }

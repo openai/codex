@@ -1504,7 +1504,7 @@ impl App {
                 if resume_following {
                     match result {
                         Ok(crate::clipboard_copy::CopyStatus::Confirmed) => {
-                            self.transcript_view.jump_to_latest();
+                            self.transcript_view.finish_select_copy();
                         }
                         Ok(crate::clipboard_copy::CopyStatus::Pending(id)) => {
                             if let Some(key) = select_exit_key {
