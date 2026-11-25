@@ -6246,8 +6246,8 @@ async fn mcp_launch_cwds_follow_the_runtime_feature() -> anyhow::Result<()> {
     });
     let plugins_manager =
         plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
-    assert!(!config.features.enabled(Feature::McpSharedReplCwd));
-    for enabled in [false, true, false] {
+    assert!(config.features.enabled(Feature::McpSharedReplCwd));
+    for enabled in [true, false, true] {
         let mut incoming = config.clone();
         incoming
             .features
