@@ -888,7 +888,7 @@ async fn additional_context_values_are_truncated_before_model_input(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    const MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES: usize = 5 * 1024;
+    const MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES: usize = 40 * 1024;
 
     let server = start_mock_server().await;
     let request = mount_sse_once(
@@ -906,8 +906,8 @@ async fn additional_context_values_are_truncated_before_model_input(
         })
         .build_with_auto_env(&server)
         .await?;
-    let long_browser_value = format!("browser-head-{}browser-tail", "b".repeat(40_000));
-    let long_automation_value = format!("automation-head-{}automation-tail", "a".repeat(40_000));
+    let long_browser_value = format!("browser-head-{}browser-tail", "b".repeat(80_000));
+    let long_automation_value = format!("automation-head-{}automation-tail", "a".repeat(80_000));
     let untruncated_browser_fragment =
         format!("<external_browser_info>{long_browser_value}</external_browser_info>");
     let untruncated_automation_fragment =
@@ -953,7 +953,7 @@ async fn additional_context_values_are_truncated_before_model_input(
     };
     assert!(automation_text.starts_with(&format!(
         "<automation_info>automation-head-{}",
-        "a".repeat(1024)
+        "a".repeat(19_000)
     )));
     assert!(automation_text.contains("tokens truncated"));
     assert!(automation_text.ends_with("automation-tail</automation_info>"));
@@ -974,14 +974,14 @@ async fn additional_context_values_are_truncated_before_model_input(
         assert_eq!(outputs[0]["name"], "browser_info");
         assert_eq!(outputs[0]["namespace"], "agent");
         let body = outputs[0]["output"].as_str().expect("text output");
-        assert!(body.starts_with(&format!("browser-head-{}", "b".repeat(1024))));
+        assert!(body.starts_with(&format!("browser-head-{}", "b".repeat(19_000))));
         assert!(body.ends_with("browser-tail"));
         assert!(body.contains("tokens truncated"));
         assert!(body.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES);
         let mut hidden_edit = long_automation_value.clone();
-        hidden_edit.replace_range(20_000..20_001, "c");
+        hidden_edit.replace_range(40_000..40_001, "c");
         let mut changed_middle = long_browser_value.clone();
-        changed_middle.replace_range(20_000..20_001, "c");
+        changed_middle.replace_range(40_000..40_001, "c");
         let changed_prefix = changed_middle.replacen("browser-head", "browser-view", 1);
         for (value, expected_count) in [(changed_middle, 1), (changed_prefix, 2)] {
             let next = mount_sse_once(&server, sse(vec![ev_completed("updated-context")])).await;
@@ -1045,7 +1045,7 @@ async fn additional_context_values_are_truncated_before_model_input(
     assert_eq!(user_text, "summarize context");
     assert!(external_text.starts_with(&format!(
         "<external_browser_info>browser-head-{}",
-        "b".repeat(1024)
+        "b".repeat(19_000)
     )));
     assert!(external_text.contains("tokens truncated"));
     assert!(external_text.ends_with("browser-tail</external_browser_info>"));
@@ -1097,32 +1097,32 @@ async fn additional_context_metrics_record_submitted_sizes_and_truncation(
             "application_limit",
             application,
             None,
-            "a".repeat(4_000),
+            "a".repeat(40_000),
             false,
         ),
         (
             "application_over",
             application,
             None,
-            "a".repeat(4_001),
+            "a".repeat(40_001),
             true,
         ),
         (
             "opaque_named_limit",
             untrusted,
             Some("browser_limit"),
-            "b".repeat(4_000),
+            "b".repeat(40_000),
             false,
         ),
         (
             "opaque_named_over",
             untrusted,
             Some("browser_over"),
-            "b".repeat(4_001),
+            "b".repeat(40_001),
             true,
         ),
         // Size is measured in UTF-8 bytes; the unnamed entry must not acquire a key-derived label.
-        ("opaque_unnamed", untrusted, None, "é".repeat(2_001), true),
+        ("opaque_unnamed", untrusted, None, "é".repeat(20_001), true),
         ("opaque_empty", untrusted, None, String::new(), false),
     ];
     let values = cases
@@ -1242,7 +1242,7 @@ async fn additional_context_metrics_record_submitted_sizes_and_truncation(
         expected_counts.insert(tags.clone(), 2);
         // The marker is outside the retained-text budget, so a truncated value can grow.
         let after_bytes = if truncated {
-            4_000 + "…1 tokens truncated…".len()
+            40_000 + "…1 tokens truncated…".len()
         } else {
             value.len()
         };

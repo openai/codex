@@ -1139,12 +1139,13 @@ async fn additional_context_survives_compaction(remote: bool) -> Result<()> {
     let untrusted = |value: &str| {
         AdditionalContextEntry::new(value.to_owned(), AdditionalContextKind::Untrusted)
     };
+    let app = "🧭".repeat(10_000);
     let mut context = BTreeMap::from([
         ("page".to_owned(), untrusted("old selection")),
         ("removed".to_owned(), untrusted("closed tab")),
         (
             "app".to_owned(),
-            AdditionalContextEntry::new("editor".to_owned(), AdditionalContextKind::Application),
+            AdditionalContextEntry::new(app.clone(), AdditionalContextKind::Application),
         ),
     ]);
     let submit = async |prompt: &str, context| -> Result<()> {
@@ -1183,9 +1184,9 @@ async fn additional_context_survives_compaction(remote: bool) -> Result<()> {
     let app_messages = follow_up
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text == "<app>editor</app>")
+        .filter(|text| text.starts_with("<app>"))
         .collect::<Vec<_>>();
-    assert_eq!(app_messages, ["<app>editor</app>"]);
+    assert_eq!(app_messages, [format!("<app>{app}</app>")]);
     // The context belongs to the compacted window, before the preserved second prompt.
     let input = follow_up.input();
     let second_prompt = input

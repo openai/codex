@@ -140,7 +140,7 @@ fn histogram_uses_explicit_bucket_boundaries() -> Result<()> {
 #[test]
 fn additional_context_histogram_bounds_truncated_observations() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let samples = [4_024, 4_027, 4_043];
+    let samples = [40_024, 40_027, 40_043];
     for value in samples {
         metrics.histogram_with_boundaries(
             ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC,
@@ -155,12 +155,12 @@ fn additional_context_histogram_bounds_truncated_observations() -> Result<()> {
         &latest_metrics(&exporter),
         ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC,
     );
-    assert_eq!((sum, count), (12_094.0, 3));
+    assert_eq!((sum, count), (120_094.0, 3));
     assert_eq!(counts.iter().sum::<u64>(), count);
     assert_eq!(counts.last(), Some(&0));
     for (upper_bound, bucket_count) in bounds.iter().zip(&counts) {
         assert!(
-            *bucket_count == 0 || *upper_bound <= 4_096.0,
+            *bucket_count == 0 || *upper_bound <= 40_960.0,
             "post-truncation observations landed in a bucket ending at {upper_bound} bytes"
         );
     }

@@ -99,11 +99,11 @@ pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";
 pub const ADDITIONAL_CONTEXT_COUNT_METRIC: &str = "codex.additional_context";
 /// UTF-8 value bytes before/after truncation, excluding message wrappers; after includes the marker.
 pub const ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC: &str = "codex.additional_context.value_bytes";
-/// Logarithmic byte buckets through 4 MiB, with a 4 KiB boundary near the truncation cap.
+/// Logarithmic byte buckets through 4 MiB, with boundaries near the previous and current truncation caps.
 pub static ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS: LazyLock<Vec<f64>> = LazyLock::new(|| {
     let mut buckets = context_log_buckets(/*max_exponent*/ 22.0)
         .into_iter()
-        .chain([4096.0])
+        .chain([4096.0, 40_960.0])
         .collect::<Vec<_>>();
     buckets.sort_by(f64::total_cmp);
     buckets.dedup();

@@ -26,7 +26,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
+const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 10_000;
 const MAX_DERIVED_TOOL_NAME_CHARS: usize = 128;
 
 /// A delivered client submission replaces the active sources. Extension inputs only update their own keys.
