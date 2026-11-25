@@ -748,6 +748,46 @@ async fn apply_patch_cli_reports_missing_context() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+#[test_case("cmd.exe /c 'echo patch denied 1>&2 & exit /b 2'"; "native")]
+#[test_case("end { [Console]::Error.WriteLine('patch denied'); exit 2 }"; "named block")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn powershell_hook_denies_patch_before_approval(command: &'static str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder
+            .with_pre_build_hook(move |home| {
+                let hooks = json!({"hooks": {"PreToolUse": [{
+                    "matcher": "^apply_patch$",
+                    "hooks": [{"type": "command", "command": command}]
+                }]}});
+                fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hook");
+            })
+            .with_config(core_test_support::hooks::trust_discovered_hooks)
+    })
+    .await?;
+    let call_id = "denied-patch";
+    let patch = "*** Begin Patch\n*** Add File: denied.txt\n+blocked\n*** End Patch";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+    harness
+        .test()
+        .submit_turn_with_policies(
+            "apply the patch",
+            AskForApproval::OnRequest,
+            SandboxPolicy::new_read_only_policy(),
+        )
+        .await?;
+
+    let output = harness.apply_patch_output(call_id).await;
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: patch denied"),
+        "{output}"
+    );
+    assert!(!harness.path_exists("denied.txt").await?);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_reports_missing_target_file() -> Result<()> {
     skip_if_no_network!(Ok(()));

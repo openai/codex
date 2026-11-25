@@ -469,6 +469,43 @@ fn build_command(
     #[cfg(windows)]
     if shell.program.is_empty() || shell.args.iter().any(|arg| arg.eq_ignore_ascii_case("/c")) {
         command.raw_arg(format!(r#""{command_line}""#));
+    } else if shell
+        .args
+        .last()
+        .is_some_and(|arg| arg.eq_ignore_ascii_case("-Command"))
+    {
+        // PowerShell forbids top-level statements after named blocks. Look past
+        // leading comments and declarations, but not into native command arguments.
+        let mut script = command_line.trim_start();
+        while let Some((_, rest)) = if script.starts_with('#') {
+            script.split_once('\n')
+        } else if script.starts_with("<#") {
+            script.split_once("#>")
+        } else {
+            None
+        } {
+            script = rest.trim_start();
+        }
+        let mut words = script
+            .split(|c: char| c.is_whitespace() || matches!(c, '{' | '(' | ')' | ';' | '<' | '>'));
+        let first = words.next().unwrap_or_default();
+        let named_block = |word: &str| {
+            ["begin", "process", "end", "clean", "dynamicparam"]
+                .iter()
+                .any(|name| word.eq_ignore_ascii_case(name))
+        };
+        let declaration = first.eq_ignore_ascii_case("param")
+            || first.eq_ignore_ascii_case("using")
+            || script.starts_with('[');
+        if script.contains('{') && (named_block(first) || (declaration && words.any(named_block))) {
+            command.arg(command_line);
+        } else {
+            // PowerShell -Command reduces native failures to 1. Check $? first so a
+            // successful hook doesn't inherit an earlier command's failure.
+            command.arg(format!(
+                "{command_line}\nif ($?) {{ exit 0 }}\nif ($LASTEXITCODE) {{ exit $LASTEXITCODE }}\nexit 1"
+            ));
+        }
     } else {
         command.arg(command_line);
     }
