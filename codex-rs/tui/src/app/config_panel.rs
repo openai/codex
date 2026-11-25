@@ -260,11 +260,11 @@ impl App {
         self.config_notification_test_pending = None;
         let notice = if !tui.notify_test("Codex notification test") {
             "Could not send test · check terminal connection"
-        } else if codex_terminal_detection::terminal_info().name
-            == codex_terminal_detection::TerminalName::Ghostty
-            && tui.is_terminal_focused()
+        } else if tui.is_terminal_focused()
+            && let Some(notice) =
+                crate::terminal_capabilities::NotificationCapabilities::detect().focused_notice
         {
-            "Test sent · Ghostty hides banners while focused"
+            notice
         } else {
             "Test sent · check terminal/system settings"
         };

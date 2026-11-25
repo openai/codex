@@ -4,8 +4,6 @@
 //! configuration and app-server initialization remain responsive to safe local editing.
 
 use super::*;
-use codex_terminal_detection::Multiplexer;
-use codex_terminal_detection::TerminalName;
 
 pub(super) async fn run_main_inner(
     mut cli: Cli,
@@ -782,31 +780,7 @@ pub(super) async fn run_main_inner(
         let Some(metrics) = metrics else {
             return Vec::new();
         };
-        // Use a fixed category, not the versioned or user-provided terminal identifier.
-        let terminal_info = codex_terminal_detection::terminal_info();
-        let terminal_name = match terminal_info.name {
-            TerminalName::AppleTerminal => "apple_terminal",
-            TerminalName::Ghostty => "ghostty",
-            TerminalName::Rex => "rex",
-            TerminalName::Orca => "orca",
-            TerminalName::Iterm2 => "iterm2",
-            TerminalName::WarpTerminal => "warp",
-            TerminalName::VsCode => "vscode",
-            TerminalName::WezTerm => "wezterm",
-            TerminalName::Kitty => "kitty",
-            TerminalName::Alacritty => "alacritty",
-            TerminalName::Konsole => "konsole",
-            TerminalName::GnomeTerminal => "gnome_terminal",
-            TerminalName::Vte => "vte",
-            TerminalName::WindowsTerminal => "windows_terminal",
-            TerminalName::Dumb => "dumb",
-            TerminalName::Unknown => "unknown",
-        };
-        let multiplexer = match terminal_info.multiplexer {
-            Some(Multiplexer::Tmux { .. }) => "tmux",
-            Some(Multiplexer::Zellij { .. }) => "zellij",
-            None => "none",
-        };
+        let (terminal_name, multiplexer) = crate::terminal_capabilities::telemetry_labels();
         launch_tags.extend([
             ("app_server_mode", app_server_mode),
             ("terminal_name", terminal_name),

@@ -4,14 +4,9 @@ use std::fmt;
 use std::io;
 use std::io::stdout;
 
-use codex_terminal_detection::Multiplexer;
-use codex_terminal_detection::TerminalName;
-use codex_terminal_detection::terminal_info;
+use crate::terminal_capabilities::NotificationCapabilities;
 use crossterm::Command;
 use ratatui::crossterm::execute;
-
-// Ghostty copies the parsed notification body into a 255-byte buffer.
-const GHOSTTY_BODY_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum OscProtocol {
@@ -22,17 +17,17 @@ pub(super) enum OscProtocol {
 #[derive(Debug)]
 pub struct OscBackend {
     pub(super) protocol: OscProtocol,
-    terminal_name: TerminalName,
+    max_body_bytes: usize,
     dcs_passthrough: bool,
 }
 
 impl OscBackend {
     pub(super) fn new(protocol: OscProtocol) -> Self {
-        let terminal = terminal_info();
+        let capabilities = NotificationCapabilities::detect();
         Self {
             protocol,
-            terminal_name: terminal.name,
-            dcs_passthrough: matches!(terminal.multiplexer, Some(Multiplexer::Tmux { .. })),
+            max_body_bytes: capabilities.max_body_bytes,
+            dcs_passthrough: capabilities.dcs_passthrough,
         }
     }
 
@@ -42,7 +37,7 @@ impl OscBackend {
             PostNotification {
                 protocol: self.protocol,
                 message,
-                terminal_name: self.terminal_name,
+                max_body_bytes: self.max_body_bytes,
                 dcs_passthrough: self.dcs_passthrough,
             }
         )
@@ -52,7 +47,7 @@ impl OscBackend {
 struct PostNotification<'a> {
     protocol: OscProtocol,
     message: &'a str,
-    terminal_name: TerminalName,
+    max_body_bytes: usize,
     dcs_passthrough: bool,
 }
 
@@ -68,8 +63,8 @@ impl Command for PostNotification<'_> {
                 c => c,
             })
             .collect();
-        if self.terminal_name == TerminalName::Ghostty && body.len() > GHOSTTY_BODY_BYTES {
-            body.truncate(body.floor_char_boundary(GHOSTTY_BODY_BYTES - '…'.len_utf8()));
+        if body.len() > self.max_body_bytes {
+            body.truncate(body.floor_char_boundary(self.max_body_bytes - '…'.len_utf8()));
             body.push('…');
         }
         let sequence = match self.protocol {
@@ -77,8 +72,7 @@ impl Command for PostNotification<'_> {
             OscProtocol::Osc777 => format!("\x1b]777;notify;Codex;{body}\x1b\\"),
         };
         if self.dcs_passthrough {
-            let escaped = sequence.replace('\x1b', "\x1b\x1b");
-            write!(f, "\x1bPtmux;{escaped}\x1b\\")
+            f.write_str(&crate::terminal_capabilities::escaped_dcs(&sequence))
         } else {
             f.write_str(&sequence)
         }
@@ -99,7 +93,6 @@ impl Command for PostNotification<'_> {
 
 #[cfg(test)]
 mod tests {
-    use codex_terminal_detection::TerminalName;
     use crossterm::Command;
     use pretty_assertions::assert_eq;
 
@@ -113,7 +106,7 @@ mod tests {
         let command = PostNotification {
             protocol: OscProtocol::Osc9,
             message: &message,
-            terminal_name: TerminalName::Iterm2,
+            max_body_bytes: usize::MAX,
             dcs_passthrough: false,
         };
 
@@ -140,7 +133,7 @@ mod tests {
             PostNotification {
                 protocol,
                 message: &message,
-                terminal_name: TerminalName::Ghostty,
+                max_body_bytes: 255,
                 dcs_passthrough: false,
             }
             .write_ansi(&mut ansi)
@@ -155,7 +148,7 @@ mod tests {
         let command = PostNotification {
             protocol: OscProtocol::Osc9,
             message: "done",
-            terminal_name: TerminalName::Iterm2,
+            max_body_bytes: usize::MAX,
             dcs_passthrough: true,
         };
 
@@ -172,7 +165,7 @@ mod tests {
         let command = PostNotification {
             protocol: OscProtocol::Osc9,
             message: "before\x07\x1bafter",
-            terminal_name: TerminalName::Iterm2,
+            max_body_bytes: usize::MAX,
             dcs_passthrough: true,
         };
 
@@ -193,7 +186,7 @@ mod tests {
             let command = PostNotification {
                 protocol: OscProtocol::Osc777,
                 message: "Approval requested: cargo test; git clean\x07\x1b\u{009c}-fd",
-                terminal_name: TerminalName::WindowsTerminal,
+                max_body_bytes: usize::MAX,
                 dcs_passthrough,
             };
             let mut ansi = String::new();

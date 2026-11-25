@@ -13,9 +13,9 @@ use super::ProgramStatus;
 use super::ProgramStatusKind;
 use super::SessionStatusState;
 use super::SetTerminalProgramStatus;
-use super::TerminalProgramStatusSupport;
 use super::sanitize_iterm_session_detail;
-use super::terminal_program_status_support;
+use crate::terminal_capabilities::TerminalProgramStatusSupport;
+use crate::terminal_capabilities::terminal_program_status_support;
 
 #[test]
 fn encodes_iterm_session_status_fields() {

@@ -1254,7 +1254,7 @@ impl ChatWidget {
         let status = self.desired_program_status();
         if let Err(err) = crate::terminal_program_status::set_terminal_program_status(
             status,
-            self.iterm_session_detail(status),
+            self.session_status_detail(status),
         ) {
             tracing::debug!(error = %err, "failed to set terminal program status");
         }

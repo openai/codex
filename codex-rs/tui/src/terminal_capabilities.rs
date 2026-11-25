@@ -12,6 +12,7 @@ mod tmux;
 mod tmux_clipboard;
 
 use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalBackend;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
@@ -20,6 +21,7 @@ use std::io::IsTerminal;
 pub use codex_terminal_detection::StdoutColorLevel;
 pub use codex_terminal_detection::stdout_color_level;
 pub(crate) use codex_terminal_detection::terminal_color_level;
+pub(crate) use codex_terminal_detection::user_agent;
 pub(crate) use resize_reflow_cap::resize_reflow_max_rows;
 #[cfg(unix)]
 pub(crate) use terminal_identity::requires_inline_screen;
@@ -314,6 +316,45 @@ pub(crate) fn detect_web_link_display() -> WebLinkDisplay {
     web_link_display(&terminal_info(), std::env::var("TERM").ok().as_deref())
 }
 
+// VTE 0.54 introduced a parser that safely ignores unknown OSC sequences.
+const MIN_VTE_VERSION_WITH_SAFE_OSC: u32 = 5400;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TerminalProgramStatusSupport {
+    pub(crate) osc_7501: bool,
+    pub(crate) osc_21337: bool,
+}
+
+pub(crate) fn detect_terminal_program_status_support() -> TerminalProgramStatusSupport {
+    terminal_program_status_support(
+        &terminal_info(),
+        /*stdout_is_terminal*/ std::io::stdout().is_terminal(),
+        /*screen_active*/ screen_active(),
+    )
+}
+
+pub(crate) fn terminal_program_status_support(
+    terminal: &TerminalInfo,
+    stdout_is_terminal: bool,
+    screen_active: bool,
+) -> TerminalProgramStatusSupport {
+    let osc_7501 = stdout_is_terminal
+        && match terminal.backend {
+            Some(TerminalBackend::Vte { version }) => {
+                version.is_none_or(|version| version >= MIN_VTE_VERSION_WITH_SAFE_OSC)
+            }
+            None => true,
+        };
+    let osc_21337 = osc_7501
+        && terminal.name == TerminalName::Iterm2
+        && terminal.multiplexer.is_none()
+        && !screen_active;
+    TerminalProgramStatusSupport {
+        osc_7501,
+        osc_21337,
+    }
+}
+
 /// Why interactive screen control may be unavailable at launch.
 pub fn interactive_terminal_warning() -> Option<&'static str> {
     (terminal_info().name == TerminalName::Dumb).then_some("TERM is set to \"dumb\"")
@@ -341,6 +382,66 @@ impl PointerReset {
             TerminalName::Kitty => Some(Self::Release),
             TerminalName::Ghostty => Some(Self::Text),
             _ => None,
+        }
+    }
+}
+
+pub(crate) fn telemetry_labels() -> (&'static str, &'static str) {
+    // Use a fixed category, not the versioned or user-provided terminal identifier.
+    let terminal_info = terminal_info();
+    let terminal_name = match terminal_info.name {
+        TerminalName::AppleTerminal => "apple_terminal",
+        TerminalName::Ghostty => "ghostty",
+        TerminalName::Rex => "rex",
+        TerminalName::Orca => "orca",
+        TerminalName::Iterm2 => "iterm2",
+        TerminalName::WarpTerminal => "warp",
+        TerminalName::VsCode => "vscode",
+        TerminalName::WezTerm => "wezterm",
+        TerminalName::Kitty => "kitty",
+        TerminalName::Alacritty => "alacritty",
+        TerminalName::Konsole => "konsole",
+        TerminalName::GnomeTerminal => "gnome_terminal",
+        TerminalName::Vte => "vte",
+        TerminalName::WindowsTerminal => "windows_terminal",
+        TerminalName::Dumb => "dumb",
+        TerminalName::Unknown => "unknown",
+    };
+    let multiplexer = match terminal_info.multiplexer {
+        Some(Multiplexer::Tmux { .. }) => "tmux",
+        Some(Multiplexer::Zellij { .. }) => "zellij",
+        None => "none",
+    };
+    (terminal_name, multiplexer)
+}
+
+pub(crate) struct NotificationCapabilities {
+    pub(crate) osc9: bool,
+    pub(crate) dcs_passthrough: bool,
+    pub(crate) max_body_bytes: usize,
+    pub(crate) focused_notice: Option<&'static str>,
+}
+
+impl NotificationCapabilities {
+    pub(crate) fn detect() -> Self {
+        Self::for_terminal(&terminal_info())
+    }
+
+    pub(crate) fn for_terminal(info: &TerminalInfo) -> Self {
+        // Ghostty has a fixed notification buffer and suppresses focused banners.
+        let ghostty = info.name == TerminalName::Ghostty;
+        Self {
+            osc9: matches!(
+                info.name,
+                TerminalName::Ghostty
+                    | TerminalName::Iterm2
+                    | TerminalName::Kitty
+                    | TerminalName::WarpTerminal
+                    | TerminalName::WezTerm
+            ),
+            dcs_passthrough: matches!(info.multiplexer, Some(Multiplexer::Tmux { .. })),
+            max_body_bytes: if ghostty { 255 } else { usize::MAX },
+            focused_notice: ghostty.then_some("Test sent · Ghostty hides banners while focused"),
         }
     }
 }
