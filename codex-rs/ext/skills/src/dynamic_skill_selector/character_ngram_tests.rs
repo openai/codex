@@ -68,6 +68,14 @@ fn ngrams_report_bounded_inputs() {
     assert_eq!(20, selection.candidate_ids.len());
 }
 
+#[test]
+fn nonmatching_grams_count_toward_the_limit() {
+    let terms = vec!["aaaa".to_string(), "東京駅".to_string()];
+    // The first distinct grams are "aaa", "aaaa", "東京", "京駅", and "東京駅".
+    let (matches, truncated) = grams(&terms, /*limit*/ 3, |gram| !gram.is_ascii());
+    assert_eq!((vec!["東京".to_string()], true), (matches, truncated));
+}
+
 fn document<'a>(id: usize, name: &'a str, description: &'a str) -> SkillSelectionDocument<'a> {
     SkillSelectionDocument {
         id,

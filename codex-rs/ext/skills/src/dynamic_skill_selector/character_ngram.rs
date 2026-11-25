@@ -39,7 +39,7 @@ impl CheapSkillSelector for CharacterNgramSkillSelector {
     ) -> CheapSkillSelection {
         let (query, query_bytes_truncated) = bounded(query, MAX_QUERY_BYTES);
         let (query_terms, query_terms_truncated) = query_terms(query);
-        let (query_grams, query_grams_truncated) = grams(&query_terms, MAX_QUERY_GRAMS);
+        let (query_grams, query_grams_truncated) = grams(&query_terms, MAX_QUERY_GRAMS, |_| true);
         let query_truncated =
             query_bytes_truncated || query_terms_truncated || query_grams_truncated;
         let candidate_set_truncated = documents.len() > MAX_CANDIDATES;
@@ -52,10 +52,15 @@ impl CheapSkillSelector for CharacterNgramSkillSelector {
             };
         }
 
+        // Only query grams can contribute to document frequencies used for scoring.
+        let query_set = query_grams
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         let prepared = documents
             .iter()
             .take(MAX_CANDIDATES)
-            .map(PreparedDocument::new)
+            .map(|document| PreparedDocument::new(document, &query_set))
             .collect::<Vec<_>>();
         let document_frequencies = document_frequencies(&prepared);
         let document_count = prepared.len() as f64;
@@ -100,14 +105,14 @@ struct PreparedDocument<'a> {
 }
 
 impl<'a> PreparedDocument<'a> {
-    fn new(document: &'a SkillSelectionDocument<'a>) -> Self {
+    fn new(document: &'a SkillSelectionDocument<'a>, query_set: &HashSet<&str>) -> Self {
         Self {
             id: document.id,
             name: document.name,
             fields: [
-                document_grams(document.name),
-                document_grams(document.short_description.unwrap_or_default()),
-                document_grams(document.description),
+                document_grams(document.name, query_set),
+                document_grams(document.short_description.unwrap_or_default(), query_set),
+                document_grams(document.description, query_set),
             ],
         }
     }
@@ -178,37 +183,44 @@ fn query_terms(query: &str) -> (Vec<String>, bool) {
     (terms, false)
 }
 
-fn document_grams(value: &str) -> HashSet<String> {
+fn document_grams(value: &str, query_set: &HashSet<&str>) -> HashSet<String> {
     let (value, _) = bounded(value, MAX_DOCUMENT_BYTES);
     let terms = normalized_terms(value)
         .into_iter()
         .take(MAX_DOCUMENT_TERMS)
         .collect::<Vec<_>>();
-    grams(&terms, MAX_DOCUMENT_GRAMS).0.into_iter().collect()
+    grams(&terms, MAX_DOCUMENT_GRAMS, |gram| query_set.contains(gram))
+        .0
+        .into_iter()
+        .collect()
 }
 
-fn grams(terms: &[String], limit: usize) -> (Vec<String>, bool) {
+/// Count all distinct grams toward the limit before filtering which ones to own.
+fn grams(terms: &[String], limit: usize, keep: impl Fn(&str) -> bool) -> (Vec<String>, bool) {
     let mut seen = HashSet::new();
     let mut grams = Vec::new();
     for term in terms {
-        let characters = term.chars().collect::<Vec<_>>();
-        let minimum_gram_chars = if term.is_ascii() && characters.len() > MIN_GRAM_CHARS {
+        let minimum_gram_chars = if term.is_ascii() && term.len() > MIN_GRAM_CHARS {
             MIN_GRAM_CHARS + 1
         } else {
             MIN_GRAM_CHARS
         };
-        for gram_size in minimum_gram_chars..=MAX_GRAM_CHARS.min(characters.len()) {
-            for start in 0..=characters.len() - gram_size {
-                let gram = characters[start..start + gram_size]
-                    .iter()
-                    .collect::<String>();
-                if !seen.insert(gram.clone()) {
+        let boundaries = term
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([term.len()]);
+        for size in minimum_gram_chars..=MAX_GRAM_CHARS {
+            for (start, end) in boundaries.clone().zip(boundaries.clone().skip(size)) {
+                let gram = &term[start..end];
+                if !seen.insert(gram) {
                     continue;
                 }
-                if grams.len() == limit {
+                if seen.len() > limit {
                     return (grams, true);
                 }
-                grams.push(gram);
+                if keep(gram) {
+                    grams.push(gram.to_owned());
+                }
             }
         }
     }
