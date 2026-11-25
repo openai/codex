@@ -27,6 +27,7 @@ pub(crate) struct OAuthStreamableHttpClient {
 
 impl OAuthStreamableHttpClient {
     pub(crate) fn new(http_client: StreamableHttpClientAdapter, runtime: OAuthRuntime) -> Self {
+        http_client.set_recovery_cleanup_oauth(&runtime);
         Self {
             http_client,
             runtime,
@@ -36,6 +37,7 @@ impl OAuthStreamableHttpClient {
     async fn call_with_auth<T, F, Fut>(
         &self,
         auth_token: Option<String>,
+        session_id: Option<&Arc<str>>,
         call: F,
     ) -> Result<T, StreamableHttpError<StreamableHttpClientAdapterError>>
     where
@@ -56,7 +58,13 @@ impl OAuthStreamableHttpClient {
                 let Some(sent_token) = auth_token else {
                     return Err(StreamableHttpError::AuthRequired(challenge));
                 };
-                match self.runtime.refresh_access_token(&sent_token).await {
+                let refreshed = match self.http_client.recovery_cleanup().filter(|cleanup| {
+                    session_id.is_some_and(|session_id| cleanup.tracks(session_id))
+                }) {
+                    Some(cleanup) => cleanup.refresh(&self.runtime, &sent_token).await,
+                    None => self.runtime.refresh_access_token(&sent_token).await,
+                };
+                match refreshed {
                     Ok(fresh_token) if fresh_token != sent_token => call(Some(fresh_token)).await,
                     Ok(_) | Err(AuthError::AuthorizationRequired) => {
                         Err(StreamableHttpError::AuthRequired(challenge))
@@ -80,7 +88,7 @@ impl StreamableHttpClient for OAuthStreamableHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.call_with_auth(auth_token, |token| {
+        self.call_with_auth(auth_token, session_id.as_ref(), |token| {
             self.http_client.post_message(
                 uri.clone(),
                 message.clone(),
@@ -101,7 +109,7 @@ impl StreamableHttpClient for OAuthStreamableHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxStream<'static, Result<Sse, sse_stream::Error>>, StreamableHttpError<Self::Error>>
     {
-        self.call_with_auth(auth_token, |token| {
+        self.call_with_auth(auth_token, session_id.as_ref(), |token| {
             self.http_client.get_stream(
                 uri.clone(),
                 session_id.clone(),
@@ -120,6 +128,16 @@ impl StreamableHttpClient for OAuthStreamableHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
+        if self
+            .http_client
+            .recovery_cleanup()
+            .is_some_and(|cleanup| cleanup.tracks(&session_id))
+        {
+            return self
+                .http_client
+                .delete_session(uri, session_id, auth_token, custom_headers)
+                .await;
+        }
         let token = match auth_token {
             Some(token) => Some(token),
             None => self.runtime.cleanup_access_token().await,

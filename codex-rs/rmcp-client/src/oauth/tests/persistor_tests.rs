@@ -42,6 +42,7 @@ use super::MockKeyringStore;
 use super::TempCodexHome;
 use super::assert_tokens_match_without_expiry;
 use super::sample_tokens;
+use crate::http_client_adapter::RecoveryHandshakeGuard;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::FallbackTokenEntry;
@@ -221,7 +222,8 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         StreamableHttpRedirectMode::Legacy,
         Arc::default(),
     );
-    adapter.enable_recovery_cancellation();
+    let handshake = RecoveryHandshakeGuard::new();
+    adapter.enable_recovery_cancellation(handshake.handle());
     let client = AuthClient::new(adapter, manager);
     let mut durable = initial.clone();
     durable
@@ -234,6 +236,21 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         .set_refresh_token(Some(RefreshToken::new("durable-refresh-token".into())));
     save_oauth_tokens_to_file(&durable)?;
 
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(body_string_contains("\"method\":\"initialize\""))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("mcp-session-id", "session-a")
+                .set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1,
+                    "result": {"protocolVersion": "2025-06-18", "capabilities": {},
+                        "serverInfo": {"name": "test", "version": "1"}}
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
         .and(header("mcp-session-id", "session-a"))
@@ -280,6 +297,19 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         .await;
     client
         .post_message(
+            initial.url.clone().into(),
+            serde_json::from_value(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"}}
+            }))?,
+            None,
+            None,
+            Default::default(),
+        )
+        .await?;
+    client
+        .post_message(
             initial.url.into(),
             serde_json::from_value(
                 serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
@@ -289,6 +319,126 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
             Default::default(),
         )
         .await?;
+    handshake.complete();
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_recovery_cleanup_waits_for_refresh_credential_lock() -> Result<()> {
+    let (_env, server, mut initial) = test_context().await?;
+    let fresh = sample_tokens();
+    initial.token_response = fresh.token_response;
+    initial.expires_at = fresh.expires_at;
+    save_oauth_tokens_to_file(&initial)?;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("MCP JSON request");
+            if body["method"] == "initialize" {
+                ResponseTemplate::new(200)
+                    .insert_header("mcp-session-id", "session-a")
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1,
+                        "result": {"protocolVersion": "2025-06-18", "capabilities": {},
+                            "serverInfo": {"name": "test", "version": "1"}}
+                    }))
+            } else {
+                ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer")
+            }
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "refreshed-access-token", "refresh_token": "rotated-refresh-token",
+            "token_type": "Bearer", "expires_in": 3600,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut adapter = StreamableHttpClientAdapter::new(
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        HeaderMap::new(),
+        /*auth_provider*/ None,
+        /*has_configured_headers*/ false,
+        StreamableHttpRedirectMode::Legacy,
+        Arc::default(),
+    );
+    let handshake = RecoveryHandshakeGuard::new();
+    adapter.enable_recovery_cancellation(handshake.handle());
+    let client = OAuthStreamableHttpClient::new(
+        adapter,
+        runtime_for(&initial, crate::McpOAuthRefreshMode::Legacy).await?,
+    );
+    let uri: Arc<str> = initial.url.clone().into();
+    client
+        .post_message(
+            Arc::clone(&uri),
+            serde_json::from_value(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"}}
+            }))?,
+            None,
+            None,
+            Default::default(),
+        )
+        .await?;
+    let held_lock =
+        RefreshCredentialLock::acquire_for_server(&initial.server_name, &initial.url).await?;
+    let (contended_tx, contended_rx) = mpsc::channel();
+    let subscriber = tracing::subscriber::set_default(LockContentionSubscriber { contended_tx });
+    let caller = tokio::spawn(async move {
+        client
+            .post_message(
+                uri,
+                serde_json::from_value(serde_json::json!({
+                    "jsonrpc": "2.0", "method": "notifications/initialized"
+                }))?,
+                Some("session-a".into()),
+                None,
+                Default::default(),
+            )
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    wait_for_lock_contention(contended_rx, /*expected_count*/ 1).await?;
+    drop(subscriber);
+    assert!(!caller.is_finished());
+    caller.abort();
+    assert!(caller.await.expect_err("caller cancelled").is_cancelled());
+    drop(handshake);
+    drop(held_lock);
+    let requests = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let requests = server.received_requests().await.unwrap();
+            if requests.iter().any(|request| request.method == "DELETE") {
+                break requests;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let deletes: Vec<_> = requests
+        .iter()
+        .filter(|request| request.method == "DELETE")
+        .collect();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(
+        deletes[0].headers["authorization"],
+        "Bearer refreshed-access-token"
+    );
     server.verify().await;
     Ok(())
 }

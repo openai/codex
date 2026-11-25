@@ -7,30 +7,20 @@ use anyhow::anyhow;
 use codex_exec_server::ExecServerError;
 use futures::future::BoxFuture;
 use http::StatusCode;
-use rmcp::service::RoleClient;
-use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::time;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
-use crate::oauth::OAuthRuntime;
 
 use super::InitializeContext;
 use super::InitializeMode;
 use super::PendingTransport;
+use super::ReadySession;
 use super::RmcpClient;
 
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 pub(super) const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
-
-type InitializedConnection = (
-    Arc<RunningService<RoleClient, ElicitationClientService>>,
-    Option<OAuthRuntime>,
-    CancellationToken,
-);
 
 impl RmcpClient {
     // Box the entire retry loop once so startup and recovery share the handshake code.
@@ -39,7 +29,7 @@ impl RmcpClient {
         initial_transport: PendingTransport,
         initialize_context: &'a InitializeContext,
         mode: InitializeMode,
-    ) -> BoxFuture<'a, Result<InitializedConnection>> {
+    ) -> BoxFuture<'a, Result<Arc<ReadySession>>> {
         Box::pin(self.connect_with_retries(initial_transport, initialize_context, mode))
     }
 
@@ -48,7 +38,7 @@ impl RmcpClient {
         initial_transport: PendingTransport,
         initialize_context: &InitializeContext,
         mode: InitializeMode,
-    ) -> Result<InitializedConnection> {
+    ) -> Result<Arc<ReadySession>> {
         let timeout = initialize_context.timeout;
         let should_retry = match &initial_transport {
             PendingTransport::InProcess { .. } | PendingTransport::Stdio { .. } => false,

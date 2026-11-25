@@ -1,11 +1,16 @@
-//! Ensures MCP cancellation stops remote tool work and releases pending elicitation routes.
+//! Checks MCP request cancellation, pending elicitation routes, and session shutdown lifetimes.
 
+use super::ClientState;
 use super::ElicitationClientService;
 use super::ElicitationPauseState;
 use super::ElicitationResponse;
+use super::ReadySession;
 use super::RmcpClient;
 use crate::InProcessTransportFactory;
 use crate::McpProtocolMode;
+use crate::oauth::OAuthPersistor;
+use crate::oauth::OAuthRuntime;
+use crate::oauth::ResolvedOAuthCredentialStore;
 use codex_protocol::mcp::OPENAI_ELICITATION_EXTENSION_ID;
 use futures::FutureExt;
 use futures::TryFutureExt;
@@ -34,12 +39,15 @@ use rmcp::model::ServerRequest;
 use rmcp::model::ServerResult;
 use rmcp::service::PeerRequestOptions;
 use rmcp::service::QuitReason;
+use rmcp::service::RunningService;
 use rmcp::service::serve_directly;
 use rmcp::transport::IntoTransport;
 use rmcp::transport::Transport;
+use rmcp::transport::auth::AuthorizationManager;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -302,7 +310,7 @@ async fn recovered_connections_accept_elicitations_with_previously_cancelled_ids
         })
         .await?;
 
-        let previous = client.service().await?;
+        let previous = client.current_session().await?;
         client.reinitialize_after_session_expiry(&previous).await?;
         let recovered_server = timeout(Duration::from_secs(/*secs*/ 5), server_rx.recv())
             .await?
@@ -636,5 +644,102 @@ async fn cancelling_one_verification_leaves_the_mcp_connection_and_other_request
     )
     .await??;
     client.cancel().await?;
+    Ok(())
+}
+
+const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
+
+async fn lifecycle_client() -> anyhow::Result<(
+    RmcpClient,
+    RunningService<RoleServer, ElicitationTestServer>,
+)> {
+    let (servers, mut streams) = mpsc::unbounded_channel();
+    let client =
+        RmcpClient::new_in_process_client(Arc::new(ElicitationTestTransport { servers })).await?;
+    let stream = streams.recv().await.expect("in-process stream");
+    let (server, initialized) = timeout(LIFECYCLE_TIMEOUT, async {
+        tokio::join!(
+            ElicitationTestServer.serve(stream),
+            client.initialize(
+                ClientConfig::default().with_protocol_version(ProtocolVersion::V_2025_06_18),
+                Some(LIFECYCLE_TIMEOUT),
+                Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+            ),
+        )
+    })
+    .await?;
+    initialized?;
+    Ok((client, server?))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "hold the state lock while queuing recovery and shutdown in a deterministic order"
+)]
+async fn shutdown_wins_over_a_coalesced_recovery_waiter() -> anyhow::Result<()> {
+    let (client, _server) = lifecycle_client().await?;
+    let failed = client.current_session().await?;
+    let (replacement_client, _replacement_server) = lifecycle_client().await?;
+    let replacement = replacement_client.current_session().await?;
+    timeout(LIFECYCLE_TIMEOUT, replacement_client.shutdown()).await?;
+    let mut state = client.state.lock().await;
+    *state = ClientState::Ready(replacement);
+    let mut recovery =
+        Box::pin(client.reinitialize_after_session_expiry_inner(&failed, /*deadline*/ None));
+    assert!(futures::poll!(recovery.as_mut()).is_pending());
+    let mut shutdown = Box::pin(client.shutdown());
+    assert!(futures::poll!(shutdown.as_mut()).is_pending());
+    drop(state);
+
+    // Shutdown is ahead of recovery's canonical state reread in Tokio's FIFO mutex queue.
+    assert!(futures::poll!(recovery.as_mut()).is_pending());
+    timeout(LIFECYCLE_TIMEOUT, shutdown).await?;
+    let error = match timeout(LIFECYCLE_TIMEOUT, recovery).await? {
+        Err(error) => error,
+        Ok(_) => anyhow::bail!("recovery unexpectedly survived shutdown"),
+    };
+    assert_eq!(error.to_string(), "MCP client is shut down");
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "hold the OAuth manager lock to simulate blocked persistence during shutdown"
+)]
+async fn blocked_oauth_persistence_does_not_retain_the_installed_service() -> anyhow::Result<()> {
+    let (client, _server) = lifecycle_client().await?;
+    let manager = Arc::new(Mutex::new(
+        AuthorizationManager::new("https://example.test/mcp").await?,
+    ));
+    let oauth = OAuthRuntime::Legacy(OAuthPersistor::new(
+        "fixture".to_string(),
+        "https://example.test/mcp".to_string(),
+        Arc::clone(&manager),
+        ResolvedOAuthCredentialStore::file(),
+        /*initial_credentials*/ None,
+        /*oauth_config*/ None,
+    ));
+    let previous = client.current_session().await?;
+    let service = Arc::downgrade(&previous.service);
+    let replacement = Arc::new(ReadySession {
+        service: Arc::clone(&previous.service),
+        oauth: Some(oauth),
+        session_expired: previous.session_expired.clone(),
+    });
+    drop(previous);
+    let Some(OAuthRuntime::Legacy(persistor)) = client.install_ready_session(replacement).await?
+    else {
+        anyhow::bail!("installed session did not return its OAuth runtime");
+    };
+    let _manager_guard = manager.lock().await;
+    let mut persistence = Box::pin(persistor.persist_if_needed());
+    assert!(futures::poll!(persistence.as_mut()).is_pending());
+    timeout(LIFECYCLE_TIMEOUT, client.shutdown()).await?;
+    assert!(
+        service.upgrade().is_none(),
+        "OAuth persistence retained the service after shutdown"
+    );
     Ok(())
 }
