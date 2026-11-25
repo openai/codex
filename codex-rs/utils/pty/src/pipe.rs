@@ -6,8 +6,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 
 use crate::ChildStdin;
 use crate::Command;
@@ -244,9 +243,7 @@ async fn spawn_process_with_stdin_mode(
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
+    let exit_code = Arc::new(OnceLock::new());
     let wait_exit_code = Arc::clone(&exit_code);
     #[cfg(windows)]
     let wait_job = match &windows_terminator {
@@ -268,10 +265,7 @@ async fn spawn_process_with_stdin_mode(
             }
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
+        let _ = wait_exit_code.set(code);
         let _ = exit_tx.send(code);
     });
 
@@ -287,7 +281,6 @@ async fn spawn_process_with_stdin_mode(
         stderr_handle,
         writer_handle,
         wait_handle,
-        exit_status,
         exit_code,
         /*pty_handles*/ None,
         /*resizer*/ None,

@@ -19,8 +19,7 @@ use std::process::Command as StdCommand;
 #[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 #[cfg(not(unix))]
 use std::time::Duration;
 
@@ -278,19 +277,14 @@ async fn spawn_process_portable(
     };
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
+    let exit_code = Arc::new(OnceLock::new());
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
+        let _ = wait_exit_code.set(code);
         let _ = exit_tx.send(code);
     });
 
@@ -314,7 +308,6 @@ async fn spawn_process_portable(
         /*stderr_reader*/ None,
         writer_handle,
         wait_handle,
-        exit_status,
         exit_code,
         Some(handles),
         /*resizer*/ None,
@@ -485,9 +478,7 @@ async fn spawn_process_preserving_fds(
     let (reader_handle, writer_handle) = io.spawn(stdout_tx, writer_rx, stdin_close_behavior);
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
+    let exit_code = Arc::new(OnceLock::new());
     let wait_exit_code = Arc::clone(&exit_code);
     let on_exit = move |status: std::io::Result<std::process::ExitStatus>| {
         let code = match status {
@@ -497,10 +488,7 @@ async fn spawn_process_preserving_fds(
             Ok(status) => exit_code_from_status(status),
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
+        let _ = wait_exit_code.set(code);
         let _ = exit_tx.send(code);
     };
     #[cfg(target_os = "linux")]
@@ -523,7 +511,6 @@ async fn spawn_process_preserving_fds(
         /*stderr_reader*/ None,
         writer_handle,
         wait_handle,
-        exit_status,
         exit_code,
         Some(handles),
         /*resizer*/ None,

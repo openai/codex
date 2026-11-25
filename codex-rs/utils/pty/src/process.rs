@@ -5,7 +5,7 @@ use std::os::fd::RawFd;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 
 use anyhow::anyhow;
 use portable_pty::MasterPty;
@@ -115,8 +115,7 @@ pub struct ProcessHandle {
     stderr_reader: Option<JoinHandle<()>>,
     writer_handle: StdMutex<Option<JoinHandle<()>>>,
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
-    exit_status: Arc<AtomicBool>,
-    exit_code: Arc<StdMutex<Option<i32>>>,
+    exit_code: Arc<OnceLock<i32>>,
     // PtyHandles must be preserved because the process will receive Control+C if the
     // slave is closed
     _pty_handles: StdMutex<Option<PtyHandles>>,
@@ -140,8 +139,7 @@ impl ProcessHandle {
         stderr_reader: Option<JoinHandle<()>>,
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
-        exit_status: Arc<AtomicBool>,
-        exit_code: Arc<StdMutex<Option<i32>>>,
+        exit_code: Arc<OnceLock<i32>>,
         pty_handles: Option<PtyHandles>,
         resizer: Option<ResizeFn>,
     ) -> Self {
@@ -152,7 +150,6 @@ impl ProcessHandle {
             stderr_reader,
             writer_handle: StdMutex::new(Some(writer_handle)),
             wait_handle: StdMutex::new(Some(wait_handle)),
-            exit_status,
             exit_code,
             _pty_handles: StdMutex::new(pty_handles),
             resizer: StdMutex::new(resizer),
@@ -180,14 +177,14 @@ impl ProcessHandle {
         writer_tx
     }
 
-    /// True if the child process has exited.
+    /// Once this returns true, the exit code is available.
     pub fn has_exited(&self) -> bool {
-        self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
+        self.exit_code.get().is_some()
     }
 
     /// Returns the exit code if known.
     pub fn exit_code(&self) -> Option<i32> {
-        self.exit_code.lock().ok().and_then(|guard| *guard)
+        self.exit_code.get().copied()
     }
 
     /// Resize the PTY in character cells.
@@ -442,16 +439,11 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
     let writer_handle = writer_handle.unwrap_or_else(|| tokio::spawn(async {}));
 
     let (exit_tx, exit_rx_out) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
+    let exit_code = Arc::new(OnceLock::new());
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle = tokio::spawn(async move {
         let code = exit_rx.await.unwrap_or(-1);
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
+        let _ = wait_exit_code.set(code);
         let _ = exit_seen_tx.send(true);
         let _ = exit_tx.send(code);
     });
@@ -467,7 +459,6 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
         stderr_reader_handle,
         writer_handle,
         wait_handle,
-        exit_status,
         exit_code,
         /*pty_handles*/ None,
         resizer,
