@@ -81,6 +81,7 @@ pub(crate) struct ComposerRenderOptions<'a> {
         Option<&'a std::cell::RefCell<crate::rendered_selection::RenderedSelection>>,
     /// Reserve a shared hint row independently of whether it currently contains a notice.
     pub(crate) composer_gap: Option<&'a crate::bottom_pane::ComposerGap>,
+    pub(crate) stream_interrupt_key: Option<ShortcutHint>,
     pub(crate) working_tip: Option<&'a crate::turn_tip::TurnTip>,
     pub(crate) warning_count: usize,
     pub(crate) textarea_right_reserve: u16,

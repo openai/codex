@@ -195,12 +195,12 @@ impl ChatWidget {
                 .unwrap_or(true)
     }
 
-    /// Restore the status indicator only after commentary completion is pending,
+    /// Restore the status indicator only after message completion is pending,
     /// the turn is still running, and all stream queues have drained.
     ///
     /// This gate prevents flicker while normal output is still actively
     /// streaming, but still restores a visible "working" affordance when a
-    /// commentary block ends before the turn itself has completed.
+    /// message ends before the turn itself has completed.
     pub(super) fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
         if !self.status_state.pending_status_indicator_restore
             || !self.bottom_pane.is_task_running()
@@ -300,7 +300,13 @@ impl ChatWidget {
         message: &str,
         phase: Option<MessagePhase>,
     ) {
-        if self.stream_controller.is_none() && !message.is_empty() {
+        if !message.trim().is_empty()
+            && self
+                .stream_controller
+                .as_ref()
+                .is_none_or(|stream| !stream.has_text())
+        {
+            self.stream_controller = None;
             let displayed =
                 parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown;
             self.handle_streaming_delta(displayed);
@@ -563,9 +569,7 @@ impl ChatWidget {
 
     /// Handle completion of an `AgentMessage` turn item.
     ///
-    /// Commentary completion sets a deferred restore flag so the status row
-    /// returns once stream queues are idle. Final-answer completion (or absent
-    /// phase for legacy models) clears the flag to preserve historical behavior.
+    /// An unphased message can finish while the turn still has work to do.
     pub(super) fn on_agent_message_item_completed(
         &mut self,
         item: AgentMessageItem,
@@ -755,7 +759,9 @@ impl ChatWidget {
         }
         self.status_state.pending_status_indicator_restore = item.questions.is_some()
             || match item.phase {
-                // Models that don't support preambles only output AgentMessageItems on turn completion.
+                None if self.turn_lifecycle.agent_turn_running && !self.statusline_disconnected => {
+                    true
+                }
                 Some(MessagePhase::FinalAnswer) | None => {
                     !self.input_queue.pending_steers.is_empty()
                 }
@@ -784,7 +790,7 @@ impl ChatWidget {
     ///
     /// `scope` selects paced, catch-up, or replay draining. While lines are actively streaming
     /// we hide the status row to avoid duplicate "in progress" affordances. We only re-show
-    /// the row after commentary completion once stream queues are idle.
+    /// the row after message completion once stream queues are idle.
     pub(crate) fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
         let outcome = run_commit_tick(

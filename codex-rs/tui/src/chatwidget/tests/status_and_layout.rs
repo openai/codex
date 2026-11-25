@@ -2684,22 +2684,53 @@ fn assert_goal_paused_event(
 }
 
 #[tokio::test]
-async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion() {
+async fn unphased_stream_keeps_activity_visible_until_turn_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
 
-    chat.on_task_started();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
-
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    let whitespace = "\u{3000}\n";
+    handle_agent_message_delta(&mut chat, whitespace);
     chat.on_commit_tick();
-    drain_insert_history(&mut rx);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.status_indicator_visible());
+    complete_assistant_message(&mut chat, "msg-1", whitespace, /*phase*/ None);
+    assert!(chat.bottom_pane.status_indicator_visible());
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
-
-    // A second idle tick should not toggle the row back on and cause jitter.
+    chat.on_agent_message_delta("Checking the workbook.\n".to_string());
     chat.on_commit_tick();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    chat.on_commit_tick();
+    let footer = |chat: &ChatWidget, width| {
+        hook_status_frame(chat, width)
+            .lines()
+            .last()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    let mut hints = vec![footer(&chat, 60)];
+    chat.apply_external_edit("Follow up".into());
+    hints.push(footer(&chat, 60));
+    hints.push(footer(&chat, 26));
+    chat.apply_external_edit(String::new());
+    chat.bottom_pane.set_vim_enabled(/*enabled*/ true);
+    chat.handle_key_event(KeyCode::Insert.into());
+    hints.push(footer(&chat, 60));
+    chat.handle_key_event(KeyCode::Esc.into());
+    hints.push(footer(&chat, 60));
+    chat.bottom_pane.set_vim_enabled(/*enabled*/ false);
+    assert_chatwidget_snapshot!("streaming_interrupt_hint", hints.join("\n"));
+    complete_assistant_message(
+        &mut chat,
+        "msg-2",
+        "Checking the workbook.",
+        /*phase*/ None,
+    );
+    assert_chatwidget_snapshot!(
+        "paused_unphased_message",
+        hook_status_frame(&chat, /*width*/ 60)
+    );
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+    assert!(!chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]

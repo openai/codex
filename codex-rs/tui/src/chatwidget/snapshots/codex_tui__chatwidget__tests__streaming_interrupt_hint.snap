@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "hints.join(\"\\n\")"
+---
+"  esc to interrupt                                          "
+"  tab to queue message · esc to interrupt                   "
+"  tab to queue            "
+"  esc twice to interrupt                        Vim: Insert "
+"  esc to interrupt                              Vim: Normal "

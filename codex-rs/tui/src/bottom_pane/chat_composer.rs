@@ -1498,6 +1498,12 @@ impl ChatComposer {
         self.draft.textarea.is_vim_enabled()
     }
 
+    pub(super) fn is_agent_command(&self) -> bool {
+        !self.draft.is_bash_mode
+            && parse_slash_name(self.draft.textarea.text())
+                .is_some_and(|(name, _, _)| matches!(name, "agents" | "subagents"))
+    }
+
     /// Return whether Escape should be routed to the textarea before popups.
     ///
     /// Vim insert mode owns Escape as a transition back to normal mode. The app

@@ -18,6 +18,7 @@ enum Kind {
     Agents,
     Shortcuts,
     Action,
+    Interrupt,
     Side,
     SideNav,
     AgentName,
@@ -38,7 +39,10 @@ impl Kind {
     }
 
     fn left(self) -> bool {
-        matches!(self, Agents | Shortcuts | Action | Side | SideNav)
+        matches!(
+            self,
+            Agents | Shortcuts | Action | Interrupt | Side | SideNav
+        )
     }
 
     fn row(self, two_rows: bool) -> usize {
@@ -176,8 +180,8 @@ impl Hints {
             }
         }
         for kind in [
-            Action, Side, Shell, Vim, Plan, Goal, Ide, Warning, Context, SideNav, AgentName,
-            Agents, Shortcuts,
+            Action, Side, Shell, Vim, Plan, Interrupt, Goal, Ide, Warning, Context, SideNav,
+            AgentName, Agents, Shortcuts,
         ] {
             if !overflow[kind.row(two)] {
                 continue;
@@ -313,8 +317,9 @@ impl ChatComposer {
                 [Line::from(agent.clone().set_style(secondary_text_style()))],
             );
         }
-        if mode == FooterMode::ComposerEmpty && can_navigate && !self.is_in_paste_burst() {
-            if self.agents_navigation_available() {
+        if can_navigate && !self.is_in_paste_burst() {
+            let empty = mode == FooterMode::ComposerEmpty;
+            if empty && self.agents_navigation_available() {
                 hints.add(
                     Agents,
                     [shortcut(
@@ -323,7 +328,22 @@ impl ChatComposer {
                     )],
                 );
             }
-            if let Some(key) = self.footer.toggle_shortcuts_key {
+            let escape = KeyEvent::from(KeyCode::Esc);
+            if let Some(key) = options.stream_interrupt_key
+                && !(matches!(key, key_hint::ShortcutHint::Single(binding) if binding.parts().0 == KeyCode::Esc)
+                    && self.is_agent_command())
+            {
+                let label = if key.is_press(escape) && self.should_handle_vim_insert_escape(escape)
+                {
+                    " twice to interrupt"
+                } else {
+                    " to interrupt"
+                };
+                hints.add(
+                    if empty { Action } else { Interrupt },
+                    [shortcut(key, label)],
+                );
+            } else if empty && let Some(key) = self.footer.toggle_shortcuts_key {
                 hints.add(Shortcuts, [shortcut(key, " for shortcuts")]);
             }
         }

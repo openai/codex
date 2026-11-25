@@ -369,6 +369,17 @@ impl ChatWidget {
             };
             options.rendered_selection = Some(&self.rendered_selection);
             options.image_previews = self.composer_images.as_ref();
+            if self.turn_lifecycle.agent_turn_running
+                && !self.statusline_disconnected
+                && self.bottom_pane.status_widget().is_none()
+                && self.input_queue.pending_steers.is_empty()
+                && (self.stream_controller.is_some() || self.plan_stream_controller.is_some())
+            {
+                options.stream_interrupt_key = self
+                    .bottom_pane
+                    .keymap()
+                    .primary_hint(KeymapContext::Chat, "interrupt_turn");
+            }
             options.warning_count = self.warning_display_state.count;
             options.textarea_right_reserve = right_reserve;
             options.separate_status_line = options.command_popup_placement

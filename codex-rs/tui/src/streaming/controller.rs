@@ -148,16 +148,19 @@ impl StreamCore {
     /// immediately disappear on the next delta. Unterminated prose gets a separate,
     /// bounded preview that never advances the stable boundary.
     fn push_delta(&mut self, delta: &str) -> bool {
-        if !delta.is_empty() {
-            self.state.has_seen_delta = true;
-        }
         self.state.collector.push_delta(delta);
+        // Keep leading whitespace for Markdown indentation, but don't display it on its own.
+        let first_text = !self.state.has_text;
+        if first_text && delta.trim().is_empty() {
+            return false;
+        }
+        self.state.has_text = true;
 
         if delta.contains('\n') {
             self.preview = ProsePreview::default();
         }
         let mut enqueued = false;
-        if delta.contains('\n')
+        if (first_text || delta.contains('\n'))
             && let Some(range) = self.state.collector.commit_complete_source()
         {
             let source = self.state.collector.committed_source();
@@ -179,6 +182,9 @@ impl StreamCore {
     }
 
     fn refresh_preview(&mut self) -> bool {
+        if !self.state.has_text {
+            return false;
+        }
         let pending = self.state.collector.pending_source();
         let prose_preview = self.holdback_scanner.allows_prose_preview();
         let math = self.render_mode == HistoryRenderMode::Rich
@@ -626,6 +632,10 @@ impl StreamController {
         }
     }
 
+    pub(crate) fn has_text(&self) -> bool {
+        self.core.state.has_text
+    }
+
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         self.core.push_delta(delta)
     }
@@ -634,7 +644,7 @@ impl StreamController {
     /// markdown source for consolidation.
     pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
         let (remaining, source) = self.core.finalize_remaining();
-        if source.is_empty() {
+        if !self.has_text() {
             self.core.reset();
             return (None, None);
         }
