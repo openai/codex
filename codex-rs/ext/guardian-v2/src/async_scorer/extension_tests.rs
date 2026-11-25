@@ -1135,6 +1135,8 @@ async fn sample_configured_conversation_history_with_delivery(
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.guardian_policy_config = Some("Policy from the live thread.".to_owned());
             if code_mode {
+                // Hosted messaging should only contact the mock servers.
+                config.analytics_enabled = Some(false);
                 for feature in [
                     Feature::Apps,
                     Feature::CodeMode,

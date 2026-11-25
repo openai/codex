@@ -199,13 +199,14 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
             text_elements: Vec::new(),
         }]))
         .await?;
+    // The root has to spawn the worker before it can request message delivery.
+    let worker_id = tokio::time::timeout(ASYNC_TEST_TIMEOUT, created.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("worker thread was not created"))??;
+    let worker = test.thread_manager.get_thread(worker_id).await?;
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, pending_delivery.notified())
         .await
         .map_err(|_| anyhow::anyhow!("messaging delivery did not reach the MCP server"))?;
-    let worker = test
-        .thread_manager
-        .get_thread(created.recv().await?)
-        .await?;
     let mut config = test.config.clone();
     config.features.enable(Feature::GuardianV2)?;
     let session_store = ExtensionData::new("worker-cache-session");
