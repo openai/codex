@@ -138,6 +138,8 @@ jobs:
       - name: Build Bazel release binaries and symbols
         if: ${{ matrix.build-system == 'bazel' }}
         uses: ./.github/actions/build-bazel-release
+        env:
+          CODEX_BUNDLED_STATSIG_CLIENT_KEY: ${{ vars.CODEX_STATSIG_CLIENT_KEY }}
         with:
           target: ${{ matrix.target }}
           bundle: ${{ matrix.bundle }}
@@ -146,6 +148,8 @@ jobs:
       - name: Cargo build (Windows binaries)
         if: ${{ matrix.build-system == 'cargo' }}
         shell: bash
+        env:
+          CODEX_BUNDLED_STATSIG_CLIENT_KEY: ${{ vars.CODEX_STATSIG_CLIENT_KEY }}
         run: |
           target="${{ matrix.target }}"
           if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then

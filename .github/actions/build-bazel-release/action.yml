@@ -37,6 +37,7 @@ runs:
           ${{ runner.os == 'Windows' && '--windows-msvc-host-platform' || '' }} -- build \
           ${{ runner.os == 'macOS' && '--config=ci-macos --remote_download_toplevel' || '' }} \
           "--platforms=@rules_rs//rs/platforms:$TARGET" \
+          ${CODEX_BUNDLED_STATSIG_CLIENT_KEY:+"--@rules_rust//rust/settings:extra_rustc_env=CODEX_BUNDLED_STATSIG_CLIENT_KEY=$CODEX_BUNDLED_STATSIG_CLIENT_KEY"} \
           "--//codex-rs:runtime_package_build_mode=$BUILD_MODE" \
           -- "//codex-rs:runtime_package_$BUNDLE"
 
