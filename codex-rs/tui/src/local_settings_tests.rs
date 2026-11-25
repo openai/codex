@@ -7,6 +7,8 @@ use codex_config::types::RightClickPaste;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::StatusLineSelection;
 use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -477,7 +479,9 @@ async fn copy_on_select_respects_terminal_defaults_and_config_overrides() -> any
                 term: None,
             };
             assert_eq!(
-                local.copy_on_select(&terminal),
+                local.copy_on_select_with(
+                    crate::terminal_capabilities::forwards_copy_shortcut_for(&terminal)
+                ),
                 match expected {
                     CopyOnSelect::Auto => default_enabled,
                     CopyOnSelect::Always => true,

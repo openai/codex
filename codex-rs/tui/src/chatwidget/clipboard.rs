@@ -45,8 +45,8 @@ impl ChatWidget {
             return Some(KeyEventAction::None);
         }
         let local_linux = cfg!(target_os = "linux")
-            && !crate::clipboard_copy::is_ssh_session()
-            && !crate::clipboard_copy::is_wsl_session();
+            && !crate::terminal_capabilities::is_ssh_session()
+            && !crate::terminal_capabilities::is_wsl_session();
         let text_fallback = (shift_insert
             || (key.modifiers == KeyModifiers::CONTROL && (cfg!(windows) || local_linux)))
             .then_some(key.code);

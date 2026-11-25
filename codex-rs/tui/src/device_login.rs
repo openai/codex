@@ -18,7 +18,7 @@ use codex_app_server_protocol::ThreadStatus;
 use std::io;
 
 pub(crate) async fn prefer_device_login() -> bool {
-    if crate::clipboard_copy::is_ssh_session()
+    if crate::terminal_capabilities::is_ssh_session()
         || cfg!(target_os = "linux")
             && !["DISPLAY", "WAYLAND_DISPLAY"]
                 .iter()

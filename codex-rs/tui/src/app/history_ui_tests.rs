@@ -41,7 +41,7 @@ async fn viewed_image_links_follow_workspace_locality() -> Result<()> {
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
     let (mut app, _, _) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    let local_links = !crate::clipboard_copy::is_ssh_session();
+    let local_links = !crate::terminal_capabilities::is_ssh_session();
     for (target, linked) in [
         (AppServerTarget::Embedded, local_links),
         (

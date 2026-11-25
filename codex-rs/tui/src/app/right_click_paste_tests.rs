@@ -4,9 +4,9 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn policy_preserves_explicit_modes_and_terminal_ownership() {
-    use VscodeDetection::Other;
-    use VscodeDetection::Unknown;
-    use VscodeDetection::VsCode;
+    use PasteOwner::Application;
+    use PasteOwner::Unknown;
+
     const SSH_UNAVAILABLE: &str = "Unavailable over SSH; use your terminal's paste command";
     const VSCODE_UNAVAILABLE: &str = "VS Code handles pasting; use its terminal paste command";
     const WSL_AUTO_UNAVAILABLE: &str =
@@ -18,14 +18,14 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
     } else {
         Ok(true)
     };
-    for (platform_default, ssh, wsl, vscode, on_status, auto_status) in [
-        (true, false, false, Other, on, Ok(true)),
-        (false, false, false, Other, on, Ok(false)),
+    for (platform_default, ssh, wsl, owner, on_status, auto_status) in [
+        (true, false, false, Application, on, Ok(true)),
+        (false, false, false, Application, on, Ok(false)),
         (
             true,
             true,
             false,
-            Other,
+            Application,
             Err(SSH_UNAVAILABLE),
             Err(SSH_UNAVAILABLE),
         ),
@@ -33,19 +33,19 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
             true,
             false,
             false,
-            VsCode,
+            PasteOwner::Terminal(VSCODE_UNAVAILABLE),
             Err(VSCODE_UNAVAILABLE),
             Err(VSCODE_UNAVAILABLE),
         ),
         (true, false, true, Unknown, on, Err(WSL_AUTO_UNAVAILABLE)),
-        (true, false, true, Other, on, Ok(true)),
+        (true, false, true, Application, on, Ok(true)),
     ] {
         let env = PasteEnvironment {
             primary: false,
             platform_default,
             ssh,
             wsl,
-            vscode,
+            owner,
         };
         assert_eq!(
             [
@@ -63,7 +63,7 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
         platform_default: true,
         ssh: false,
         wsl: false,
-        vscode: Other,
+        owner: Application,
     };
     assert_eq!(
         [RightClickPaste::Off, RightClickPaste::On]

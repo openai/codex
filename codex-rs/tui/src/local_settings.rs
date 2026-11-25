@@ -17,8 +17,6 @@ use codex_config::types::CopyOnSelect;
 use codex_config::types::History;
 use codex_config::types::Notice;
 use codex_config::types::Tui;
-use codex_terminal_detection::TerminalInfo;
-use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -238,49 +236,16 @@ impl LocalSettings {
         settings
     }
 
-    /// Copy on release unless a direct terminal is known to forward its default copy shortcut.
-    /// Multiplexers, unknown terminals and Ghostty without a recognized version default to copying.
-    pub(crate) fn copy_on_select(&self, terminal: &TerminalInfo) -> bool {
+    /// Copy on release unless the default copy shortcut reaches the application.
+    pub(crate) fn copy_on_select(&self) -> bool {
+        self.copy_on_select_with(crate::terminal_capabilities::forwards_copy_shortcut())
+    }
+
+    fn copy_on_select_with(&self, forwards_copy_shortcut: bool) -> bool {
         match self.tui.copy_on_select {
             CopyOnSelect::Always => true,
             CopyOnSelect::Never => false,
-            CopyOnSelect::Auto => {
-                terminal.multiplexer.is_some()
-                    || match terminal.name {
-                        // Since 1.2, both Ghostty's Cmd-C and Ctrl-Shift-C bindings are
-                        // "performable": they forward the key if Ghostty has no selection.
-                        TerminalName::Ghostty => !terminal
-                            .version
-                            .as_deref()
-                            .and_then(|version| semver::Version::parse(version).ok())
-                            .is_some_and(|version| {
-                                version
-                                    >= semver::Version::new(
-                                        /*major*/ 1, /*minor*/ 2, /*patch*/ 0,
-                                    )
-                            }),
-                        // Kitty's Cmd-C uses copy_or_noop. Its Ctrl-Shift-C consumes the key.
-                        TerminalName::Kitty => !cfg!(target_os = "macos"),
-                        // Windows Terminal's Copy action forwards its key when unselected,
-                        // including when the CLI runs in WSL.
-                        TerminalName::WindowsTerminal => false,
-                        // VS Code gates Copy on native selection. Only Windows' default
-                        // (plain Ctrl-C) is also forwarded by the legacy xterm.js encoder.
-                        TerminalName::VsCode => !cfg!(target_os = "windows"),
-                        TerminalName::AppleTerminal
-                        | TerminalName::Iterm2
-                        | TerminalName::WarpTerminal
-                        | TerminalName::WezTerm
-                        | TerminalName::Rex
-                        | TerminalName::Orca
-                        | TerminalName::Alacritty
-                        | TerminalName::Konsole
-                        | TerminalName::GnomeTerminal
-                        | TerminalName::Vte
-                        | TerminalName::Dumb
-                        | TerminalName::Unknown => true,
-                    }
-            }
+            CopyOnSelect::Auto => !forwards_copy_shortcut,
         }
     }
 

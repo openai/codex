@@ -28,7 +28,7 @@ impl App {
             .downcast_mut::<history_cell::ViewImageHistoryCell>()
             && !self.app_server_target.uses_remote_workspace()
             && crate::projectless::has_only_local_environments(&self.environment_manager)
-            && !crate::clipboard_copy::is_ssh_session()
+            && !crate::terminal_capabilities::is_ssh_session()
         {
             image.link_local_image();
         }

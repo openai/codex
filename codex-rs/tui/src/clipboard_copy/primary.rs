@@ -6,15 +6,7 @@ use super::ClipboardLease;
 use super::CopyOutcome;
 use std::time::Instant;
 
-pub(crate) fn available() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("DISPLAY").is_some()
-        && std::env::var_os("WAYLAND_DISPLAY").is_none()
-        && !super::is_ssh_session()
-        && !super::is_tmux_session()
-        && !super::is_wsl_session()
-        && crate::tui::detect_vscode_terminal() != crate::tui::VscodeDetection::VsCode
-}
+pub(crate) use crate::terminal_capabilities::primary_selection_available as available;
 
 #[cfg(target_os = "linux")]
 pub(super) fn copy(

@@ -210,8 +210,7 @@ impl App {
             Overlay::new_transcript(
                 self.transcript_cells.clone(),
                 self.keymap.pager.clone(),
-                self.local_settings
-                    .copy_on_select(&codex_terminal_detection::terminal_info()),
+                self.local_settings.copy_on_select(),
                 self.local_settings
                     .tui
                     .mouse_scroll_speed

@@ -640,7 +640,7 @@ async fn run_resume_picker_with_launch_context(
             .map(AppServerSession::backend_id)
             .collect(),
         use_theme_colors: local_settings.tui.status_line_use_colors,
-        copy_on_select: local_settings.copy_on_select(&codex_terminal_detection::terminal_info()),
+        copy_on_select: local_settings.copy_on_select(),
         copy_on_select_clear_selection: local_settings.tui.copy_on_select_clear_selection,
         mouse_scroll_speed: local_settings.tui.mouse_scroll_speed.unwrap_or(1.0),
         show_all,
@@ -698,7 +698,7 @@ pub async fn run_fork_picker_with_app_server(
             .into_iter()
             .collect(),
         use_theme_colors: local_settings.tui.status_line_use_colors,
-        copy_on_select: local_settings.copy_on_select(&codex_terminal_detection::terminal_info()),
+        copy_on_select: local_settings.copy_on_select(),
         copy_on_select_clear_selection: local_settings.tui.copy_on_select_clear_selection,
         mouse_scroll_speed: local_settings.tui.mouse_scroll_speed.unwrap_or(1.0),
         show_all,

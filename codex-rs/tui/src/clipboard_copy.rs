@@ -26,9 +26,9 @@ mod wsl;
 
 use crate::terminal_capabilities::ClipboardCapabilities;
 use crate::terminal_capabilities::ClipboardCopyMode;
-pub(crate) use crate::terminal_capabilities::is_ssh_session;
-use crate::terminal_capabilities::is_tmux_session;
-use crate::terminal_capabilities::tmux_clipboard::copy as tmux_clipboard_copy;
+use crate::terminal_capabilities::Osc52Target;
+use crate::terminal_capabilities::copy_to_client_buffer;
+use crate::terminal_capabilities::is_wsl_session;
 use base64::Engine;
 use std::io::Write;
 use std::sync::Arc;
@@ -134,7 +134,7 @@ fn copy_to_clipboard(
         text,
         format,
         environment,
-        tmux_clipboard_copy,
+        copy_to_client_buffer,
         osc52,
         native_copy,
         |text| wsl::copy(text, wsl_deadline),
@@ -188,7 +188,7 @@ impl CopyEnvironment {
             } => native_for_large_copies && text.len() > OSC52_MAX_RAW_BYTES,
             ClipboardCopyMode::FallbackOsc52
             | ClipboardCopyMode::Osc52
-            | ClipboardCopyMode::Tmux => true,
+            | ClipboardCopyMode::ClientBuffer => true,
         }
     }
 }
@@ -197,7 +197,7 @@ fn copy_to_clipboard_with(
     text: &str,
     format: CopyFormat,
     environment: CopyEnvironment,
-    tmux_copy_fn: impl Fn(&str) -> Result<(), String>,
+    client_buffer_copy_fn: impl Fn(&str) -> Result<(), String>,
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
     arboard_copy_fn: impl FnOnce(&str, Option<&str>) -> Result<Option<ClipboardLease>, String>,
     wsl_copy_fn: impl Fn(&str) -> Result<(), String>,
@@ -209,7 +209,11 @@ fn copy_to_clipboard_with(
     let terminal_copy = || {
         if matches!(
             environment.terminal_copy,
-            ClipboardCopyMode::Tmux | ClipboardCopyMode::PreferTerminal { tmux: true, .. }
+            ClipboardCopyMode::ClientBuffer
+                | ClipboardCopyMode::PreferTerminal {
+                    client_buffer: true,
+                    ..
+                }
         ) {
             let raw_bytes = text.len();
             let result = if raw_bytes > OSC52_MAX_RAW_BYTES {
@@ -217,11 +221,11 @@ fn copy_to_clipboard_with(
                     "tmux clipboard payload too large ({raw_bytes} bytes; max {OSC52_MAX_RAW_BYTES})"
                 ))
             } else {
-                tmux_copy_fn(text)
+                client_buffer_copy_fn(text)
             };
-            result.or_else(|tmux_error| {
+            result.or_else(|client_error| {
                 osc52_copy_fn(text).map_err(|osc_error| {
-                    format!("tmux clipboard: {tmux_error}; OSC 52 fallback: {osc_error}")
+                    format!("tmux clipboard: {client_error}; OSC 52 fallback: {osc_error}")
                 })
             })
         } else {
@@ -273,16 +277,6 @@ fn copy_to_clipboard_with(
                 format!("{native_error}; terminal clipboard: {terminal_error}")
             }),
     }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn is_wsl_session() -> bool {
-    crate::clipboard_paste::is_probably_wsl()
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn is_wsl_session() -> bool {
-    false
 }
 
 /// Write to the native clipboard. The TUI owns any process-wide stderr redirection.
@@ -339,12 +333,6 @@ fn write_osc52_to_writer(mut writer: impl Write, sequence: &str) -> Result<(), S
         .map_err(|e| format!("failed to flush OSC 52: {e}"))
 }
 
-enum Osc52Target {
-    Direct,
-    Tmux,
-    Screen,
-}
-
 fn osc52_sequence(text: &str, target: Osc52Target) -> Result<String, String> {
     let raw_bytes = text.len();
     if raw_bytes > OSC52_MAX_RAW_BYTES {
@@ -357,8 +345,8 @@ fn osc52_sequence(text: &str, target: Osc52Target) -> Result<String, String> {
     let osc = format!("\x1b]52;c;{encoded}\x07");
     Ok(match target {
         Osc52Target::Direct => osc,
-        Osc52Target::Tmux => format!("\x1bPtmux;\x1b{osc}\x1b\\"),
-        Osc52Target::Screen => {
+        Osc52Target::EscapedDcs => crate::terminal_capabilities::escaped_dcs(&osc),
+        Osc52Target::ChunkedDcs => {
             // Screen buffers each DCS separately. Stay below even its older 256-byte
             // string limit while forwarding one continuous OSC 52 to the outer terminal.
             const CHUNK_SIZE: usize = 252;
@@ -400,7 +388,7 @@ mod tests {
 
     fn remote_tmux_environment() -> CopyEnvironment {
         CopyEnvironment {
-            terminal_copy: ClipboardCopyMode::Tmux,
+            terminal_copy: ClipboardCopyMode::ClientBuffer,
             ..remote_environment()
         }
     }
@@ -449,7 +437,7 @@ mod tests {
     #[test]
     fn osc52_wraps_tmux_passthrough() {
         assert_eq!(
-            osc52_sequence("hello", Osc52Target::Tmux),
+            osc52_sequence("hello", Osc52Target::EscapedDcs),
             Ok("\u{1b}Ptmux;\u{1b}\u{1b}]52;c;aGVsbG8=\u{7}\u{1b}\\".to_string())
         );
     }
@@ -749,7 +737,7 @@ mod tests {
             "hello",
             CopyFormat::PlainText,
             CopyEnvironment {
-                terminal_copy: ClipboardCopyMode::Tmux,
+                terminal_copy: ClipboardCopyMode::ClientBuffer,
                 ..local_environment()
             },
             |_| {

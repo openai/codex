@@ -114,9 +114,6 @@ pub(crate) struct InitializedTerminal {
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
-pub(crate) use keyboard_modes::VscodeDetection;
-pub(crate) use keyboard_modes::detect_vscode_terminal;
-
 pub(crate) fn reports_key_releases() -> bool {
     keyboard_modes::reports_key_releases()
 }

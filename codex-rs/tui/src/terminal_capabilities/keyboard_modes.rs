@@ -23,7 +23,7 @@ const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_E
 static REPORTS_KEY_RELEASES: AtomicBool = AtomicBool::new(/*v*/ false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VscodeDetection {
+pub(super) enum VscodeDetection {
     VsCode,
     Other,
     Unknown,
@@ -31,7 +31,7 @@ pub(crate) enum VscodeDetection {
 
 pub(crate) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
-    let is_wsl = crate::clipboard_copy::is_wsl_session();
+    let is_wsl = super::is_wsl_session();
     let vscode_detection = if is_wsl {
         detect_vscode_terminal()
     } else {
@@ -83,7 +83,7 @@ pub(super) fn running_in_vscode_terminal() -> bool {
     detect_vscode_terminal() == VscodeDetection::VsCode
 }
 
-pub(crate) fn detect_vscode_terminal() -> VscodeDetection {
+pub(super) fn detect_vscode_terminal() -> VscodeDetection {
     if terminal_info().name == TerminalName::VsCode {
         VscodeDetection::VsCode
     } else {
@@ -107,7 +107,7 @@ fn windows_vscode_detection() -> VscodeDetection {
 
 #[cfg(target_os = "linux")]
 fn read_windows_vscode_detection() -> VscodeDetection {
-    if !crate::clipboard_copy::is_wsl_session() {
+    if !super::is_wsl_session() {
         return VscodeDetection::Other;
     }
     read_windows_vscode_detection_with_timeout(

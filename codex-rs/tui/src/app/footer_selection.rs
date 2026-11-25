@@ -41,9 +41,7 @@ impl App {
                 selection.clear();
                 return Ok(false);
             }
-            selection.view.copy_on_select = self
-                .local_settings
-                .copy_on_select(&codex_terminal_detection::terminal_info());
+            selection.view.copy_on_select = self.local_settings.copy_on_select();
             selection.view.copy_on_select_clear_selection =
                 self.local_settings.tui.copy_on_select_clear_selection;
             selection.view.primary_selection = self.right_click_paste_environment.primary;

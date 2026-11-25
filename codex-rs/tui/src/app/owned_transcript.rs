@@ -178,8 +178,7 @@ impl App {
         event: crossterm::event::MouseEvent,
     ) -> bool {
         let selection_copy = crate::tui::SelectionCopy::on_select(
-            self.local_settings
-                .copy_on_select(&codex_terminal_detection::terminal_info()),
+            self.local_settings.copy_on_select(),
             self.right_click_paste_environment.primary,
             // Editable selections remain visible so the next input can replace them.
             /*clear_selection*/
@@ -214,9 +213,7 @@ impl App {
         let view = &mut self.transcript_view;
         view.mouse_scroll_speed = self.local_settings.tui.mouse_scroll_speed.unwrap_or(1.0);
         view.primary_selection = self.right_click_paste_environment.primary;
-        view.copy_on_select = self
-            .local_settings
-            .copy_on_select(&codex_terminal_detection::terminal_info());
+        view.copy_on_select = self.local_settings.copy_on_select();
         view.copy_on_select_clear_selection =
             self.local_settings.tui.copy_on_select_clear_selection;
         view.set_keymap_bindings(&self.keymap);

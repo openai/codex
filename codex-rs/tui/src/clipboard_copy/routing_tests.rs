@@ -19,7 +19,7 @@ fn local_tmux_preserves_native_html_when_terminal_silently_rejects_copy() {
         "**hello**",
         CopyFormat::Markdown,
         CopyEnvironment {
-            terminal_copy: ClipboardCopyMode::Tmux,
+            terminal_copy: ClipboardCopyMode::ClientBuffer,
             forwarded_x11: false,
             wsl_session: false,
         },
@@ -50,7 +50,7 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
         "hello",
         CopyFormat::PlainText,
         CopyEnvironment {
-            terminal_copy: ClipboardCopyMode::Tmux,
+            terminal_copy: ClipboardCopyMode::ClientBuffer,
             forwarded_x11: false,
             wsl_session: false,
         },
@@ -75,7 +75,7 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
 
 fn local_tmux_environment() -> CopyEnvironment {
     CopyEnvironment {
-        terminal_copy: ClipboardCopyMode::Tmux,
+        terminal_copy: ClipboardCopyMode::ClientBuffer,
         forwarded_x11: false,
         wsl_session: false,
     }
@@ -85,7 +85,7 @@ fn local_tmux_environment() -> CopyEnvironment {
 fn terminal_only_copy_reports_the_send_result() {
     let environment = CopyEnvironment {
         terminal_copy: ClipboardCopyMode::PreferTerminal {
-            tmux: false,
+            client_buffer: false,
             native_for_large_copies: false,
         },
         forwarded_x11: false,
@@ -115,7 +115,7 @@ fn terminal_only_copy_reports_the_send_result() {
 fn oversized_dev_container_copy_can_keep_native_ownership_without_confirming_delivery() {
     let environment = CopyEnvironment {
         terminal_copy: ClipboardCopyMode::PreferTerminal {
-            tmux: true,
+            client_buffer: true,
             native_for_large_copies: true,
         },
         ..local_tmux_environment()
@@ -237,7 +237,7 @@ fn confirmed_copy_without_new_lease_preserves_native_ownership() {
 #[test]
 fn screen_forwards_one_complete_osc52_across_bounded_passthrough_strings() {
     for text in ["hello", &"世界".repeat(500)] {
-        let sequence = super::osc52_sequence(text, super::Osc52Target::Screen).unwrap();
+        let sequence = super::osc52_sequence(text, super::Osc52Target::ChunkedDcs).unwrap();
         let chunks = sequence
             .strip_prefix("\x1bP")
             .unwrap()

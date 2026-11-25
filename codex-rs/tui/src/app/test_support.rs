@@ -123,7 +123,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
             platform_default: true,
             ssh: false,
             wsl: false,
-            vscode: crate::tui::VscodeDetection::Other,
+            owner: crate::terminal_capabilities::PasteOwner::Application,
         },
         reconnect: Default::default(),
         daemon_cli_executable: None,

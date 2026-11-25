@@ -52,8 +52,7 @@ pub(super) async fn observe() -> anyhow::Result<Activation> {
         } else {
             // Graphical terminals may be launched by the per-user service manager, outside
             // the login scope. Prefer the client environment's explicit session association.
-            if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
-            {
+            if crate::terminal_capabilities::is_ssh_session() {
                 anyhow::bail!("remote terminal has no graphical session");
             }
             match std::env::var("XDG_SESSION_ID") {

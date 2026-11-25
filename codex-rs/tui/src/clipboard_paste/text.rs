@@ -7,8 +7,8 @@ use std::time::Instant;
 /// Constructed on the clipboard worker, never on the UI thread.
 pub(crate) fn reader() -> impl FnMut(Instant) -> Result<String, String> {
     #[cfg(target_os = "linux")]
-    let windows =
-        (super::is_probably_wsl() && !crate::clipboard_copy::is_ssh_session()).then(|| {
+    let windows = (super::is_probably_wsl() && !crate::terminal_capabilities::is_ssh_session())
+        .then(|| {
             use std::sync::mpsc;
 
             let (requests, reads) = mpsc::sync_channel::<(
@@ -54,7 +54,7 @@ pub(crate) fn reader() -> impl FnMut(Instant) -> Result<String, String> {
                 .map_err(|_| "could not start clipboard reader".to_string())
         });
     move |deadline| {
-        if crate::clipboard_copy::is_ssh_session() {
+        if crate::terminal_capabilities::is_ssh_session() {
             return Err("clipboard text is unavailable over SSH".into());
         }
         #[cfg(target_os = "linux")]

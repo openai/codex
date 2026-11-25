@@ -7,8 +7,8 @@
 use super::*;
 use crate::bottom_pane::ClipboardPasteTarget;
 use crate::clipboard_copy::worker::PasteSource;
+use crate::terminal_capabilities::PasteOwner;
 use crate::transcript_mode::TranscriptMode;
-use crate::tui::VscodeDetection;
 use codex_config::types::RightClickPaste;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
@@ -27,7 +27,7 @@ pub(crate) struct PasteEnvironment {
     pub(super) platform_default: bool,
     pub(super) ssh: bool,
     pub(super) wsl: bool,
-    pub(super) vscode: VscodeDetection,
+    pub(super) owner: PasteOwner,
 }
 
 impl PasteEnvironment {
@@ -35,9 +35,9 @@ impl PasteEnvironment {
         Self {
             primary: crate::clipboard_copy::primary::available(),
             platform_default: cfg!(any(target_os = "windows", target_os = "linux")),
-            ssh: crate::clipboard_copy::is_ssh_session(),
-            wsl: crate::clipboard_copy::is_wsl_session(),
-            vscode: tui::detect_vscode_terminal(),
+            ssh: crate::terminal_capabilities::is_ssh_session(),
+            wsl: crate::terminal_capabilities::is_wsl_session(),
+            owner: crate::terminal_capabilities::paste_owner(),
         }
     }
 
@@ -61,10 +61,10 @@ impl PasteEnvironment {
         if self.ssh {
             return Err("Unavailable over SSH; use your terminal's paste command");
         }
-        if self.vscode == VscodeDetection::VsCode {
-            return Err("VS Code handles pasting; use its terminal paste command");
+        if let PasteOwner::Terminal(reason) = self.owner {
+            return Err(reason);
         }
-        if mode == RightClickPaste::Auto && self.wsl && self.vscode == VscodeDetection::Unknown {
+        if mode == RightClickPaste::Auto && self.wsl && self.owner == PasteOwner::Unknown {
             return Err(
                 "Auto cannot identify this WSL terminal; use On or your terminal's paste command",
             );

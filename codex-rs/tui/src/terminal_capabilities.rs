@@ -9,7 +9,7 @@ mod resize_reflow_cap;
 mod terminal_identity;
 pub(crate) mod terminal_probe;
 mod tmux;
-pub(crate) mod tmux_clipboard;
+mod tmux_clipboard;
 
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
@@ -25,12 +25,23 @@ pub(crate) use resize_reflow_cap::resize_reflow_max_rows;
 pub(crate) use terminal_identity::requires_inline_screen;
 pub(crate) use tmux::MouseCapture;
 pub(crate) use tmux::sample_mouse;
+pub(crate) use tmux_clipboard::copy as copy_to_client_buffer;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn is_wsl_session() -> bool {
+    crate::clipboard_paste::is_probably_wsl()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn is_wsl_session() -> bool {
+    false
+}
 
 pub(crate) fn is_ssh_session() -> bool {
     std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
 }
 
-pub(crate) fn is_tmux_session() -> bool {
+fn is_tmux_session() -> bool {
     tmux_transport() || std::env::var_os("TMUX_PANE").is_some()
 }
 
@@ -40,6 +51,12 @@ fn tmux_transport() -> bool {
 
 fn screen_active() -> bool {
     std::env::var_os("STY").is_some()
+}
+
+/// Escape embedded commands for a DCS passthrough transport.
+pub(crate) fn escaped_dcs(command: &str) -> String {
+    let escaped = command.replace('\x1b', "\x1b\x1b");
+    format!("\x1bPtmux;{escaped}\x1b\\")
 }
 
 pub(crate) struct SessionCapabilities {
@@ -110,11 +127,11 @@ pub(crate) fn scrollback_strategy(terminal: &TerminalInfo) -> ScrollbackStrategy
 pub(crate) enum ClipboardCopyMode {
     FallbackOsc52,
     Osc52,
-    Tmux,
+    ClientBuffer,
     /// The native clipboard may belong to a private desktop.
     PreferTerminal {
         native_for_large_copies: bool,
-        tmux: bool,
+        client_buffer: bool,
     },
 }
 
@@ -135,7 +152,7 @@ pub(crate) struct ClipboardCapabilities {
 
 impl ClipboardCapabilities {
     pub(crate) fn detect() -> Self {
-        let terminal = codex_terminal_detection::terminal_info();
+        let terminal = terminal_info();
         let ssh = is_ssh_session();
         let tmux = is_tmux_session();
         Self {
@@ -144,10 +161,10 @@ impl ClipboardCapabilities {
                     native_for_large_copies: cfg!(target_os = "linux")
                         && std::env::var_os("WAYLAND_DISPLAY")
                             .is_some_and(|display| !display.is_empty()),
-                    tmux,
+                    client_buffer: tmux,
                 }
             } else if tmux {
-                ClipboardCopyMode::Tmux
+                ClipboardCopyMode::ClientBuffer
             } else if ssh || std::env::var("HERDR_ENV").is_ok_and(|value| value == "1") {
                 ClipboardCopyMode::Osc52
             } else {
@@ -156,6 +173,93 @@ impl ClipboardCapabilities {
             forwarded_x11: ssh && std::env::var("DISPLAY").is_ok_and(|display| !display.is_empty()),
         }
     }
+}
+
+pub(crate) fn forwards_copy_shortcut() -> bool {
+    forwards_copy_shortcut_for(&terminal_info())
+}
+
+pub(crate) fn forwards_copy_shortcut_for(terminal: &TerminalInfo) -> bool {
+    terminal.multiplexer.is_none()
+        && match terminal.name {
+            // Since 1.2, both Ghostty's Cmd-C and Ctrl-Shift-C bindings are
+            // "performable": they forward the key if Ghostty has no selection.
+            TerminalName::Ghostty => terminal
+                .version
+                .as_deref()
+                .and_then(|version| semver::Version::parse(version).ok())
+                .is_some_and(|version| {
+                    version
+                        >= semver::Version::new(
+                            /*major*/ 1, /*minor*/ 2, /*patch*/ 0,
+                        )
+                }),
+            // Kitty's Cmd-C uses copy_or_noop. Its Ctrl-Shift-C consumes the key.
+            TerminalName::Kitty => cfg!(target_os = "macos"),
+            // Windows Terminal's Copy action forwards its key when unselected,
+            // including when the CLI runs in WSL.
+            TerminalName::WindowsTerminal => true,
+            // VS Code gates Copy on native selection. Only Windows' default
+            // (plain Ctrl-C) is also forwarded by the legacy xterm.js encoder.
+            TerminalName::VsCode => cfg!(target_os = "windows"),
+            TerminalName::AppleTerminal
+            | TerminalName::Iterm2
+            | TerminalName::WarpTerminal
+            | TerminalName::WezTerm
+            | TerminalName::Rex
+            | TerminalName::Orca
+            | TerminalName::Alacritty
+            | TerminalName::Konsole
+            | TerminalName::GnomeTerminal
+            | TerminalName::Vte
+            | TerminalName::Dumb
+            | TerminalName::Unknown => false,
+        }
+}
+
+pub(crate) enum Osc52Target {
+    Direct,
+    EscapedDcs,
+    ChunkedDcs,
+}
+
+impl Osc52Target {
+    pub(crate) fn detect() -> Self {
+        if tmux_transport() {
+            Self::EscapedDcs
+        } else if screen_active() {
+            Self::ChunkedDcs
+        } else {
+            Self::Direct
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PasteOwner {
+    Terminal(&'static str),
+    Application,
+    Unknown,
+}
+
+pub(crate) fn paste_owner() -> PasteOwner {
+    match keyboard_modes::detect_vscode_terminal() {
+        keyboard_modes::VscodeDetection::VsCode => {
+            PasteOwner::Terminal("VS Code handles pasting; use its terminal paste command")
+        }
+        keyboard_modes::VscodeDetection::Other => PasteOwner::Application,
+        keyboard_modes::VscodeDetection::Unknown => PasteOwner::Unknown,
+    }
+}
+
+pub(crate) fn primary_selection_available() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::var_os("DISPLAY").is_some()
+        && std::env::var_os("WAYLAND_DISPLAY").is_none()
+        && !is_ssh_session()
+        && !is_tmux_session()
+        && !is_wsl_session()
+        && !matches!(paste_owner(), PasteOwner::Terminal(_))
 }
 
 pub(crate) fn title_encoding() -> crate::terminal_title::TitleEncoding {
