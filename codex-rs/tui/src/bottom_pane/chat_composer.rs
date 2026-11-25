@@ -311,7 +311,7 @@
 //! - Unmodified Tab joins detected bursts, including short Unicode prefixes, before popup dispatch.
 //!   Expired bursts are flushed first so manual Tab keeps its normal shortcut behavior.
 //! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
-//!   from UI ticks to integrate a pending burst via [`ChatComposer::apply_paste`] or insert a
+//!   from UI ticks to display a burst while preserving its Enter deadline, or to insert a
 //!   held single character. Explicit paste events (terminal or clipboard) use
 //!   [`ChatComposer::handle_paste`], which first commits buffered typing before classifying the
 //!   pasted text. This preserves the order when a paste arrives before the next burst-flush tick;
@@ -1833,9 +1833,7 @@ impl ChatComposer {
 
     /// Flush buffered typing before clearing so cancellation preserves the complete draft in history.
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
-        if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-            self.apply_paste(pasted);
-        }
+        self.flush_pending_input();
         if self.is_empty() {
             return None;
         }
@@ -1971,8 +1969,7 @@ impl ChatComposer {
     ///
     /// Call this from a UI tick to turn paste-burst transient state into explicit textarea edits:
     ///
-    /// - If a burst times out, integrate it via [`Self::apply_paste`]. Its key events have already
-    ///   been classified; [`Self::handle_paste`] classifies explicit terminal pastes instead.
+    /// - If a burst times out, display the text while preserving its Enter deadline.
     /// - If only the first ASCII char was held (flicker suppression) and no burst followed, emit it
     ///   as normal typed input.
     ///
@@ -3693,14 +3690,16 @@ impl ChatComposer {
         {
             return (InputResult::None, true);
         }
-        if self.queue_keys.is_pressed(key_event)
-            && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
-        {
-            return self.handle_submission(self.is_task_running || self.queue_submissions);
-        }
-
-        if self.submit_keys.is_pressed(key_event) {
-            return self.handle_submission(self.queue_submissions);
+        let queue = self.queue_keys.is_pressed(key_event)
+            && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command());
+        if queue || self.submit_keys.is_pressed(key_event) {
+            // Raw paste tabs were handled before popup dispatch. Only a plain Enter
+            // reaching submission can still be a trailing pasted newline.
+            if key_event.code != KeyCode::Enter || !key_event.modifiers.is_empty() {
+                self.flush_pending_input();
+            }
+            return self
+                .handle_submission(self.queue_submissions || (queue && self.is_task_running));
         }
 
         if let KeyEvent {
@@ -6403,20 +6402,17 @@ mod tests {
         assert_eq!(composer.footer_mode(), FooterMode::ComposerEmpty);
     }
 
-    #[test]
-    fn clear_for_ctrl_c_records_cleared_draft() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        composer.set_text_content("draft text".to_string(), Vec::new(), Vec::new());
+    #[tokio::test(start_paused = true)]
+    async fn clear_for_ctrl_c_records_cleared_draft() {
+        let (mut composer, _rx) = new_test_composer();
+        for ch in "draft text".chars() {
+            composer.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        tokio::time::advance(PasteBurst::recommended_active_flush_delay()).await;
+        assert!(composer.flush_paste_burst_if_due());
         assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
+        composer.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        composer.flush_pending_paste_burst();
         assert!(composer.is_empty());
 
         assert_eq!(

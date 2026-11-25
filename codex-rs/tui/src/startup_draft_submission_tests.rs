@@ -97,15 +97,21 @@ async fn startup_submission_honors_configured_submit_binding() {
     assert_eq!(pump.into_draft(), draft);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn startup_submission_accepts_enter_after_paste_ambiguity_expires() {
     let mut pump = tests::quiet_startup_test_pump();
     let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
-    pump.bottom_pane.insert_str("pasted draft");
-    pump.pending_paste_newline = Some((
-        Instant::now() - STARTUP_PASTE_NEWLINE_TIMEOUT - Duration::from_millis(/*millis*/ 1),
-        "\n".into(),
-    ));
+    for ch in "pasted draft".chars() {
+        pump.handle_event(&mut tui, TuiEvent::Key(KeyEvent::from(KeyCode::Char(ch))))
+            .unwrap();
+    }
+    tokio::time::advance(Duration::from_millis(80)).await;
+    pump.handle_event(&mut tui, TuiEvent::Draw).unwrap();
+    assert_eq!(pump.bottom_pane.composer_text(), "pasted draft");
+    pump.handle_event(&mut tui, TuiEvent::Key(KeyEvent::from(KeyCode::Enter)))
+        .expect("defer Enter inside the paste window");
+    assert!(!pump.submission_pending);
+    tokio::time::advance(Duration::from_millis(50)).await;
     pump.handle_event(&mut tui, TuiEvent::Key(KeyEvent::from(KeyCode::Enter)))
         .expect("confirm after the ambiguous paste has finished");
     assert!(pump.take_submission_intent());

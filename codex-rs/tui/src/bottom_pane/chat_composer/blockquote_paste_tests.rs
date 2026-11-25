@@ -10,6 +10,8 @@ fn blockquote_paste_continues_current_line_prefix() {
     for (draft, pasted, expected) in [
         ("> ", "first\nsecond", "> first\n> second\n\n"),
         ("> ", "first\n", "> first\n\n"),
+        ("> first", "\n", "> first\n"),
+        ("> first", "\n\t", "> first\n\t"),
         ("intro\n> ", "α\r\n\r\nβ\r", "intro\n> α\n> \n> β\n\n"),
         (
             "> existing ",

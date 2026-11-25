@@ -48,7 +48,14 @@ impl StartupDraftPump {
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
                 }) if modifiers.is_empty() => {
-                    if started_at.elapsed() <= STARTUP_PASTE_NEWLINE_TIMEOUT {
+                    // Text may still follow a deferred newline, but a fresh Enter
+                    // can confirm the visible draft once its paste window closes.
+                    if started_at.elapsed() <= STARTUP_PASTE_NEWLINE_TIMEOUT
+                        && self
+                            .bottom_pane
+                            .composer_paste_deadline()
+                            .is_none_or(|deadline| Instant::now().into_std() <= deadline)
+                    {
                         newlines.push('\n');
                         self.pending_paste_newline = Some((Instant::now(), newlines));
                         return Ok(());
@@ -101,12 +108,9 @@ impl StartupDraftPump {
                         || !self.bottom_pane.is_safe_startup_editor_key(key))
                 {
                     let text_len = self.bottom_pane.composer_text().len();
-                    let retained_paste = self.session_action
-                        == super::StartupDraftSessionAction::NewWhileRunning
-                        && !self.bottom_pane.is_in_paste_burst()
-                        && self
-                            .bottom_pane
-                            .has_startup_paste_window(Instant::now().into_std());
+                    let retained_paste = self
+                        .bottom_pane
+                        .has_startup_paste_window(Instant::now().into_std());
                     self.bottom_pane.flush_composer_paste_burst();
                     if retained_paste
                         || self

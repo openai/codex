@@ -144,8 +144,7 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_handoff_paste_if_due(&mut self) -> bool {
-        self.composer
-            .flush_handoff_paste(tokio::time::Instant::now().into_std())
+        self.composer.flush_paste_burst_if_due()
     }
 
     /// Preserve buffered composer input before its owner or input mode changes.

@@ -550,18 +550,17 @@ fn startup_draft_preserves_multiline_editing_without_submitting() {
 
 #[tokio::test(start_paused = true)]
 async fn startup_draft_preserves_non_bracketed_multiline_pastes_without_submitting() {
-    let events = "first line\n\nsecond line\nthird line"
-        .chars()
-        .map(|character| {
-            TuiEvent::Key(KeyEvent::new(
-                if character == '\n' {
-                    KeyCode::Enter
-                } else {
-                    KeyCode::Char(character)
-                },
-                KeyModifiers::NONE,
-            ))
-        });
+    let payload = "有几个问题:\n问:\nfirst line\n\nsecond line\nthird line";
+    let events = payload.chars().map(|character| {
+        TuiEvent::Key(KeyEvent::new(
+            if character == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(character)
+            },
+            KeyModifiers::NONE,
+        ))
+    });
     let mut pump = startup_test_pump(events);
     let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
 
@@ -570,10 +569,7 @@ async fn startup_draft_preserves_non_bracketed_multiline_pastes_without_submitti
         .expect("preserve multiline non-bracketed paste");
     assert!(!pump.submission_pending);
 
-    assert_eq!(
-        pump.bottom_pane.composer_text(),
-        "first line\n\nsecond line\nthird line"
-    );
+    assert_eq!(pump.bottom_pane.composer_text(), payload);
     assert!(pump.app_event_rx.try_recv().is_err());
 
     pump.handle_event(
@@ -581,10 +577,7 @@ async fn startup_draft_preserves_non_bracketed_multiline_pastes_without_submitti
         TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
     )
     .expect("ignore standalone Enter after the paste finishes");
-    assert_eq!(
-        pump.bottom_pane.composer_text(),
-        "first line\n\nsecond line\nthird line"
-    );
+    assert_eq!(pump.bottom_pane.composer_text(), payload);
     assert!(pump.app_event_rx.try_recv().is_err());
 }
 

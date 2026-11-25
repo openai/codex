@@ -30,8 +30,8 @@
 //! - On Enter or Tab, [`PasteBurst::append_control_char_if_active`] promotes a held first character
 //!   into the active buffer before appending the newline or tab and refreshing the idle timeout.
 //! - On a UI tick, call [`PasteBurst::flush_if_due`]. If it returns [`FlushResult::Typed`], insert
-//!   that char as normal typing. If it returns [`FlushResult::Paste`], treat the returned string as
-//!   an explicit paste.
+//!   that char as normal typing. If it returns [`FlushResult::Paste`], apply the text and preserve
+//!   the original Enter suppression deadline.
 //! - Before applying non-text input (arrow keys; Ctrl/Alt shortcuts other than Windows AltGr;
 //!   or Super, Hyper, and Meta modifiers), use
 //!   [`PasteBurst::flush_before_modified_input`] to avoid leaving buffered text "stuck", and then
@@ -145,7 +145,7 @@
 //!
 //! - Periodically (e.g. on a UI tick), call [`PasteBurst::flush_if_due`].
 //!   - [`FlushResult::Typed`]: insert that single char as normal typing.
-//!   - [`FlushResult::Paste`]: treat the returned string as an explicit paste.
+//!   - [`FlushResult::Paste`]: apply the text without ending Enter suppression.
 //!
 //! - When non-text input is pressed (Ctrl/Alt shortcuts other than Windows AltGr; Super, Hyper,
 //!   and Meta modifiers; arrows; etc.), callers should use
@@ -277,13 +277,7 @@ impl PasteBurst {
     }
 
     fn note_plain_char(&mut self, now: Instant) {
-        match self.last_plain_char_time {
-            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1)
-            }
-            _ => self.consecutive_plain_char_burst = 1,
-        }
+        self.consecutive_plain_char_burst = self.recent_plain_char_count(now).saturating_add(1);
         self.last_plain_char_time = Some(now);
     }
 
@@ -316,6 +310,8 @@ impl PasteBurst {
     pub(crate) fn flush_pending(&mut self) -> FlushResult {
         if self.is_active_internal() {
             self.active = false;
+            self.last_plain_char_time = None;
+            self.consecutive_plain_char_burst = 0;
             let out = std::mem::take(&mut self.buffer);
             FlushResult::Paste(out)
         } else if let Some((ch, _at)) = self.pending_first_char.take() {
@@ -347,16 +343,27 @@ impl PasteBurst {
 
     /// Decide if Enter should insert a newline (burst context) vs submit.
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
-        let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
-        self.is_active() || in_burst_window
+        self.is_active() || self.in_burst_window(now)
+    }
+
+    pub(super) fn in_burst_window(&self, now: Instant) -> bool {
+        self.burst_window_until.is_some_and(|until| now <= until)
     }
 
     /// Decide if Enter should insert a newline for callers that insert chars immediately.
     pub fn direct_insert_newline_should_insert(&self, now: Instant) -> bool {
-        self.newline_should_insert_instead_of_submit(now)
-            || self
-                .last_plain_char_time
-                .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
+        self.newline_should_insert_instead_of_submit(now) || self.recent_plain_char_count(now) > 0
+    }
+
+    pub(super) fn recent_plain_char_count(&self, now: Instant) -> u16 {
+        if self
+            .last_plain_char_time
+            .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
+        {
+            self.consecutive_plain_char_burst
+        } else {
+            0
+        }
     }
 
     /// Keep input in this composer while keys can still belong to its paste.
@@ -369,10 +376,6 @@ impl PasteBurst {
         self.last_plain_char_time
             .map(|last_key| last_key + interval)
             .max(self.burst_window_until)
-    }
-
-    pub(super) fn preserve_window_until(&mut self, deadline: Instant) {
-        self.burst_window_until = self.burst_window_until.max(Some(deadline));
     }
 
     /// Keep the burst window alive.

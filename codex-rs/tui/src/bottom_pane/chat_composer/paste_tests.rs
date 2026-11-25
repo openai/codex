@@ -1,4 +1,4 @@
-//! Composer paste handling for literal paths and raw tabs.
+//! Composer paste handling for literal paths and raw multiline input.
 
 use super::tests::new_test_composer;
 use super::*;
@@ -28,6 +28,39 @@ fn pasting_fifo_path_keeps_it_editable() {
         composer.current_text().strip_prefix(prefix.as_ref()).unwrap(),
         @"/tty.usbserial-11"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn paste_burst_keeps_newlines_after_short_unicode_and_flushed_lines() {
+    let (mut composer, _rx) = new_test_composer();
+    for ch in "有几个问题:".chars() {
+        composer.handle_key_event(KeyCode::Char(ch).into());
+    }
+    assert_eq!(composer.current_text(), "有几个问题:");
+    for line in ["- first", "- second"] {
+        let (result, _) = composer.handle_key_event(KeyCode::Enter.into());
+        assert_eq!(result, InputResult::None);
+        assert_eq!(
+            composer.handle_key_event(KeyCode::Tab.into()).0,
+            InputResult::None
+        );
+        for ch in line.chars() {
+            composer.handle_key_event(KeyCode::Char(ch).into());
+        }
+        tokio::time::advance(PasteBurst::recommended_active_flush_delay()).await;
+        assert!(composer.flush_paste_burst_if_due());
+    }
+    insta::assert_snapshot!(composer.current_text(), @"有几个问题:
+\t- first
+\t- second");
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let expected = InputResult::Submitted {
+        text: composer.current_text(),
+        text_elements: Vec::new(),
+    };
+    let (result, _) = composer.handle_key_event(KeyCode::Enter.into());
+    assert_eq!(result, expected);
 }
 
 #[test]

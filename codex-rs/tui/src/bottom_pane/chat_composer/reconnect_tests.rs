@@ -16,7 +16,7 @@ async fn draft_handoff_preserves_newline_after_short_unicode_prefix() {
         );
     }
     tokio::time::advance(Duration::from_millis(/*millis*/ 100)).await;
-    composer.flush_handoff_paste(tokio::time::Instant::now().into_std());
+    composer.flush_paste_burst_if_due();
     composer.handle_restricted_key(KeyCode::Enter.into(), RestrictedInputMode::DraftHandoff);
     insta::assert_snapshot!(composer.current_text(), @"猫
 犬");

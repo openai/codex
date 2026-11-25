@@ -9,7 +9,6 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 use super::InputResult;
-use super::PasteBurst;
 use super::tests::new_test_composer;
 use super::tests::snapshot_composer_state_with_width;
 
@@ -34,10 +33,9 @@ fn enter_expires_paste_state_without_a_ui_tick() {
                 assert!(composer.is_in_paste_burst());
                 assert_eq!(composer.current_text(), "");
 
-                let result = composer.handle_submission_with_time(
-                    /*should_queue*/ false,
-                    now + PasteBurst::recommended_active_flush_delay(),
-                );
+                let expired = composer.paste_handoff_deadline().unwrap() + Duration::from_millis(1);
+                let result =
+                    composer.handle_submission_with_time(/*should_queue*/ false, expired);
                 let expected = if parent_owned {
                     InputResult::ParentOwnedInputBlocked
                 } else {

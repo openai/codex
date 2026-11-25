@@ -4,7 +4,7 @@
 //! Connected unavailable threads retain the empty-prompt agents shortcut.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
 //! In the draft-only handoff, a recent paste prefix can preserve a raw Enter as a newline.
-//! The submit path still requires an established paste before treating Enter as a newline.
+//! In an ordinary draft, a lone IME character does not turn Enter into a newline.
 //! Recovery commands must occupy one line and be visible before the submit key expands pastes.
 //! Offline draft edits also consume the Astra sparkle opportunity before rendering.
 
@@ -102,33 +102,7 @@ impl ChatComposer {
                     .next()
                     .unwrap_or("")
                     .starts_with('/'));
-        !in_slash_context && self.append_paste_newline(now)
-    }
-
-    fn append_paste_newline(&mut self, now: Instant) -> bool {
-        if self.draft.disable_paste_burst {
-            return false;
-        }
-        if self.draft.paste_burst.is_active()
-            && self
-                .draft
-                .paste_burst
-                .append_control_char_if_active('\n', now)
-        {
-            self.begin_promoted_paste_edit();
-            return true;
-        }
-        if self
-            .draft
-            .paste_burst
-            .newline_should_insert_instead_of_submit(now)
-        {
-            self.draft.textarea.insert_str("\n");
-            self.draft.paste_burst.extend_window(now);
-            return true;
-        }
-
-        false
+        !in_slash_context && self.append_recent_paste_separator('\n', now)
     }
 
     pub(crate) fn handle_restricted_key(
@@ -140,7 +114,7 @@ impl ChatComposer {
         if mode == RestrictedInputMode::DraftHandoff {
             if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 let now = tokio::time::Instant::now().into_std();
-                self.flush_handoff_paste(now);
+                self.handle_paste_burst_flush(now);
                 // Completion does not own keys during the handoff.
                 self.popups.active = ActivePopup::None;
                 if self.draft.textarea.wants_vim_search_key(key) {
@@ -152,8 +126,7 @@ impl ChatComposer {
                     // newline after a directly inserted prefix, as we do for Tab.
                     let paste_separator = (key.code == KeyCode::Enter
                         && key.modifiers.is_empty()
-                        && (self.append_paste_newline(now)
-                            || self.append_recent_paste_separator('\n', now)))
+                        && self.append_recent_paste_separator('\n', now))
                         || self.handle_paste_tab(key, now);
                     if !paste_separator
                         && !self.submit_keys.is_pressed(key)

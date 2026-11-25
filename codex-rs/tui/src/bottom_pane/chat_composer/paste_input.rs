@@ -170,21 +170,11 @@ impl ChatComposer {
     }
 
     pub(in crate::bottom_pane) fn has_paste_window(&self, now: Instant) -> bool {
+        // Short IME prefixes are inserted directly. Require multiple rapid characters
+        // before intercepting submit so Enter after a lone IME commit still submits.
+        let burst = &self.draft.paste_burst;
         !self.draft.disable_paste_burst
-            && self
-                .draft
-                .paste_burst
-                .newline_should_insert_instead_of_submit(now)
-    }
-
-    /// Display flushed text without losing the window for its trailing paste keys.
-    pub(in crate::bottom_pane) fn flush_handoff_paste(&mut self, now: Instant) -> bool {
-        let deadline = self.paste_handoff_deadline();
-        let flushed = self.handle_paste_burst_flush(now);
-        if flushed && let Some(deadline) = deadline.filter(|deadline| *deadline >= now) {
-            self.draft.paste_burst.preserve_window_until(deadline);
-        }
-        flushed
+            && (burst.in_burst_window(now) || burst.recent_plain_char_count(now) >= 2)
     }
 
     /// Enable or disable paste-burst handling.
@@ -217,7 +207,7 @@ impl ChatComposer {
     /// Applies any due `PasteBurst` flush at time `now`.
     ///
     /// Converts [`PasteBurst::flush_if_due`] results into concrete textarea mutations.
-    /// Buffered keys have already been classified; paste results use [`Self::apply_paste`].
+    /// Buffered keys have already been classified. Keep their Enter suppression deadline.
     ///
     /// Callers:
     ///
@@ -227,7 +217,8 @@ impl ChatComposer {
     pub(super) fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.draft.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
-                self.apply_paste(pasted);
+                // A trailing Enter may still belong to this unmarked paste.
+                self.apply_paste_with_shell_prefix(pasted, ShellPrefixHandling::Interpret);
                 if !self.draft.textarea.is_vim_enabled() {
                     self.finish_edit();
                 }
@@ -249,6 +240,12 @@ impl ChatComposer {
         }
     }
 
+    /// An explicit paste or a forced flush ends the previous burst.
+    pub(super) fn apply_paste(&mut self, pasted: String) -> bool {
+        self.draft.paste_burst.clear_after_explicit_paste();
+        self.apply_paste_with_shell_prefix(pasted, ShellPrefixHandling::Interpret)
+    }
+
     /// Integrate pasted text into the composer.
     ///
     /// Both input paths integrate their text here:
@@ -266,12 +263,6 @@ impl ChatComposer {
     /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
     ///   trailing space so the user can keep typing naturally.
     /// - Otherwise, inserts the pasted text directly into the textarea.
-    ///
-    /// Composer edits clear paste-burst Enter suppression and sync popups.
-    pub(super) fn apply_paste(&mut self, pasted: String) -> bool {
-        self.apply_paste_with_shell_prefix(pasted, ShellPrefixHandling::Interpret)
-    }
-
     pub(super) fn apply_paste_with_shell_prefix(
         &mut self,
         pasted: String,
@@ -297,12 +288,10 @@ impl ChatComposer {
         let is_blockquote = self.config.blockquote_paste_enabled
             && !self.is_bang_shell_command()
             && current_line.starts_with("> ")
-            && pasted.contains('\n');
+            && pasted.contains('\n')
+            && pasted.contains(|ch: char| !matches!(ch, '\n' | '\t'));
         let pasted = if is_blockquote {
-            let pasted = pasted
-                .strip_suffix('\n')
-                .filter(|pasted| !pasted.is_empty())
-                .unwrap_or(pasted.as_ref());
+            let pasted = pasted.strip_suffix('\n').unwrap_or(pasted.as_ref());
             std::borrow::Cow::Owned(pasted.replace('\n', "\n> "))
         } else {
             pasted
@@ -347,7 +336,6 @@ impl ChatComposer {
             let textarea = &mut self.draft.textarea;
             textarea.insert_str_at(textarea.cursor(), "\n\n");
         }
-        self.draft.paste_burst.clear_after_explicit_paste();
         self.reconcile_deleted_elements(elements_before);
         self.sync_popups();
         if started_edit {
@@ -377,12 +365,19 @@ impl ChatComposer {
             return true;
         }
 
-        // Short non-ASCII prefixes are inserted directly, without a held first character.
-        if self
-            .draft
-            .paste_burst
-            .direct_insert_newline_should_insert(now)
-        {
+        // A trailing pasted newline starts a new buffer so indentation stays with it.
+        // Tab on its own resumes its shortcut after a flush unless a handoff owns the draft.
+        let continues_paste =
+            if self.popups.restricted_input_mode == Some(RestrictedInputMode::DraftHandoff) {
+                self.draft
+                    .paste_burst
+                    .direct_insert_newline_should_insert(now)
+            } else if separator == '\n' {
+                self.has_paste_window(now)
+            } else {
+                self.draft.paste_burst.recent_plain_char_count(now) > 0
+            };
+        if continues_paste {
             self.draft
                 .paste_burst
                 .begin_with_retro_grabbed(String::new(), now);
