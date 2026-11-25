@@ -61,7 +61,7 @@ pub(super) async fn load(
     let use_alt_screen = crate::determine_alt_screen_mode(
         cli.no_alt_screen,
         settings.alternate_screen,
-        /*terminal_app_over_ssh*/ false,
+        /*prefer_inline_screen*/ false,
     );
     let transcript_mode = crate::transcript_mode::TranscriptMode::resolve(
         settings.fullscreen_transcript,

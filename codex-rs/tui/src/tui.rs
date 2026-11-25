@@ -25,8 +25,6 @@ use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
-#[cfg(not(unix))]
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
@@ -51,10 +49,9 @@ use crate::insert_history::HistoryLineWrapPolicy;
 use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::terminal_capabilities;
 use crate::terminal_capabilities::ScrollbackStrategy;
 use crate::terminal_capabilities::keyboard_modes;
-use crate::terminal_capabilities::scrollback_strategy;
-use crate::terminal_capabilities::tmux;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::tui::alternate_screen::ALTERNATE_SCREEN;
@@ -112,8 +109,8 @@ pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
-    pub(crate) terminal_app_over_ssh: bool,
-    pub(crate) herdr_kitty_graphics: Option<bool>,
+    pub(crate) prefer_inline_screen: bool,
+    pub(crate) probed_kitty_graphics: Option<bool>,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
@@ -124,9 +121,9 @@ pub(crate) fn reports_key_releases() -> bool {
     keyboard_modes::reports_key_releases()
 }
 
-pub(crate) fn tmux_mouse_disabled() -> bool {
+pub(crate) fn mouse_capture_disabled() -> bool {
     ALTERNATE_SCREEN.is_active()
-        && ALTERNATE_SCREEN.tmux_mouse() == tmux::MouseCapture::DisabledByTmux
+        && ALTERNATE_SCREEN.mouse_policy() == terminal_capabilities::MouseCapture::Disabled
 }
 
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
@@ -257,7 +254,7 @@ mod tests {
     }
 }
 
-fn set_modes() -> Result<tmux::Options> {
+fn set_modes() -> Result<terminal_capabilities::SessionCapabilities> {
     ensure_virtual_terminal_processing()?;
 
     execute!(stdout(), EnableBracketedPaste)?;
@@ -515,7 +512,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     }
     custom_terminal::STDOUT_CURSOR_STYLED.store(false, Ordering::Relaxed);
     let mut restore_guard = TerminalInitializationGuard { active: true };
-    let tmux_options = set_modes()?;
+    let session = set_modes()?;
 
     set_panic_hook();
 
@@ -523,10 +520,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let backend = CrosstermBackend::new(stdout());
 
     #[cfg(unix)]
-    let probe_herdr = {
-        let info = codex_terminal_detection::terminal_info();
-        info.multiplexer.is_none() && info.term_program.as_deref() == Some("herdr")
-    };
+    let probe_kitty_graphics = terminal_capabilities::should_probe_kitty_graphics();
 
     #[cfg(unix)]
     let startup_probe = {
@@ -541,7 +535,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         match crate::terminal_probe::startup(
             crate::terminal_probe::DEFAULT_TIMEOUT,
             keyboard_probe,
-            probe_herdr,
+            probe_kitty_graphics,
         ) {
             Ok(probe) => {
                 tracing::info!(
@@ -595,8 +589,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let cursor_pos = cursor_position_with_crossterm(&mut backend);
 
     #[cfg(not(unix))]
-    let enhanced_keys_supported =
-        !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
+    let enhanced_keys_supported = keyboard_modes::detect_keyboard_enhancement_supported();
 
     #[cfg(windows)]
     // OSC replies can arrive after their deadline. Do not issue terminal queries before directory
@@ -604,28 +597,21 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
     let mut tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
-    if std::env::var_os("TMUX").is_some()
-        && !["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_VERSION"]
-            .iter()
-            .any(|key| std::env::var_os(key).is_some())
-        && !crossterm::style::Colored::ansi_color_disabled_memoized()
-    {
-        tui.tmux_kitty_image_base = tmux_options.kitty_image_base;
-    }
+    tui.tmux_kitty_image_base = session.virtual_image_base();
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     let initialized_terminal = InitializedTerminal {
         terminal: tui,
         enhanced_keys_supported,
         #[cfg(unix)]
-        terminal_app_over_ssh: startup_probe
-            .terminal_app_over_ssh
+        prefer_inline_screen: startup_probe
+            .prefer_inline_screen
             .unwrap_or(/*default*/ false),
         #[cfg(not(unix))]
-        terminal_app_over_ssh: false,
+        prefer_inline_screen: false,
         #[cfg(unix)]
-        herdr_kitty_graphics: probe_herdr.then_some(startup_probe.kitty_graphics),
+        probed_kitty_graphics: probe_kitty_graphics.then_some(startup_probe.kitty_graphics),
         #[cfg(not(unix))]
-        herdr_kitty_graphics: None,
+        probed_kitty_graphics: None,
         stderr_guard,
     };
     restore_guard.active = false;
@@ -638,13 +624,6 @@ fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Pos
         tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
         Position { x: 0, y: 0 }
     })
-}
-
-#[cfg(not(unix))]
-fn detect_keyboard_enhancement_supported() -> bool {
-    // Non-Unix startup keeps the existing crossterm keyboard probe path because it already knows
-    // how to interpret platform-specific event sources.
-    supports_keyboard_enhancement().unwrap_or(/*default*/ false)
 }
 
 #[cfg(windows)]
@@ -762,8 +741,8 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     // Cache the startup result so later configuration loads use the same terminal policy.
-    pub(crate) terminal_app_over_ssh: bool,
-    pub(crate) herdr_kitty_graphics: Option<bool>,
+    pub(crate) prefer_inline_screen: bool,
+    pub(crate) probed_kitty_graphics: Option<bool>,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     scrollback: ScrollbackStrategy,
@@ -810,13 +789,12 @@ impl Tui {
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
         // Cache this to avoid contention with the event reader.
-        crate::terminal_capabilities::stdout_color_level();
+        terminal_capabilities::stdout_color_level();
         let _ = crate::terminal_palette::default_colors();
-        let terminal_info = codex_terminal_detection::terminal_info();
-        let scrollback = scrollback_strategy(&terminal_info);
+        let (scrollback, poll_session) = terminal_capabilities::screen_capabilities();
         let mut event_broker = EventBroker::new();
         event_broker.size_monitor = size_monitor::SizeMonitor::start(
-            &terminal_info,
+            poll_session,
             terminal.last_known_screen_size,
             draw_tx.clone(),
         );
@@ -842,8 +820,8 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
-            terminal_app_over_ssh: false,
-            herdr_kitty_graphics: None,
+            prefer_inline_screen: false,
+            probed_kitty_graphics: None,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             scrollback,
@@ -942,8 +920,8 @@ impl Tui {
     }
 
     // Nested screens such as /resume retain the capture request across draws.
-    // Apply a new tmux policy even if the screen never changes its request.
-    fn refresh_tmux_mouse(&mut self) -> Result<()> {
+    // Apply a new mouse policy even if the screen never changes its request.
+    fn refresh_mouse_policy(&mut self) -> Result<()> {
         if ALTERNATE_SCREEN.is_active()
             && let Some(mouse) = self
                 .event_broker
@@ -953,11 +931,12 @@ impl Tui {
         {
             // Selection ticks can run before this draw applies the policy. Give
             // even a stationary drag a chance to end without a button release.
-            if mouse == tmux::MouseCapture::DisabledByTmux && mouse != ALTERNATE_SCREEN.tmux_mouse()
+            if mouse == terminal_capabilities::MouseCapture::Disabled
+                && mouse != ALTERNATE_SCREEN.mouse_policy()
             {
                 self.frame_requester.schedule_frame();
             }
-            ALTERNATE_SCREEN.set_tmux_mouse(mouse);
+            ALTERNATE_SCREEN.set_mouse_policy(mouse);
             self.set_mouse_capture(self.mouse_capture)?;
         }
         Ok(())
@@ -1558,7 +1537,7 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
-        self.refresh_tmux_mouse()?;
+        self.refresh_mouse_policy()?;
         let screen_size = self.take_event_screen_size()?;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
@@ -1714,7 +1693,7 @@ impl Tui {
         hud: Option<crate::bottom_pane::ShortcutHud>,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
-        self.refresh_tmux_mouse()?;
+        self.refresh_mouse_policy()?;
         // This draw uses the caller's resolved geometry directly, so its reservation is consumed.
         self.screen_size.pending_draw_size = None;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it

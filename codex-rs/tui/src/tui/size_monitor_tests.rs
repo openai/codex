@@ -1,4 +1,6 @@
 use super::*;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::task::Context;
@@ -47,7 +49,10 @@ impl EventSource for KeySource {
 struct Harness {
     broker: Arc<EventBroker<KeySource>>,
     queries: tokio::sync::mpsc::UnboundedReceiver<()>,
-    replies: std::sync::mpsc::Sender<(io::Result<Size>, Option<tmux::MouseCapture>)>,
+    replies: std::sync::mpsc::Sender<(
+        io::Result<Size>,
+        Option<terminal_capabilities::MouseCapture>,
+    )>,
     draws: broadcast::Receiver<()>,
 }
 
@@ -199,8 +204,8 @@ async fn unchanged_invalid_and_failed_samples_do_not_redraw() {
 async fn mouse_change_wakes_idle_screen_and_ignores_stale_or_failed_probes() {
     let size = Size::new(/*width*/ 80, /*height*/ 24);
     let mut harness = Harness::new(size);
-    let off = Some(tmux::MouseCapture::DisabledByTmux);
-    let on = Some(tmux::MouseCapture::Enabled);
+    let off = Some(terminal_capabilities::MouseCapture::Disabled);
+    let on = Some(terminal_capabilities::MouseCapture::Enabled);
     harness.next_query().await;
     for (sample, expected, redraw) in [
         (off, off, true),
@@ -281,12 +286,31 @@ fn monitor_requires_tmux_detection() {
         multiplexer: None,
     };
     let size = Size::new(/*width*/ 80, /*height*/ 24);
-    assert!(SizeMonitor::start(&info, size, draw_tx.clone()).is_none());
+    assert!(
+        SizeMonitor::start(
+            terminal_capabilities::needs_session_polling(&info),
+            size,
+            draw_tx.clone()
+        )
+        .is_none()
+    );
     info.multiplexer = Some(Multiplexer::Zellij { version: None });
-    assert!(SizeMonitor::start(&info, size, draw_tx.clone()).is_none());
+    assert!(
+        SizeMonitor::start(
+            terminal_capabilities::needs_session_polling(&info),
+            size,
+            draw_tx.clone()
+        )
+        .is_none()
+    );
     info.multiplexer = Some(Multiplexer::Tmux { version: None });
     assert_eq!(
-        SizeMonitor::start(&info, size, draw_tx).is_some(),
+        SizeMonitor::start(
+            terminal_capabilities::needs_session_polling(&info),
+            size,
+            draw_tx
+        )
+        .is_some(),
         cfg!(unix)
     );
 }

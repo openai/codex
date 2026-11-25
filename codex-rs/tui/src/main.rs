@@ -6,8 +6,6 @@ use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_config::LoaderOverrides;
-use codex_terminal_detection::StdoutColorLevel;
-use codex_terminal_detection::stdout_color_level;
 use codex_tui::Cli;
 use codex_tui::ExitReason;
 use codex_tui::run_main;
@@ -47,7 +45,7 @@ fn main() -> anyhow::Result<()> {
             ExitReason::UserRequested | ExitReason::TurnInterrupted => false,
         };
 
-        let color_enabled = stdout_color_level() != StdoutColorLevel::Unknown;
+        let color_enabled = codex_tui::stdout_supports_color();
         for line in exit_info.format_exit_messages(color_enabled) {
             println!("{line}");
         }

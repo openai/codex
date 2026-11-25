@@ -266,11 +266,11 @@ fn terminal_app_ssh_fallback_renders_inline_startup() {
     let pump = startup_test_pump(std::iter::empty());
     let owned_layout = super::layout::OwnedStartupLayout::new(&pump);
     let mut frames = Vec::new();
-    for terminal_app_over_ssh in [false, true] {
+    for prefer_inline_screen in [false, true] {
         let owned = crate::determine_alt_screen_mode(
             /*no_alt_screen*/ false,
             codex_config::types::AltScreenMode::Auto,
-            terminal_app_over_ssh,
+            prefer_inline_screen,
         );
         let renderable = if owned {
             crate::render::renderable::RenderableItem::Borrowed(&owned_layout)
@@ -307,7 +307,7 @@ fn terminal_app_ssh_fallback_renders_inline_startup() {
             .collect::<Vec<_>>()
             .join("\n");
         frames.push(format!(
-            "terminal_app_over_ssh={terminal_app_over_ssh}, owned={owned}\n{frame}"
+            "terminal_app_over_ssh={prefer_inline_screen}, owned={owned}\n{frame}"
         ));
     }
     insta::assert_snapshot!(

@@ -13,10 +13,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::alternate_screen::ALTERNATE_SCREEN;
-use super::tmux;
+use crate::terminal_capabilities;
 
-use codex_terminal_detection::Multiplexer;
-use codex_terminal_detection::TerminalInfo;
 use ratatui::layout::Size;
 use tokio::sync::broadcast;
 
@@ -29,7 +27,7 @@ struct State {
     size: Size,
     generation: u64,
     pending: Option<Size>,
-    mouse: Option<tmux::MouseCapture>,
+    mouse: Option<terminal_capabilities::MouseCapture>,
     active: bool,
     stopped: bool,
 }
@@ -41,11 +39,11 @@ pub(super) struct SizeMonitor {
 
 impl SizeMonitor {
     pub(super) fn start(
-        terminal_info: &TerminalInfo,
+        poll_session: bool,
         size: Size,
         draw_tx: broadcast::Sender<()>,
     ) -> Option<Self> {
-        if !cfg!(unix) || !matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. })) {
+        if !poll_session {
             return None;
         }
         let mut last_mouse_check = Instant::now();
@@ -54,7 +52,9 @@ impl SizeMonitor {
                 && last_mouse_check.elapsed() >= MOUSE_CHECK_INTERVAL
             {
                 last_mouse_check = Instant::now();
-                tmux::sample_mouse(previous_mouse.unwrap_or_else(|| ALTERNATE_SCREEN.tmux_mouse()))
+                terminal_capabilities::sample_mouse(
+                    previous_mouse.unwrap_or_else(|| ALTERNATE_SCREEN.mouse_policy()),
+                )
             } else {
                 None
             };
@@ -71,9 +71,11 @@ impl SizeMonitor {
         size: Size,
         draw_tx: broadcast::Sender<()>,
         mut query: impl FnMut(
-            Option<tmux::MouseCapture>,
-        ) -> (io::Result<Size>, Option<tmux::MouseCapture>)
-        + Send
+            Option<terminal_capabilities::MouseCapture>,
+        ) -> (
+            io::Result<Size>,
+            Option<terminal_capabilities::MouseCapture>,
+        ) + Send
         + 'static,
     ) -> io::Result<Self> {
         let state = Arc::new(Mutex::new(State {
@@ -160,7 +162,7 @@ impl SizeMonitor {
         state.mouse = None;
     }
 
-    pub(super) fn mouse(&self) -> Option<tmux::MouseCapture> {
+    pub(super) fn mouse(&self) -> Option<terminal_capabilities::MouseCapture> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

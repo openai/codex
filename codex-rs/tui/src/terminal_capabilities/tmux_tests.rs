@@ -81,8 +81,8 @@ fn completed_probe_does_not_wait_for_descendant_holding_stdout() {
 #[test]
 fn input_probe_targets_the_containing_pane_and_only_disables_confirmed_mouse_off() {
     for (mouse, mouse_capture) in [
-        ("0", MouseCapture::DisabledByTmux),
-        ("off", MouseCapture::DisabledByTmux),
+        ("0", MouseCapture::Disabled),
+        ("off", MouseCapture::Disabled),
         ("1", MouseCapture::Enabled),
         ("on", MouseCapture::Enabled),
         ("", MouseCapture::Enabled),
@@ -122,7 +122,7 @@ fn visible_only_passthrough_disables_kitty_previews() {
 #[test]
 fn keyboard_fallback_preserves_confirmed_mouse_policy_without_guessing_on_failure() {
     for (output, mouse_capture) in [
-        (Some(b"\t0\n".to_vec()), MouseCapture::DisabledByTmux),
+        (Some(b"\t0\n".to_vec()), MouseCapture::Disabled),
         (Some(b"\t\n".to_vec()), MouseCapture::Enabled),
         (Some(vec![0xff]), MouseCapture::Enabled),
         (None, MouseCapture::Enabled),

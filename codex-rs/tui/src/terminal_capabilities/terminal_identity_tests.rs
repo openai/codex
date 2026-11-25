@@ -1,6 +1,6 @@
 //! Cover observed terminal signatures, fragmented replies, and pasted lookalikes.
 
-use super::is_apple_terminal;
+use super::requires_inline_screen;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -24,7 +24,7 @@ fn distinguishes_the_native_terminal_replies() {
             format!("{secondary}{primary}"),
         ] {
             assert_eq!(
-                is_apple_terminal(input.as_bytes()),
+                requires_inline_screen(input.as_bytes()),
                 Some(expected),
                 "{input:?}"
             );
@@ -37,9 +37,9 @@ fn unrelated_csi_replies_cannot_consume_typed_text_as_device_attributes() {
     for reply in [b"\x1b[?7u".as_slice(), b"\x1b[>4;2m".as_slice()] {
         let mut input = reply.to_vec();
         input.extend_from_slice(b"c\x1b[>1;95;0c");
-        assert_eq!(is_apple_terminal(&input), None);
+        assert_eq!(requires_inline_screen(&input), None);
         input.extend_from_slice(b"\x1b[?1;2c");
-        assert_eq!(is_apple_terminal(&input), Some(true));
+        assert_eq!(requires_inline_screen(&input), Some(true));
     }
 }
 
@@ -47,13 +47,13 @@ fn unrelated_csi_replies_cannot_consume_typed_text_as_device_attributes() {
 fn identity_waits_for_complete_replies_and_ignores_pasted_signatures() {
     let signature = b"\x1b[?1;2c\x1b[>1;95;0c";
     for end in 0..signature.len() {
-        assert_eq!(is_apple_terminal(&signature[..end]), None);
+        assert_eq!(requires_inline_screen(&signature[..end]), None);
     }
     let mut input = b"typed\x1b[200~".to_vec();
     input.extend_from_slice(signature);
-    assert_eq!(is_apple_terminal(&input), None);
+    assert_eq!(requires_inline_screen(&input), None);
     input.extend_from_slice(b"\x1b[201~more typed");
-    assert_eq!(is_apple_terminal(&input), None);
+    assert_eq!(requires_inline_screen(&input), None);
     input.extend_from_slice(signature);
-    assert_eq!(is_apple_terminal(&input), Some(true));
+    assert_eq!(requires_inline_screen(&input), Some(true));
 }

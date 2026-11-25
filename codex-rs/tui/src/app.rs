@@ -896,7 +896,7 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw) && tui::tmux_mouse_disabled() {
+        if matches!(event, TuiEvent::Draw) && tui::mouse_capture_disabled() {
             self.sidebar_press = None;
             self.divider_drag = None;
             self.agents_overview.workspace.divider_drag_viewport = None;
@@ -1581,7 +1581,7 @@ impl App {
     }
 
     fn preview_image_protocol(&self, tui: &tui::Tui) -> Option<crate::pets::ImageProtocol> {
-        match tui.herdr_kitty_graphics {
+        match tui.probed_kitty_graphics {
             Some(true) => Some(crate::pets::ImageProtocol::Kitty),
             Some(false) => None,
             None => self.chat_widget.pet_image_support().protocol(),

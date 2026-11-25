@@ -23,13 +23,13 @@ static PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 pub(crate) enum MouseCapture {
     #[default]
     Enabled,
-    DisabledByTmux,
+    Disabled,
 }
 
 impl MouseCapture {
     fn parse(mouse: &str) -> Option<Self> {
         match mouse.trim() {
-            "0" | "off" => Some(Self::DisabledByTmux),
+            "0" | "off" => Some(Self::Disabled),
             "1" | "on" => Some(Self::Enabled),
             _ => None,
         }
@@ -80,7 +80,7 @@ pub(crate) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
     // display-message (and the user's after-display-message hook) on a change.
     let (condition, report) = match previous {
         MouseCapture::Enabled => ("#{==:#{mouse},0}", "display-message -p 0"),
-        MouseCapture::DisabledByTmux => ("#{==:#{mouse},1}", "display-message -p 1"),
+        MouseCapture::Disabled => ("#{==:#{mouse},1}", "display-message -p 1"),
     };
     command.args(["if-shell", "-F", "-t", &target, condition, report]);
     // Keep the periodic check short so a busy server cannot starve resize recovery.
@@ -90,13 +90,13 @@ pub(crate) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Options {
-    pub(crate) extended_keys_format: Option<String>,
-    pub(crate) mouse_capture: MouseCapture,
-    pub(crate) kitty_image_base: Option<u32>,
+pub(super) struct Options {
+    pub(super) extended_keys_format: Option<String>,
+    pub(super) mouse_capture: MouseCapture,
+    pub(super) kitty_image_base: Option<u32>,
 }
 
-pub(crate) fn options() -> Options {
+pub(super) fn options() -> Options {
     let pane = target();
     if std::env::var_os("TMUX").is_none() && pane.is_none() {
         return Options::default();

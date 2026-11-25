@@ -42,7 +42,6 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use supports_color::Stream;
 
 #[cfg(all(
     target_os = "linux",
@@ -110,7 +109,6 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
-use codex_terminal_detection::TerminalName;
 
 /// Codex CLI
 ///
@@ -784,7 +782,7 @@ fn handle_app_exit(
             eprintln!("{warning}");
         }
     } else {
-        let color_enabled = supports_color::on(Stream::Stdout).is_some();
+        let color_enabled = codex_tui::stdout_supports_color();
         for line in exit_info.format_exit_messages(color_enabled) {
             println!("{line}");
         }
@@ -2554,21 +2552,18 @@ async fn run_interactive_tui(
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
-    let terminal_info = codex_terminal_detection::terminal_info();
-    if terminal_info.name == TerminalName::Dumb {
+    if let Some(reason) = codex_tui::interactive_terminal_warning() {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-            return Ok(AppExitInfo::fatal(
-                "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
-            ));
+            return Ok(AppExitInfo::fatal(format!(
+                "{reason}. Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM."
+            )));
         }
 
-        eprintln!(
-            "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
-        );
+        eprintln!("WARNING: {reason}. Codex's interactive TUI may not work in this terminal.");
         if !confirm("Continue anyway? [y/N]: ")? {
-            return Ok(AppExitInfo::fatal(
-                "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
-            ));
+            return Ok(AppExitInfo::fatal(format!(
+                "Refusing to start the interactive TUI because {reason}. Run in a supported terminal or unset TERM."
+            )));
         }
     }
 

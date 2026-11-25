@@ -24,7 +24,7 @@ use super::DisableAlternateScroll;
 use super::EnableAlternateScroll;
 use super::KeyboardRestore;
 use super::keyboard_modes;
-use super::tmux;
+use crate::terminal_capabilities;
 
 // Panic and exit cleanup cannot borrow Tui. Track the actual screen independently of its owner.
 pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
@@ -84,8 +84,11 @@ impl AlternateScreen {
         if self.mouse_active.load(Ordering::Relaxed) {
             self.link_pointer.update(writer, shape)
         } else {
-            self.link_pointer
-                .restore(writer, codex_terminal_detection::terminal_info().name)
+            self.link_pointer.restore(
+                writer,
+                terminal_capabilities::PointerReset::detect()
+                    .unwrap_or(terminal_capabilities::PointerReset::Text),
+            )
         }
     }
 
@@ -105,22 +108,22 @@ impl AlternateScreen {
             !cfg!(windows) && !keyboard_modes::keyboard_enhancement_disabled(),
             Ordering::Relaxed,
         );
-        self.set_tmux_mouse(mouse_capture);
+        self.set_mouse_policy(mouse_capture);
         self.configure_input(writer, capture_mouse)
     }
 
-    pub(super) fn tmux_mouse(&self) -> tmux::MouseCapture {
+    pub(super) fn mouse_policy(&self) -> terminal_capabilities::MouseCapture {
         if self.mouse_capture_disabled.load(Ordering::Relaxed) {
-            tmux::MouseCapture::DisabledByTmux
+            terminal_capabilities::MouseCapture::Disabled
         } else {
-            tmux::MouseCapture::Enabled
+            terminal_capabilities::MouseCapture::Enabled
         }
     }
 
-    pub(super) fn set_tmux_mouse(&self, mouse: tmux::MouseCapture) {
-        if self.tmux_mouse() != mouse {
+    pub(super) fn set_mouse_policy(&self, mouse: terminal_capabilities::MouseCapture) {
+        if self.mouse_policy() != mouse {
             self.mouse_capture_disabled.store(
-                mouse == tmux::MouseCapture::DisabledByTmux,
+                mouse == terminal_capabilities::MouseCapture::Disabled,
                 Ordering::Relaxed,
             );
             self.input_configured
@@ -157,9 +160,11 @@ impl AlternateScreen {
     }
 
     fn disable_mouse(&self, writer: &mut impl Write) -> Result<()> {
-        let pointer_result = self
-            .link_pointer
-            .restore(writer, codex_terminal_detection::terminal_info().name);
+        let pointer_result = self.link_pointer.restore(
+            writer,
+            terminal_capabilities::PointerReset::detect()
+                .unwrap_or(terminal_capabilities::PointerReset::Text),
+        );
         if self.mouse_active.load(Ordering::Relaxed) {
             let result = execute!(writer, DisableMouseCapture);
             #[cfg(windows)]

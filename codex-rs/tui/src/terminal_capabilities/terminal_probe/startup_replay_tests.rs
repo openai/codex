@@ -5,7 +5,7 @@ use super::parse_startup_input;
 use pretty_assertions::assert_eq;
 
 fn startup_replay_input(input: &[u8]) -> Vec<u8> {
-    parse_startup_input(input, /*probe_herdr*/ false).0
+    parse_startup_input(input, /*probe_kitty_graphics*/ false).0
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn herdr_graphics_reply_selects_previews_without_replaying_the_response_as_keys(
     ] {
         let input = [paste.as_slice(), reply, b"typed"].concat();
         assert_eq!(
-            parse_startup_input(&input, /*probe_herdr*/ true),
+            parse_startup_input(&input, /*probe_kitty_graphics*/ true),
             ([paste.as_slice(), b"typed"].concat(), expected)
         );
     }

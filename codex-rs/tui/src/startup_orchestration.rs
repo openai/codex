@@ -349,7 +349,7 @@ pub(super) async fn run_main_inner(
     screen.use_alt_screen = determine_alt_screen_mode(
         cli.no_alt_screen,
         local_settings.tui.alternate_screen,
-        initialized_terminal.terminal_app_over_ssh,
+        initialized_terminal.prefer_inline_screen,
     );
     screen.transcript_mode = crate::transcript_mode::TranscriptMode::resolve(
         screen.transcript_mode.is_owned(),

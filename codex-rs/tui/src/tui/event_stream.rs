@@ -347,7 +347,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 Some(TuiEvent::FocusLost)
             }
             // A report queued before capture stopped can precede the cleanup draw.
-            Event::Mouse(_) if super::tmux_mouse_disabled() => None,
+            Event::Mouse(_) if super::mouse_capture_disabled() => None,
             Event::Mouse(mouse) => Some(TuiEvent::Mouse(mouse)),
         }
     }

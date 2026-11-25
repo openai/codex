@@ -31,13 +31,21 @@ pub(crate) enum VscodeDetection {
 
 pub(crate) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
-    let is_wsl = running_in_wsl();
+    let is_wsl = crate::clipboard_copy::is_wsl_session();
     let vscode_detection = if is_wsl {
         detect_vscode_terminal()
     } else {
         VscodeDetection::Other
     };
     keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, vscode_detection)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn detect_keyboard_enhancement_supported() -> bool {
+    // Non-Unix startup keeps the existing crossterm keyboard probe path because it already knows
+    // how to interpret platform-specific event sources.
+    !keyboard_enhancement_disabled()
+        && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(/*default*/ false)
 }
 
 fn keyboard_enhancement_disabled_for(
@@ -71,19 +79,7 @@ fn parse_bool_env(value: Option<&str>) -> Option<bool> {
     }
 }
 
-fn running_in_wsl() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        crate::clipboard_paste::is_probably_wsl()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
-}
-
-pub(crate) fn running_in_vscode_terminal() -> bool {
+pub(super) fn running_in_vscode_terminal() -> bool {
     detect_vscode_terminal() == VscodeDetection::VsCode
 }
 
@@ -111,7 +107,7 @@ fn windows_vscode_detection() -> VscodeDetection {
 
 #[cfg(target_os = "linux")]
 fn read_windows_vscode_detection() -> VscodeDetection {
-    if !running_in_wsl() {
+    if !crate::clipboard_copy::is_wsl_session() {
         return VscodeDetection::Other;
     }
     read_windows_vscode_detection_with_timeout(
@@ -193,11 +189,15 @@ fn read_windows_vscode_detection_with_timeout(
 mod windows_term_program_tests;
 
 /// Restore keyboard reporting and return the settings from the same tmux probe.
-pub(crate) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::Options {
+pub(crate) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::SessionCapabilities {
     let tmux_options = super::tmux::options();
+    let capabilities = super::SessionCapabilities {
+        mouse_capture: tmux_options.mouse_capture,
+        virtual_image_base: tmux_options.kitty_image_base,
+    };
     if keyboard_enhancement_disabled() {
         set_reports_key_releases(/*reports*/ false);
-        return tmux_options;
+        return capabilities;
     }
 
     let running_in_tmux_session = running_in_tmux_session();
@@ -225,7 +225,7 @@ pub(crate) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmu
     {
         let _ = execute!(writer, EnableModifyOtherKeys);
     }
-    tmux_options
+    capabilities
 }
 
 fn keyboard_enhancement_flags(

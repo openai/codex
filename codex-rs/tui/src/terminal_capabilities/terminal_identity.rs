@@ -1,7 +1,7 @@
 //! Recognize Terminal.app's device attributes without interpreting pasted text as a reply.
 
 /// A complete pair is required; missing or incomplete replies remain unknown.
-pub(super) fn is_apple_terminal(input: &[u8]) -> Option<bool> {
+pub(crate) fn requires_inline_screen(input: &[u8]) -> Option<bool> {
     let primary = device_attributes(input, b"[?")?;
     let secondary = device_attributes(input, b"[>")?;
     Some(primary == b"1;2" && secondary == b"1;95;0")
