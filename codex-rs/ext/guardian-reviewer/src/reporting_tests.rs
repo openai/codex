@@ -59,6 +59,7 @@ fn review_report_bounds_turn_origin_on_both_verdicts(
     let report = ReviewReport::new(ReviewMetadata {
         thread_id: "thread".into(),
         turn_id: "turn".into(),
+        root_turn_id: None,
         turn_trigger: turn_trigger.map(str::to_owned),
         review_id: "review".into(),
         target_item_id: None,
@@ -168,6 +169,7 @@ fn review_completion_uses_one_monotonic_duration(
     let mut report = ReviewReport::new(ReviewMetadata {
         thread_id: "thread".to_string(),
         turn_id: "turn".to_string(),
+        root_turn_id: None,
         turn_trigger: None,
         review_id: "review".to_string(),
         target_item_id: None,

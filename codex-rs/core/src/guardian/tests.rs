@@ -791,6 +791,7 @@ async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_enviro
         Arc::clone(&turn),
         &turn.initial_settings,
         &captured,
+        /*reviewed_action_root_turn_id*/ None,
     );
     let collected = collect_guardian_prompt_items_with_parent_turn(
         &session,

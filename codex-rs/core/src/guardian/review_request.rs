@@ -177,6 +177,12 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         } = options;
         let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
         let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
+        // An explicit action turn outside this context has unknown lineage.
+        let root_turn_id = if assessment_turn_id == turn.sub_id {
+            context.reviewed_action_root_turn_id.clone()
+        } else {
+            None
+        };
         let plugin_attribution = match plugin_attribution_override {
             Some(attribution) => Some(attribution),
             None if matches!(&request, GuardianApprovalRequest::ExecCommand { .. }) => {
@@ -210,6 +216,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let metadata = codex_guardian_reviewer::ReviewMetadata {
             thread_id: session.thread_id.to_string(),
             turn_id: assessment_turn_id,
+            root_turn_id,
             turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
             review_id: review_id.to_owned(),
             target_item_id,

@@ -289,6 +289,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
+    root_turn_id: Option<String>,
     trigger: GuardianNetworkAccessTrigger,
     tool_name: ToolName,
     command: String,
@@ -307,6 +308,8 @@ enum ActiveNetworkApprovalAttribution {
 struct NetworkRequestAttribution {
     owner_call: Option<Arc<ActiveNetworkApprovalCall>>,
     environment_id: Option<String>,
+    /// Only a verified execution tag establishes the action's root.
+    reviewed_action_root_turn_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -600,6 +603,7 @@ impl NetworkApprovalService {
                 .clone()
                 .unwrap_or_else(|| call.environment_id.clone());
             return (call.environment_id == environment_id).then_some(NetworkRequestAttribution {
+                reviewed_action_root_turn_id: call.root_turn_id.clone(),
                 owner_call: Some(call),
                 environment_id: Some(environment_id),
             });
@@ -616,6 +620,7 @@ impl NetworkApprovalService {
             return Some(NetworkRequestAttribution {
                 owner_call,
                 environment_id: Some(environment_id),
+                reviewed_action_root_turn_id: None,
             });
         }
 
@@ -623,12 +628,14 @@ impl NetworkApprovalService {
             ActiveNetworkApprovalAttribution::None => Some(NetworkRequestAttribution {
                 owner_call: None,
                 environment_id: None,
+                reviewed_action_root_turn_id: None,
             }),
             ActiveNetworkApprovalAttribution::Single(call) => {
                 let environment_id = call.environment_id.clone();
                 Some(NetworkRequestAttribution {
                     owner_call: Some(call),
                     environment_id: Some(environment_id),
+                    reviewed_action_root_turn_id: None,
                 })
             }
             ActiveNetworkApprovalAttribution::Ambiguous => None,
@@ -762,6 +769,7 @@ impl NetworkApprovalService {
         let Some(NetworkRequestAttribution {
             owner_call,
             environment_id: active_environment_id,
+            reviewed_action_root_turn_id,
         }) = self.resolve_request_attribution(&request).await
         else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
@@ -847,6 +855,7 @@ impl NetworkApprovalService {
             Arc::clone(&turn_context),
             &settings,
             review_environments,
+            reviewed_action_root_turn_id,
         );
         if !allows_network_approval_flow(review_context.approval_policy) {
             if let Some(owner_call) = owner_call.as_ref() {
@@ -1277,6 +1286,7 @@ pub(crate) async fn begin_network_approval(
         .register_call(ActiveNetworkApprovalCall {
             registration_id: registration_id.clone(),
             turn_id: turn.sub_id.clone(),
+            root_turn_id: turn.turn_metadata_state.root_turn_id(),
             trigger,
             tool_name,
             command,

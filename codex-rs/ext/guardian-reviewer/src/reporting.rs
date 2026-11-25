@@ -34,6 +34,7 @@ use crate::ReviewCompletion;
 pub struct ReviewMetadata {
     pub thread_id: String,
     pub turn_id: String,
+    pub root_turn_id: Option<String>,
     /// Origin of the issuing turn, inherited by delegated turns at admission.
     pub turn_trigger: Option<String>,
     pub review_id: String,
@@ -79,6 +80,7 @@ impl ReviewReport {
         let tracking = GuardianReviewTrackContext::new(
             metadata.thread_id,
             metadata.turn_id.clone(),
+            metadata.root_turn_id,
             metadata.review_id.clone(),
             metadata.target_item_id.clone(),
             metadata.approval_request_source,

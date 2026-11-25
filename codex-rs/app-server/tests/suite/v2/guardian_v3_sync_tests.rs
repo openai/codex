@@ -291,6 +291,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
     let mut previous_review_id = None;
     let mut denied_turns = Vec::new();
     let mut seen_requests = 0;
+    let root_turn_id = "reviewed-root-turn";
     for (call_id, prompt, status) in turns {
         // Keep the revocation out of the board until the pending action requests its review.
         let gate = if prompt == REVOCATION {
@@ -319,6 +320,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
         let id = app
             .send_turn_start_request(TurnStartParams {
                 thread_id: thread.id.clone(),
+                root_turn_id: Some(root_turn_id.to_owned()),
                 input: vec![UserInput::Text {
                     text: prompt.to_owned(),
                     text_elements: Vec::new(),
@@ -484,6 +486,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
             })
             .await?;
             let params = &review_event["event_params"];
+            assert_eq!(params["root_turn_id"], root_turn_id);
             assert_eq!(params["guardian_model"], body["model"]);
             assert_eq!(params["guardian_model_provider_id"], "openai-custom");
             assert_eq!(

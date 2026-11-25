@@ -1150,6 +1150,7 @@ async fn review_guardian_mcp_elicitation(
                 Arc::clone(&turn_context),
                 &step_settings,
                 &turn_context.initial_environments,
+                /*reviewed_action_root_turn_id*/ None,
             )
         });
     let review_config = &review_context.turn().config;

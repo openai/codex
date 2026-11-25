@@ -800,6 +800,7 @@ async fn register_call_with_default_shell_trigger(
     let registration = service.register_call(ActiveNetworkApprovalCall {
         registration_id: registration_id.to_string(),
         turn_id: "turn-1".to_string(),
+        root_turn_id: None,
         tool_name: ToolName::plain("exec_command"),
         trigger: GuardianNetworkAccessTrigger {
             call_id: registration_id.to_string(),
@@ -838,6 +839,7 @@ async fn active_call_preserves_triggering_command_context() {
     let _registration = service.register_call(ActiveNetworkApprovalCall {
         registration_id: "registration-1".to_string(),
         turn_id: "turn-1".to_string(),
+        root_turn_id: Some("issuing-root".to_string()),
         trigger: expected.clone(),
         tool_name: tool_name.clone(),
         command: "curl https://example.com".to_string(),
@@ -847,15 +849,48 @@ async fn active_call_preserves_triggering_command_context() {
         cancellation_token: CancellationToken::new(),
     });
 
-    let call = service
-        .resolve_single_active_call()
+    let request = NetworkPolicyRequest {
+        protocol: NetworkProtocol::Http,
+        host: "example.com".to_string(),
+        port: 80,
+        execution_id: Some("registration-1".to_string()),
+        environment_id: Some("remote".to_string()),
+        client_addr: None,
+        method: None,
+        command: None,
+        exec_policy_hint: None,
+        disconnect: None,
+        cancellation: None,
+    };
+    let attributed = service
+        .resolve_request_attribution(&request)
         .await
-        .expect("single active call should resolve");
+        .expect("tagged request should resolve");
+    assert_eq!(
+        attributed.reviewed_action_root_turn_id.as_deref(),
+        Some("issuing-root")
+    );
+    let call = attributed.owner_call.expect("registered execution");
 
     assert_eq!(&call.trigger, &expected);
     assert_eq!(call.tool_name, tool_name);
     assert_eq!(call.command, "curl https://example.com");
     assert_eq!(call.environment_id, "remote");
+
+    let untagged = service
+        .resolve_request_attribution(&NetworkPolicyRequest {
+            execution_id: None,
+            ..request
+        })
+        .await
+        .expect("untagged request can use current settings");
+    assert_eq!(
+        (
+            untagged.owner_call.is_some(),
+            untagged.reviewed_action_root_turn_id
+        ),
+        (true, None)
+    );
 }
 
 #[tokio::test]

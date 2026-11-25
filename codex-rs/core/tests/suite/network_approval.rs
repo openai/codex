@@ -1,5 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AppServerRpcTransport;
+use codex_app_server_protocol as app;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::EnvironmentConfig;
@@ -19,6 +22,7 @@ use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_login::CodexAuth;
 #[cfg(unix)]
 use codex_network_proxy::CredentialProviderConfig;
 #[cfg(unix)]
@@ -66,6 +70,7 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::PathBufExt;
@@ -80,6 +85,7 @@ use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::received_analytics_events;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
@@ -111,6 +117,10 @@ use tempfile::TempDir;
 use test_case::test_case;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const NETWORK_TEST_HOST: &str = "codex-network-test.invalid";
 const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
@@ -847,16 +857,55 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(/*status*/ 200))
+        .mount(&server)
+        .await;
+    let analytics = AnalyticsEventsClient::new(
+        codex_core::test_support::auth_manager_from_auth(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ),
+        server.uri(),
+        /*analytics_enabled*/ Some(true),
+    );
     let test = managed_network_unified_exec_builder(&[
         Feature::RequestPermissionsTool,
         Feature::StepModelSwitching,
     ])?
+    .with_analytics_events_client(analytics.clone())
     .with_model("guardian-parent-a")
     .with_config(|config| {
         config.model_catalog = Some(guardian_parent_catalog());
     })
     .build_with_remote_and_local_env(&server)
     .await?;
+    let session = &test.session_configured;
+    analytics.track_initialize(
+        /*connection_id*/ 1,
+        app::InitializeParams::default(),
+        "test-client".to_string(),
+        AppServerRpcTransport::Stdio,
+    );
+    let sandbox = test.codex.config_snapshot().await.sandbox_policy();
+    let thread_response = serde_json::from_value(json!({
+        "thread": {
+            "id": session.thread_id, "sessionId": session.session_id, "preview": "",
+            "ephemeral": false, "modelProvider": session.model_provider_id,
+            "createdAt": 1, "updatedAt": 1, "status": {"type": "idle"},
+            "cwd": session.cwd, "cliVersion": "0.0.0", "source": "exec", "turns": [],
+        },
+        "model": session.model, "modelProvider": session.model_provider_id, "cwd": session.cwd,
+        "approvalPolicy": app::AskForApproval::from(session.approval_policy),
+        "approvalsReviewer": app::ApprovalsReviewer::from(session.approvals_reviewer),
+        "sandbox": app::SandboxPolicy::from(sandbox),
+    }))?;
+    analytics.track_response(
+        /*connection_id*/ 1,
+        app::RequestId::Integer(1),
+        &app::ClientResponsePayload::ThreadStart(thread_response),
+    );
+
     let start_call_id = "cross-turn-network-start";
     let permission_call_id = "cross-turn-network-permissions";
     let stdin_call_id = "cross-turn-network-stdin";
@@ -955,14 +1004,22 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
     }
     let responses = mount_sse_sequence(&server, events).await;
 
-    submit_managed_network_turn(
-        &test,
-        "start a background terminal that waits before requesting network access",
-        vec![local(test.config.cwd.clone())],
-        ApprovalsReviewer::User,
-        AskForApproval::OnRequest,
-    )
-    .await?;
+    let issuing_root_turn_id = "issuing-root";
+    test.codex
+        .start_or_steer_turn(
+            managed_network_turn_input(
+                &test,
+                "start a background terminal that waits before requesting network access",
+                vec![local(test.config.cwd.clone())],
+                ApprovalsReviewer::User,
+                AskForApproval::OnRequest,
+            )
+            .on_start(TurnStartOptions {
+                root_turn_id: Some(issuing_root_turn_id.to_string()),
+                ..Default::default()
+            }),
+        )
+        .await?;
     let EventMsg::TurnStarted(first_turn) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnStarted(_))
     })
@@ -998,6 +1055,10 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
                             developer_instructions: None,
                         },
                     }),
+                    ..Default::default()
+                })
+                .on_start(TurnStartOptions {
+                    root_turn_id: Some("servicing-root".to_string()),
                     ..Default::default()
                 }),
             )
@@ -1065,6 +1126,17 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
     };
     assert_eq!(assessment.turn_id, active_turn_id);
     wait_for_turn_complete(&test).await;
+    tokio::time::timeout(Duration::from_secs(10), analytics.flush()).await?;
+    let reviews = received_analytics_events(&server, "codex_guardian_review").await;
+    let review = reviews
+        .iter()
+        .map(|event| &event["event_params"])
+        .find(|params| params["review_id"] == assessment.id)
+        .context("expected analytics for the terminal's network review")?;
+    assert_eq!(
+        (review["turn_id"].as_str(), review["root_turn_id"].as_str()),
+        (Some(active_turn_id.as_str()), Some(issuing_root_turn_id)),
+    );
 
     let actions = guardian_network_actions(&responses)?;
     assert_eq!(actions.len(), 2);
@@ -3572,6 +3644,25 @@ async fn submit_managed_network_turn(
     approvals_reviewer: ApprovalsReviewer,
     approval_policy: AskForApproval,
 ) -> Result<()> {
+    test.codex
+        .start_or_steer_turn(managed_network_turn_input(
+            test,
+            prompt,
+            environments,
+            approvals_reviewer,
+            approval_policy,
+        ))
+        .await?;
+    Ok(())
+}
+
+fn managed_network_turn_input(
+    test: &TestCodex,
+    prompt: &str,
+    environments: Vec<TurnEnvironmentSelection>,
+    approvals_reviewer: ApprovalsReviewer,
+    approval_policy: AskForApproval,
+) -> TurnInputRequest {
     let permission_profile = PermissionProfile::workspace_write_with(
         &[],
         NetworkSandboxPolicy::Enabled,
@@ -3583,32 +3674,26 @@ async fn submit_managed_network_turn(
     let turn_environment_selections =
         TurnEnvironmentSelections::new(test.config.cwd.clone(), environments);
 
-    test.codex
-        .start_or_steer_turn(
-            TurnInputRequest::user_input(vec![UserInput::Text {
-                text: prompt.into(),
-                text_elements: Vec::new(),
-            }])
-            .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(turn_environment_selections.into_requests()),
-                approval_policy: Some(approval_policy),
-                approvals_reviewer: Some(approvals_reviewer),
-                sandbox_policy: Some(sandbox_policy),
-                permission_profile,
-                collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: test.session_configured.model.clone(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            }),
-        )
-        .await?;
-
-    Ok(())
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: prompt.into(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        environments: Some(turn_environment_selections.into_requests()),
+        approval_policy: Some(approval_policy),
+        approvals_reviewer: Some(approvals_reviewer),
+        sandbox_policy: Some(sandbox_policy),
+        permission_profile,
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: test.session_configured.model.clone(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    })
 }
 
 fn decoded_request_body(request: &wiremock::Request) -> Option<Vec<u8>> {
