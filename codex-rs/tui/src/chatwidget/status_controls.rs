@@ -266,7 +266,7 @@ impl ChatWidget {
             self.thread_name.clone(),
             self.forked_from,
             rate_limit_snapshots.as_slice(),
-            self.plan_type,
+            self.quota_plan,
             Local::now(),
             self.status_model_display_name(),
             collaboration_mode,
@@ -306,17 +306,18 @@ impl ChatWidget {
         });
     }
 
+    /// Returns whether terminal history needs to show a corrected account label.
     pub(crate) fn finish_status_rate_limit_refresh(
         &mut self,
         request_id: u64,
         snapshots: Vec<RateLimitSnapshot>,
-    ) {
+    ) -> bool {
         let Some(index) = self
             .refreshing_status_outputs
             .iter()
             .position(|(pending_request_id, _)| *pending_request_id == request_id)
         else {
-            return;
+            return false;
         };
         for snapshot in snapshots {
             self.on_rate_limit_snapshot(Some(snapshot));
@@ -328,8 +329,10 @@ impl ChatWidget {
             .values()
             .cloned()
             .collect();
-        handle.finish_rate_limit_refresh(&rate_limit_snapshots, Local::now());
+        let plan_changed =
+            handle.finish_rate_limit_refresh(&rate_limit_snapshots, self.quota_plan, Local::now());
         self.request_redraw();
+        plan_changed
     }
 
     pub(super) fn open_status_line_setup(&mut self) {

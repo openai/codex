@@ -35,11 +35,18 @@ async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgp
 async fn status_command_refresh_updates_cached_limits_for_future_status_outputs() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
+    chat.status_account_display = Some(crate::status::StatusAccountDisplay::ChatGpt {
+        email: Some("user@example.com".into()),
+        plan: Some("Plus".into()),
+        workspace: None,
+    });
 
     chat.dispatch_command(SlashCommand::Status);
 
     match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(_)) => {}
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            assert!(lines_to_single_string(&cell.display_lines(/*width*/ 80)).contains("(Plus)"));
+        }
         other => panic!("expected status output before refresh request, got {other:?}"),
     }
     let first_request_id = match rx.try_recv() {
@@ -49,7 +56,9 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
 
-    chat.finish_status_rate_limit_refresh(first_request_id, vec![snapshot(/*percent*/ 92.0)]);
+    let mut limits = snapshot(/*percent*/ 92.0);
+    limits.plan_type = Some(PlanType::Pro);
+    chat.finish_status_rate_limit_refresh(first_request_id, vec![limits]);
     drain_insert_history(&mut rx);
 
     chat.dispatch_command(SlashCommand::Copy);
@@ -57,7 +66,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::CopySelection { text, label, .. })
-            if label == "Whole status" && text.contains("8% left")
+            if label == "Whole status" && text.contains("8% left") && text.contains("user@example.com (Pro 200)")
     );
     assert_matches!(rx.try_recv(), Ok(AppEvent::SettingsSelectionClosed));
 
@@ -68,10 +77,23 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
         }
         other => panic!("expected refreshed status output, got {other:?}"),
     };
+    insta::assert_snapshot!(
+        refreshed.lines().find_map(|line| line.trim().strip_prefix("Account:")).unwrap().trim(),
+        @"user@example.com (Pro 200)"
+    );
     assert!(
         refreshed.contains("8% left"),
         "expected a future /status output to use refreshed cached limits, got: {refreshed}"
     );
+    let AppEvent::RefreshRateLimits {
+        origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("expected a second status refresh");
+    };
+    let mut limits = snapshot(/*percent*/ 93.0);
+    limits.plan_type = Some(PlanType::Pro);
+    assert!(!chat.finish_status_rate_limit_refresh(request_id, vec![limits]));
 }
 
 #[tokio::test]

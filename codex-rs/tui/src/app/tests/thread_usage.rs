@@ -122,6 +122,67 @@ async fn account_updated_with_backend_only_auth_enables_thread_usage() -> Result
 }
 
 #[tokio::test]
+async fn quota_reply_corrects_the_first_status_card_in_scrollback() -> Result<()> {
+    let (mut app, mut events, _) = make_test_app_with_channels().await;
+    app.chat_widget.update_account_state(
+        Some(crate::status::StatusAccountDisplay::ChatGpt {
+            email: Some("user@example.com".into()),
+            plan: Some("Plus".into()),
+            workspace: None,
+        }),
+        Some(PlanType::Plus),
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+    while events.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.terminal.set_viewport_area(Rect::new(
+        /*x*/ 0, /*y*/ 21, /*width*/ 80, /*height*/ 3,
+    ));
+    let mut server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let origin = RateLimitRefreshOrigin::StatusCommand { request_id: 1 };
+    app.chat_widget
+        .add_status_output(/*refreshing_rate_limits*/ true, Some(1));
+    app.handle_event(&mut tui, &mut server, events.try_recv()?)
+        .await?;
+    assert!(pending_history_text(&tui).contains("user@example.com (Plus)"));
+    tui.draw(/*height*/ 3, |_| {})?;
+
+    let (request_id, hard_stop_generation) = app
+        .rate_limit_refresh_state
+        .start(origin, &mut app.rate_limit_hard_stop_generation)
+        .unwrap();
+    let quota = serde_json::from_value(serde_json::json!({"planType": "pro"}))?;
+    app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::RateLimitsLoaded {
+            origin,
+            request_id,
+            hard_stop_generation,
+            result: Ok(super::rate_limits::account_rate_limits_response(quota)),
+        },
+    )
+    .await?;
+
+    assert!(
+        tui.pending_history_lines_for_test().is_empty(),
+        "expected in-place replacement"
+    );
+    let tail = app.last_rendered_history_tail.as_ref().unwrap();
+    let account = tail
+        .lines
+        .iter()
+        .map(|line| line.line.to_string())
+        .find(|line| line.contains("Account:"))
+        .unwrap();
+    insta::assert_snapshot!(account.split_once("Account:").unwrap().1.trim(), @"user@example.com (Pro 200)");
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn completed_thread_usage_updates_status_without_scrollback_reflow() -> Result<()> {
     let (mut app, mut app_server, mut tui, thread_id, request_id) =
         app_with_pending_thread_usage().await?;

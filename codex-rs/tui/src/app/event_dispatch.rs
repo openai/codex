@@ -2388,8 +2388,9 @@ impl App {
                             tui.frame_requester().schedule_frame();
                         }
                         RateLimitRefreshOrigin::StatusCommand { request_id } => {
-                            self.chat_widget
-                                .finish_status_rate_limit_refresh(request_id, snapshots);
+                            if self.chat_widget.finish_status_rate_limit_refresh(request_id, snapshots) {
+                                self.refresh_status_history(tui)?;
+                            }
                         }
                         RateLimitRefreshOrigin::UsageMenu { request_id } => {
                             self.chat_widget.finish_usage_menu_rate_limit_refresh(
@@ -2439,8 +2440,9 @@ impl App {
                             );
                         }
                         RateLimitRefreshOrigin::StatusCommand { request_id } => {
-                            self.chat_widget
-                                .finish_status_rate_limit_refresh(request_id, Vec::new());
+                            if self.chat_widget.finish_status_rate_limit_refresh(request_id, Vec::new()) {
+                                self.refresh_status_history(tui)?;
+                            }
                         }
                         RateLimitRefreshOrigin::UsageMenu { request_id } => {
                             self.chat_widget.finish_usage_menu_rate_limit_refresh(
