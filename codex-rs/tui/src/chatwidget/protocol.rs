@@ -99,7 +99,7 @@ impl ChatWidget {
                 self.on_thread_goal_cleared(notification.thread_id.as_str());
             }
             ServerNotification::ThreadSettingsUpdated(notification) => {
-                self.on_thread_settings_updated(notification);
+                self.apply_thread_settings(notification, replay_kind);
             }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.has_turn_history = true;

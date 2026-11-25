@@ -439,18 +439,7 @@ impl ChatWidget {
         &mut self,
         notification: ThreadSettingsUpdatedNotification,
     ) {
-        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
-            tracing::warn!(
-                thread_id = notification.thread_id,
-                "ignoring app-server ThreadSettingsUpdated with invalid thread_id"
-            );
-            return;
-        };
-        if self.thread_id != Some(thread_id) {
-            return;
-        }
-
-        self.apply_thread_settings(notification.thread_settings);
+        self.apply_thread_settings(notification, /*replay_kind*/ None);
     }
 
     #[cfg(test)]
@@ -535,7 +524,23 @@ impl ChatWidget {
         self.refresh_open_model_picker();
     }
 
-    fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
+    pub(super) fn apply_thread_settings(
+        &mut self,
+        notification: ThreadSettingsUpdatedNotification,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
+            tracing::warn!(
+                thread_id = notification.thread_id,
+                "ignoring app-server ThreadSettingsUpdated with invalid thread_id"
+            );
+            return;
+        };
+        if self.thread_id != Some(thread_id) {
+            return;
+        }
+
+        let mut settings = notification.thread_settings;
         self.invalidate_permission_discovery();
         if let Some(environments) = &settings.environments {
             self.primary_environment_cwd =
@@ -617,6 +622,12 @@ impl ChatWidget {
             self.queue_unavailable_daybreak_disable(&settings.model);
         }
         settings.collaboration_mode.settings.model = settings.model;
+        // A thread switch replays earlier effort changes after restoring the session.
+        // Establish each replayed tier before refreshing the composer so only live changes animate.
+        if replay_kind.is_some() {
+            self.bottom_pane
+                .set_active_reasoning_effort_baseline(settings.effort.as_ref());
+        }
         settings.collaboration_mode.settings.reasoning_effort = settings.effort;
         self.thread_settings_confirmed = true;
         self.set_effective_collaboration_mode(settings.collaboration_mode);

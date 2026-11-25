@@ -846,6 +846,50 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
 }
 
 #[tokio::test]
+async fn thread_settings_updated_during_replay_restores_effort_without_animating() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);
+    let mut session = configured_thread_session(thread_id);
+    session.reasoning_effort = Some(ReasoningEffortConfig::Ultra);
+    chat.handle_thread_session(session);
+    chat.show_welcome_banner = false;
+
+    let settings = |effort| {
+        let mut update = thread_settings_for_test("gpt-5.2", thread_id);
+        update.thread_settings.collaboration_mode.mode = ModeKind::Default;
+        update.thread_settings.service_tier = None;
+        update.thread_settings.effort = Some(effort);
+        ServerNotification::ThreadSettingsUpdated(update)
+    };
+    crate::terminal_palette::with_test_palette(/*colors*/ None, || {
+        // Switching back restores the current session before replaying older settings.
+        let replay = Some(ReplayKind::ThreadSnapshot);
+        chat.handle_server_notification(settings(ReasoningEffortConfig::High), replay);
+        chat.handle_server_notification(settings(ReasoningEffortConfig::Max), replay);
+        assert!(render_bottom_popup(&chat, /*width*/ 80).contains("max"));
+        chat.handle_server_notification(settings(ReasoningEffortConfig::Ultra), replay);
+        insta::assert_snapshot!(render_bottom_popup(&chat, /*width*/ 80), @"
+        » Ask Codex to do anything
+
+          gpt-5.2 ultra
+          ? for shortcuts
+        ");
+
+        // A live change still starts by showing the outgoing Ultra status line.
+        chat.handle_server_notification(
+            settings(ReasoningEffortConfig::Max),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(
+            chat.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::Max)
+        );
+        assert!(render_bottom_popup(&chat, /*width*/ 80).contains("ultra"));
+    });
+}
+
+#[tokio::test]
 async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();
