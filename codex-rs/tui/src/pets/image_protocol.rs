@@ -125,7 +125,7 @@ pub fn kitty_transmit_png_with_id(
                 "{ESC}_Ga=T,t=d,f=100,c={columns},r={rows},q=2{image_id},m={more_flag},C=1;{chunk}{ST}",
             ));
         } else {
-            command.push_str(&format!("{ESC}_Gm={more_flag};{chunk}{ST}"));
+            command.push_str(&format!("{ESC}_Gm={more_flag},q=2;{chunk}{ST}"));
         }
     }
 
@@ -210,6 +210,26 @@ mod tests {
         assert!(command.starts_with("\x1b_Ga=T,t=d,f=100,c=4,r=3,q=2,i=7,m=0,C=1;"));
         assert!(command.contains("cG5n"));
         assert!(command.ends_with("\x1b\\"));
+
+        // Base64 encoding expands this payload to three chunks.
+        fs::write(&path, vec![0; 2 * KITTY_CHUNK_SIZE]).unwrap();
+        let command = kitty_transmit_png_with_id(
+            &path,
+            /*columns*/ 4,
+            /*rows*/ 3,
+            KittyPlacement::Cursor(7),
+        )
+        .unwrap();
+        let headers = command
+            .split("\x1b_G")
+            .skip(1)
+            .map(|chunk| chunk.split_once(';').unwrap().0)
+            .collect::<Vec<_>>();
+        insta::assert_snapshot!(headers.join("\n"), @r"
+        a=T,t=d,f=100,c=4,r=3,q=2,i=7,m=1,C=1
+        m=1,q=2
+        m=0,q=2
+        ");
     }
 
     #[test]
