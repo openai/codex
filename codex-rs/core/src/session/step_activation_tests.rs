@@ -444,6 +444,24 @@ async fn thread_metadata_and_goal_recording_do_not_resolve_the_selected_model() 
     assert_eq!(local.model, MODEL_B);
     assert_eq!(local.service_tier.as_deref(), Some("unsupported"));
 
+    let view = tokio::select! {
+        settings = session.thread_view_settings() => settings,
+        _ = lookup.started.notified() => panic!("list settings requested model info"),
+    };
+    assert_eq!(
+        view,
+        crate::ThreadViewSettings {
+            model: local.model.clone(),
+            reasoning_effort: local.reasoning_effort.clone(),
+            environments: local
+                .environment_selections()
+                .iter()
+                .map(Into::into)
+                .collect(),
+            session_source: local.session_source.clone(),
+        },
+    );
+
     let update = UserGoalUpdate::Set {
         objective: Some("Keep the existing tests".into()),
         status: None,

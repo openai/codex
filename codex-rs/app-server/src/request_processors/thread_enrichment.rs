@@ -1,9 +1,10 @@
-use super::apply_live_thread_settings;
+use super::apply_thread_view_settings;
 use super::thread_input::can_accept_direct_input;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadEnvironment;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
@@ -55,8 +56,22 @@ async fn enrich_loaded_thread(
     let Ok(loaded_thread) = thread_manager.get_thread(thread_id).await else {
         return;
     };
-    let config_snapshot = loaded_thread.configured_snapshot().await;
-    apply_live_thread_settings(thread, &loaded_thread, &config_snapshot);
+    let settings = loaded_thread.thread_view_settings().await;
+    apply_thread_view_settings(
+        thread,
+        &loaded_thread,
+        settings.model,
+        settings.reasoning_effort,
+        settings
+            .environments
+            .into_iter()
+            .map(|env| ThreadEnvironment {
+                environment_id: env.environment_id,
+                cwd: env.cwd.into(),
+                runtime_workspace_roots: env.workspace_roots.into_iter().map(Into::into).collect(),
+            })
+            .collect(),
+    );
     if !matches!(
         &thread.source,
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
@@ -85,6 +100,6 @@ async fn enrich_loaded_thread(
     }
     thread.can_accept_direct_input = Some(can_accept_direct_input(
         loaded_thread.multi_agent_version(),
-        &config_snapshot.session_source,
+        &settings.session_source,
     ));
 }

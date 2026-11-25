@@ -2405,6 +2405,18 @@ impl Session {
         configuration.thread_config_snapshot(configuration.environments.clone())
     }
 
+    pub(crate) async fn thread_view_settings(&self) -> crate::ThreadViewSettings {
+        let state = self.state.lock().await;
+        let configuration = &state.session_configuration;
+        let collaboration = &configuration.step_settings.collaboration_mode;
+        crate::ThreadViewSettings {
+            model: collaboration.model().to_string(),
+            reasoning_effort: collaboration.reasoning_effort(),
+            environments: configuration.environments.iter().map(Into::into).collect(),
+            session_source: configuration.session_source.clone(),
+        }
+    }
+
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         self.resume_config_snapshot().await.0
     }

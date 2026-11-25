@@ -209,6 +209,7 @@ use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadDeletedNotification;
+use codex_app_server_protocol::ThreadEnvironment;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoal;
@@ -616,17 +617,31 @@ pub(crate) fn apply_live_thread_settings(
     loaded_thread: &CodexThread,
     config_snapshot: &ThreadConfigSnapshot,
 ) {
-    thread.daybreak_program_propagation_enrolled =
-        Some(loaded_thread.daybreak_program_propagation_enrolled());
-    thread.model = Some(config_snapshot.model.clone());
-    thread.reasoning_effort = config_snapshot.reasoning_effort.clone();
-    thread.environments = Some(
+    apply_thread_view_settings(
+        thread,
+        loaded_thread,
+        config_snapshot.model.clone(),
+        config_snapshot.reasoning_effort.clone(),
         config_snapshot
             .environment_selections()
             .iter()
             .map(Into::into)
             .collect(),
     );
+}
+
+fn apply_thread_view_settings(
+    thread: &mut Thread,
+    loaded_thread: &CodexThread,
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+    environments: Vec<ThreadEnvironment>,
+) {
+    thread.daybreak_program_propagation_enrolled =
+        Some(loaded_thread.daybreak_program_propagation_enrolled());
+    thread.model = Some(model);
+    thread.reasoning_effort = reasoning_effort;
+    thread.environments = Some(environments);
 }
 
 fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {

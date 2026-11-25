@@ -105,6 +105,33 @@ use codex_rollout::state_db::StateDbHandle;
 
 static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
 
+/// The live settings needed to display a thread list or search result.
+#[derive(Debug, PartialEq)]
+pub struct ThreadViewSettings {
+    pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub environments: Vec<ThreadEnvironmentView>,
+    pub session_source: SessionSource,
+}
+
+/// The selected workspace for display, without the environment's execution config.
+#[derive(Debug, PartialEq)]
+pub struct ThreadEnvironmentView {
+    pub environment_id: String,
+    pub cwd: PathUri,
+    pub workspace_roots: Vec<PathUri>,
+}
+
+impl From<&TurnEnvironmentSelection> for ThreadEnvironmentView {
+    fn from(selection: &TurnEnvironmentSelection) -> Self {
+        Self {
+            environment_id: selection.environment_id.clone(),
+            cwd: selection.cwd.clone(),
+            workspace_roots: selection.workspace_roots.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     /// Trusted host country inherited by future turns.
@@ -1498,6 +1525,11 @@ impl CodexThread {
     /// when the tier must be validated against the selected model.
     pub async fn configured_snapshot(&self) -> ThreadConfigSnapshot {
         self.session.configured_snapshot().await
+    }
+
+    /// Reads display settings without materializing an execution permission profile.
+    pub async fn thread_view_settings(&self) -> ThreadViewSettings {
+        self.session.thread_view_settings().await
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {

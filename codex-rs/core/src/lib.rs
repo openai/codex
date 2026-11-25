@@ -65,6 +65,8 @@ pub use codex_thread::GuardianAuthorizationVersion;
 pub use codex_thread::GuardianRootMessage;
 pub use codex_thread::GuardianRootSnapshot;
 pub use codex_thread::ThreadConfigSnapshot;
+pub use codex_thread::ThreadEnvironmentView;
+pub use codex_thread::ThreadViewSettings;
 pub use codex_thread::TurnAdmissionState;
 pub use guardian::GuardianInferenceContext;
 pub use guardian::ScoreAuthorization as GuardianScoreAuthorization;
