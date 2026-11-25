@@ -614,6 +614,7 @@ impl Session {
             prompt_cache_ttl: start_options.prompt_cache_ttl,
             cyber_access_program: start_options.cyber_access_program,
             helper_admission: triggered.then_some(helper_admission).flatten(),
+            goal_daybreak: None,
         };
         let turn_context = self
             .new_turn_with_configuration(sub_id, configuration, options)

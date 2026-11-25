@@ -13,6 +13,7 @@ use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::RolloutItem;
 
+use crate::runtime::GoalDaybreakSelection;
 use crate::runtime::GoalRuntimeHandle;
 use crate::runtime::PreviousGoalSnapshot;
 use crate::tool::fill_empty_thread_preview_if_possible;
@@ -208,6 +209,28 @@ impl GoalService {
             )));
         }
         record_user_instruction.await?;
+        // A paused live goal has not started. Capture once on activation, but do
+        // not invent a snapshot when resuming older goals without live provenance.
+        let first_activation = match existing_goal.as_ref() {
+            None => {
+                status.unwrap_or(codex_state::ThreadGoalStatus::Active)
+                    == codex_state::ThreadGoalStatus::Active
+            }
+            Some(goal) => {
+                status == Some(codex_state::ThreadGoalStatus::Active)
+                    && runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.daybreak_awaits_activation(&goal.goal_id))
+            }
+        };
+        let daybreak = if first_activation
+            && let Some(runtime) = runtime.as_ref()
+            && let Some(thread) = runtime.live_thread().await
+        {
+            thread.capture_saved_goal_daybreak().await
+        } else {
+            None
+        };
 
         let (goal, previous_goal) = if let Some(objective) = objective {
             if let Some(existing_goal) = existing_goal.as_ref() {
@@ -280,7 +303,15 @@ impl GoalService {
         };
 
         if let Some(runtime) = runtime.as_ref() {
-            runtime.reset_goal_continuation(Some(&goal.goal_id)).await;
+            if first_activation && goal.status == codex_state::ThreadGoalStatus::Active {
+                runtime.set_daybreak_snapshot(
+                    &goal.goal_id,
+                    daybreak.map(GoalDaybreakSelection::Saved),
+                );
+            } else if previous_goal.is_none() {
+                runtime.defer_daybreak_until_activation(&goal.goal_id);
+            }
+            runtime.clear_pending_turn_start_options().await;
         }
 
         if objective.is_some() {
@@ -329,10 +360,9 @@ impl GoalService {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
             })?;
         let cleared = cleared_goal.is_some();
-        if cleared && let Some(runtime) = runtime.as_ref() {
-            runtime
-                .reset_goal_continuation(/*remaining_goal_id*/ None)
-                .await;
+        if let (Some(goal), Some(runtime)) = (cleared_goal.as_ref(), runtime.as_ref()) {
+            runtime.clear_daybreak_snapshot(&goal.goal_id);
+            runtime.clear_pending_turn_start_options().await;
         }
         drop(goal_state_permit);
         drop(runtime);

@@ -662,6 +662,48 @@ impl CodexThread {
         }
     }
 
+    /// Starts an automatic goal turn with its live, account-bound preference.
+    pub async fn start_goal_turn_if_idle(
+        &self,
+        request: TurnInputRequest,
+        snapshot: Option<crate::GoalDaybreakSnapshot>,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        let Some(snapshot) = snapshot.filter(|_| self.daybreak_program_propagation_enrolled())
+        else {
+            return self.start_turn_if_idle(request).await;
+        };
+        let mut data = codex_extension_api::ExtensionDataInit::new();
+        data.insert(crate::agent::helper_daybreak::goal::GoalDaybreakAdmission(
+            snapshot,
+        ));
+        self.start_turn_if_idle(WithTurnExtensionData::new(request, data))
+            .await
+    }
+
+    /// Captures the current saved preference for a newly accepted external goal.
+    pub async fn capture_saved_goal_daybreak(&self) -> Option<crate::GoalDaybreakSnapshot> {
+        if !self.daybreak_program_propagation_enrolled() {
+            return None;
+        }
+        crate::GoalDaybreakSnapshot::capture_saved(&self.session).await
+    }
+
+    /// Captures the exact turn's saved preference, never a later foreground turn's.
+    pub async fn capture_originating_saved_goal_daybreak(
+        &self,
+        expected_turn_id: &str,
+    ) -> Option<crate::GoalDaybreakSnapshot> {
+        if !self.daybreak_program_propagation_enrolled() {
+            return None;
+        }
+        let active = self.session.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        if task.turn_context.sub_id != expected_turn_id || task.cancellation_token.is_cancelled() {
+            return None;
+        }
+        crate::GoalDaybreakSnapshot::from_turn(&task.turn_context)
+    }
+
     /// Starts a new internal continuation turn when idle, including in Plan mode.
     /// Rejects if a newer task has started, even if it has already finished.
     /// Supply an internal response item, or empty input to wake on a result already

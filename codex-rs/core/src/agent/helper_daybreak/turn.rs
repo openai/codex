@@ -18,13 +18,17 @@ const ACCOUNT_CHANGED: &str =
     "The account for this subagent's saved Daybreak choice has changed. Start a new subagent.";
 
 /// An implicit program stays bound to the account whose choice selected it.
-pub(crate) struct SavedProgramResolution(Result<AuthOwner, String>);
+pub(crate) struct SavedProgramResolution(Result<AuthOwner, String>, &'static str);
 
 impl SavedProgramResolution {
+    pub(crate) fn new(owner: Result<AuthOwner, String>, account_changed: &'static str) -> Self {
+        Self(owner, account_changed)
+    }
+
     pub(crate) fn validate(&self) -> CodexResult<()> {
         match &self.0 {
             Ok(owner) if owner.is_current() => Ok(()),
-            Ok(_) => Err(CodexErr::InvalidRequest(ACCOUNT_CHANGED.to_owned())),
+            Ok(_) => Err(CodexErr::InvalidRequest(self.1.to_owned())),
             Err(error) => Err(CodexErr::InvalidRequest(error.clone())),
         }
     }
@@ -94,24 +98,30 @@ impl HelperTurnAdmission {
             {
                 Err(ACCOUNT_CHANGED.to_owned())
             } else {
-                choice
-                    .clone()
-                    .and_then(|choice| select_program(turn.model_info(), choice))
+                choice.clone().and_then(|choice| {
+                    select_program(turn.model_info(), choice, SavedProgramContext::Helper)
+                })
             };
             let bound_owner = resolution.map(|program| {
                 turn.cyber_access_program = program;
                 owner.clone()
             });
             turn.extension_data
-                .insert(SavedProgramResolution(bound_owner));
+                .insert(SavedProgramResolution::new(bound_owner, ACCOUNT_CHANGED));
         }
         turn.extension_data.insert(SavedIntent { choice, owner });
     }
 }
 
+pub(crate) enum SavedProgramContext {
+    Helper,
+    Goal,
+}
+
 pub(crate) fn select_program(
     model: &ModelInfo,
     choice: SavedDaybreakChoice,
+    context: SavedProgramContext,
 ) -> Result<Option<CyberAccessProgram>, String> {
     let Some(programs) = model.available_access_programs.as_ref() else {
         return Ok(None);
@@ -120,8 +130,16 @@ pub(crate) fn select_program(
     if selected.is_none() {
         match choice {
             SavedDaybreakChoice::On if !programs.cyber.is_empty() => {
+                let recovery = match context {
+                    SavedProgramContext::Helper => {
+                        "Turn Daybreak off or choose a compatible model."
+                    }
+                    SavedProgramContext::Goal => {
+                        "Turn Daybreak off and start a new Goal to apply the change, or choose a compatible model."
+                    }
+                };
                 return Err(format!(
-                    "Model {} does not advertise Daybreak support. Turn Daybreak off or choose a compatible model.",
+                    "Model {} does not advertise Daybreak support. {recovery}",
                     model.slug
                 ));
             }
@@ -149,15 +167,17 @@ mod tests {
             .models
             .remove(0);
         model.available_access_programs = None;
-        assert_eq!(select_program(&model, SavedDaybreakChoice::Off), Ok(None));
+        let select =
+            |model: &ModelInfo, choice| select_program(model, choice, SavedProgramContext::Helper);
+        assert_eq!(select(&model, SavedDaybreakChoice::Off), Ok(None));
         for cyber in [vec![], vec![CyberAccessProgram::DaybreakRed]] {
             model.available_access_programs = Some(ModelAccessPrograms {
                 cyber,
                 daybreak_availability: Default::default(),
             });
-            assert_eq!(select_program(&model, SavedDaybreakChoice::Unset), Ok(None));
+            assert_eq!(select(&model, SavedDaybreakChoice::Unset), Ok(None));
             assert!(
-                select_program(&model, SavedDaybreakChoice::Off)
+                select(&model, SavedDaybreakChoice::Off)
                     .unwrap_err()
                     .contains("does not advertise Standard")
             );

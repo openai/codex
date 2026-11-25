@@ -1,5 +1,6 @@
-//! Native helpers inherit the spawning turn's saved Daybreak choice.
+//! Account-bound Daybreak intent for native helpers and live goals.
 
+pub(crate) mod goal;
 pub(crate) mod turn;
 
 use crate::session::session::Session;

@@ -557,3 +557,106 @@ async fn copied_program_rechecks_the_spawning_turn_owner() {
     child.shutdown_and_wait().await.expect("stop child");
     root.thread.shutdown_and_wait().await.expect("stop root");
 }
+
+#[tokio::test]
+async fn goal_daybreak_retains_saved_choice_without_leaking_to_foreground() {
+    let home = tempdir().expect("create test home");
+    let blue = CyberAccessProgram::DaybreakBlue;
+    let red = CyberAccessProgram::DaybreakRed;
+    let standard = CyberAccessProgram::Standard;
+    let (config, mut manager, mut turns) =
+        paused_helpers(home.path(), Some(vec![blue, red, standard])).await;
+    Arc::get_mut(&mut manager.state)
+        .expect("unshared manager")
+        .auth_manager = codex_login::AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        home.path().to_owned(),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config))
+        .await
+        .expect("start root");
+    let thread = &root.thread;
+    save_choice(thread, /*enabled*/ true).await;
+    let saved = thread.capture_saved_goal_daybreak().await;
+    assert!(saved.is_some());
+
+    save_choice(thread, /*enabled*/ false).await;
+    thread
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(text()).on_start(TurnStartOptions {
+                cyber_access_program: Some(red),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("admit foreground turn with explicit override");
+    let foreground = admitted_turn(&mut turns, thread).await;
+    assert_eq!(foreground.cyber_access_program, Some(red));
+
+    let goal_request = || {
+        TurnInputRequest::user_input(Vec::new()).on_start(TurnStartOptions {
+            turn_trigger: Some("goal".to_owned()),
+            ..Default::default()
+        })
+    };
+    assert_eq!(
+        thread
+            .start_goal_turn_if_idle(goal_request(), saved.clone())
+            .await
+            .unwrap(),
+        crate::StartIfIdleSubmission::NotSubmitted {
+            reason: crate::NotSubmittedReason::NotIdle,
+        }
+    );
+
+    thread
+        .session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
+    thread
+        .start_goal_turn_if_idle(goal_request(), saved.clone())
+        .await
+        .unwrap();
+    let continuation = admitted_turn(&mut turns, thread).await;
+    assert_eq!(continuation.cyber_access_program, Some(blue));
+
+    thread
+        .session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(text()))
+        .await
+        .unwrap();
+    let next_foreground = admitted_turn(&mut turns, thread).await;
+    assert_eq!(next_foreground.cyber_access_program, None);
+
+    let auth = manager.auth_manager();
+    codex_login::auth::login_with_chatgpt_auth_tokens(
+        home.path(),
+        "header.e30.changed",
+        "other-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("switch account");
+    auth.reload().await;
+    thread
+        .session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
+    thread
+        .start_goal_turn_if_idle(goal_request(), saved)
+        .await
+        .expect("admit and reject old owner's program before sampling");
+    let switched = admitted_turn(&mut turns, thread).await;
+    assert_eq!(switched.cyber_access_program, None);
+    let error = switched
+        .extension_data
+        .get::<crate::agent::helper_daybreak::turn::SavedProgramResolution>()
+        .expect("guard old owner's choice")
+        .validate()
+        .expect_err("account switch invalidates old preference");
+    assert!(error.to_string().contains("account for this goal"));
+    thread.shutdown_and_wait().await.expect("shut down root");
+}

@@ -365,6 +365,7 @@ pub(crate) struct NewTurnContextOptions {
     pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
     pub(crate) helper_admission: Option<crate::agent::helper_daybreak::turn::HelperTurnAdmission>,
+    pub(crate) goal_daybreak: Option<crate::GoalDaybreakSnapshot>,
 }
 
 /// The context needed for a single turn of the thread.
@@ -1529,6 +1530,9 @@ impl Session {
         }
         if let Some(admission) = options.helper_admission {
             admission.capture_intent(self, &mut turn_context).await;
+        }
+        if let Some(snapshot) = options.goal_daybreak {
+            snapshot.apply(self, &mut turn_context);
         }
         // Tool observers retain this turn's selection even after a later turn starts.
         if let Some(program) = turn_context.cyber_access_program {

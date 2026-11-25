@@ -996,6 +996,7 @@ impl LocalAgentControl {
             cyber_access_program = helper_daybreak::turn::select_program(
                 &model,
                 codex_protocol::openai_models::SavedDaybreakChoice::On,
+                helper_daybreak::turn::SavedProgramContext::Helper,
             )
             .map_err(CodexErr::InvalidRequest)?
             .or(Some(inherited));
