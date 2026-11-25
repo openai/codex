@@ -17,6 +17,84 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn session_lookup_distinguishes_missing_and_unreadable_rollouts() -> color_eyre::Result<()> {
+    use crate::resume_picker::SessionPickerAction;
+
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    let config = &app.config;
+    let id = crate::tests::write_session_rollout(
+        config.codex_home.as_path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "saved session",
+        &config.model_provider_id,
+        config.cwd.as_path(),
+    )?;
+    let mut server = crate::start_embedded_app_server_for_picker(config).await?;
+    let mut lookup = async |action, id: ThreadId| {
+        crate::lookup_session_target_with_app_server(action, &mut server, config, &id.to_string())
+            .await
+    };
+    let missing = lookup(SessionPickerAction::Resume, ThreadId::new()).await?;
+    assert!(missing.is_none());
+
+    let target = lookup(SessionPickerAction::Resume, id)
+        .await?
+        .expect("saved session");
+    let path = target.path.expect("saved session has a rollout");
+    std::fs::write(&path, "")?;
+    let err = lookup(SessionPickerAction::Fork, id)
+        .await
+        .expect_err("unreadable session metadata");
+    let message = err.to_string().replace(path.to_str().unwrap(), "<rollout>");
+    insta::assert_snapshot!(message, @"thread/read failed: failed to read thread: thread-store internal error: failed to read session metadata <rollout>: thread-store internal error: failed to read session metadata <rollout>: rollout at <rollout> is empty (code -32603)");
+
+    let current = ThreadId::new();
+    app.active_thread_id = Some(current);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let control = app
+        .handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::ResumeSessionByIdOrName(id.to_string()),
+        )
+        .await?;
+    assert!(matches!(control, AppRunControl::Continue));
+    assert_eq!(app.active_thread_id, Some(current));
+    assert!(next_history_message(&mut events).contains("thread/read failed"));
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloud_resume_by_id_points_to_picker_for_unopened_chat() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let (client, mut commands, _events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::ThreadParamsMode::Cloud,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let event = AppEvent::ResumeSessionByIdOrName(ThreadId::new().to_string());
+    let (control, ()) = tokio::join!(app.handle_event(&mut tui, &mut server, event), async {
+        let command = commands.recv().await.expect("thread/read");
+        command
+            .response
+            .send(Ok(Err(JSONRPCErrorError {
+                code: -32000,
+                message: "Open this cloud conversation before reading its transcript.".into(),
+                data: None,
+            })))
+            .unwrap();
+    });
+    assert!(matches!(control?, AppRunControl::Continue));
+    insta::assert_snapshot!(next_history_message(&mut events), @"■ Run /resume without an ID and select the Cloud chat from the picker.");
+    Ok(())
+}
+
+#[tokio::test]
 async fn new_and_resumed_sessions_use_quota_for_the_active_provider() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     crate::chatwidget::tests::helpers::set_fast_mode_test_catalog_for_models(

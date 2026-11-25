@@ -15,6 +15,7 @@ use codex_app_server_protocol::Turn;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 #[test]
 fn tui_startup_future_stays_bounded() {

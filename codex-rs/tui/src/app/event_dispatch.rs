@@ -761,13 +761,24 @@ impl App {
                         ));
                     }
                     Err(err)
-                        if err
-                            .downcast_ref::<crate::named_session_lookup::AmbiguousSessionName>()
-                            .is_some() =>
+                        if app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud
+                            && matches!(
+                                err.downcast_ref::<TypedRequestError>(),
+                                Some(TypedRequestError::Server { method, source })
+                                    if method == "thread/read"
+                                        && source.message == "Open this cloud conversation before reading its transcript."
+                            ) =>
                     {
-                        self.chat_widget.add_error_message(err.to_string());
+                        self.chat_widget.add_error_message(
+                            "Run /resume without an ID and select the Cloud chat from the picker."
+                                .to_string(),
+                        );
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        if !self.recover_transport_error(&err) {
+                            self.chat_widget.add_error_message(err.to_string());
+                        }
+                    }
                 }
             }
             AppEvent::ResumeBackendSession(_)
