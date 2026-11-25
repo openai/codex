@@ -261,6 +261,15 @@ impl AttachedReviewer for ActorReviewer {
         self.retrieval.clone()
     }
 
+    fn root_thread(&self) -> codex_extension_api::ExtensionFuture<'_, Option<Arc<CodexThread>>> {
+        Box::pin(async move {
+            if self.actor == self.root {
+                return None;
+            }
+            self.manager.upgrade()?.get_thread(self.root).await.ok()
+        })
+    }
+
     fn prepare<'a>(
         &'a self,
         setup: &'a PreparedGuardianContext,

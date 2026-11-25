@@ -1,13 +1,24 @@
-//! Captures a completed Guardian model context using the existing fork replay format.
-//! This snapshot is in memory only; transcript durability remains part of turn completion.
+//! Reads Guardian history lifetimes and captures completed reviewer contexts for fork replay.
+//! Both operate on live state. Transcript durability remains part of turn completion.
 
 use super::session::Session;
 use codex_history::CompactedItem;
 use codex_history::RolloutItem;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenCountEvent;
 
 impl Session {
+    /// Only MultiAgent V2 workers use a separate root history for review.
+    pub(crate) async fn guardian_root_history_version(&self) -> Option<(ThreadId, u64)> {
+        if self.multi_agent_version() != Some(MultiAgentVersion::V2) {
+            return None;
+        }
+        let version = self.state.lock().await.history.reset_version;
+        Some((self.thread_id, version))
+    }
+
     pub(crate) async fn guardian_fork_history(&self) -> Vec<RolloutItem> {
         let state = self.state.lock().await;
         let history = &state.history;

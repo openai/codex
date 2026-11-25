@@ -8,6 +8,7 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::GuardianInferenceProvider;
+use codex_core::context::GuardianReviewEvidence;
 use codex_core::guardian_review::AttachedReviewer;
 use codex_core::guardian_review::PreserveReviewWrites;
 use codex_core::guardian_review::ReviewPreparationError;
@@ -43,10 +44,12 @@ use codex_message_board::SortDirection;
 use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -62,6 +65,7 @@ use core_test_support::responses::*;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::NamedTraceEvents;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use reviewer_tool_call::invoke;
@@ -1324,7 +1328,27 @@ async fn first_approval_reuses_the_prewarmed_root_reviewer() -> anyhow::Result<(
             }),
         )
         .await?;
+    let review_id = wait_for_event_match(&fixture.root, |event| match event {
+        EventMsg::GuardianAssessment(review)
+            if review.status == GuardianAssessmentStatus::Approved =>
+        {
+            Some(review.id.clone())
+        }
+        _ => None,
+    })
+    .await;
     wait_for_successful_turn(&fixture.root).await;
+    let reviews = fixture
+        .root
+        .thread_extension_data()
+        .get::<GuardianReviewEvidence>()
+        .expect("shared review evidence")
+        .snapshot();
+    let [saved] = reviews.as_slice() else {
+        anyhow::bail!("expected one saved GV3 verdict");
+    };
+    assert_eq!(saved.correlation["review_id"], review_id);
+    assert_eq!(saved.decision["status"], "approved");
     let output = responses
         .requests()
         .iter()
@@ -1450,6 +1474,10 @@ async fn child_keeps_searched_and_subscribed_evidence_after_root_reload() -> any
     // Reload resumes at the surviving child's published position.
     fixture.mock_reply("resume", TO_RELEASE).await;
     fixture.resume_root().await?;
+    let child = fixture.child.thread_extension_data();
+    let actor = child.get::<ActorReviewer>().expect("child reviewer");
+    let reviewer_root = actor.root_thread().await.expect("reloaded root");
+    assert!(Arc::ptr_eq(&reviewer_root, &fixture.root));
     routed.next().await?;
     wait_for_revocation(&reviewer).await?;
 

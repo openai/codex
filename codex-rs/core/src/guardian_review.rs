@@ -60,6 +60,11 @@ pub enum ReviewPreparationError {
 pub trait AttachedReviewer: Send + Sync {
     fn retrieval(&self) -> ReviewRetrieval;
 
+    /// Resolve the worker's currently loaded root. The root actor uses its own reset signal.
+    fn root_thread(
+        &self,
+    ) -> codex_extension_api::ExtensionFuture<'_, Option<std::sync::Arc<crate::CodexThread>>>;
+
     fn prepare<'a>(
         &'a self,
         setup: &'a PreparedGuardianContext,

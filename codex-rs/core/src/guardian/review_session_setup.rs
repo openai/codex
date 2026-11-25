@@ -37,6 +37,7 @@ impl PreparedGuardianContext {
         config: Config,
         history: &ContextManager,
         node_repl_policy: &GuardianNodeReplPolicy,
+        uses_root_evidence: bool,
     ) -> anyhow::Result<Self> {
         let (reset_version, history_reset) = parent.history_reset().await;
         // Preparation may have raced with a history reset before capturing the reviewer context.
@@ -46,8 +47,11 @@ impl PreparedGuardianContext {
         let context_mode =
             GuardianContextMode::from_history(history.conversation_history_snapshot().as_ref());
         let context_policy = ReviewContextPolicy::for_context(context_mode, &config.features);
-        let root_review_version =
-            context_policy::root_review_version(context_policy, &parent).await?;
+        let root_review_version = if uses_root_evidence {
+            context_policy::root_review_version(context_policy, &parent).await?
+        } else {
+            None
+        };
         let parent_compaction = context_policy.parent_compaction(history.annotated_items())?;
         let mut instructions = parent.inherited_instructions().await;
         context.capture_project_instructions(&parent).await;
@@ -424,6 +428,7 @@ pub(in crate::guardian) async fn prepare_review(
         params.spawn_config.clone(),
         &params.parent_history,
         &params.node_repl_policy,
+        /*uses_root_evidence*/ true,
     )
     .await?;
     Ok(PreparedReview {
@@ -453,6 +458,7 @@ pub(super) fn prepare_prewarm(
 ) -> BoxFuture<'static, anyhow::Result<PreparedGuardianContext>> {
     Box::pin(async move {
         let context = GuardianReviewContext::from(turn);
+        let uses_root_evidence = matches!(retrieval, ReviewRetrieval::ConversationHistory);
         let config = guardian_review_session_config(&parent, &context, retrieval).await?;
         let history = parent.clone_history().await;
         PreparedGuardianContext::prepare(
@@ -461,6 +467,7 @@ pub(super) fn prepare_prewarm(
             config.spawn_config,
             &history,
             &config.node_repl_policy,
+            uses_root_evidence,
         )
         .await
     })

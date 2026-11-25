@@ -17,6 +17,28 @@ use codex_guardian_reviewer::SessionDisposition;
 use codex_protocol::user_input::UserInput;
 use tokio::sync::Mutex;
 
+pub(super) async fn root_history_version(
+    parent: &Session,
+    reviewer: &dyn AttachedReviewer,
+) -> codex_protocol::error::Result<Option<super::RootHistory>> {
+    // A hosted worker's authoritative runtime and reset version come from its host.
+    if parent.host_guardian_context().is_some() {
+        return Ok(parent
+            .guardian_root_snapshot()
+            .await?
+            .as_ref()
+            .map(super::root_history_key));
+    }
+    let Some(root) = reviewer.root_thread().await else {
+        return Ok(None);
+    };
+    Ok(root
+        .session
+        .guardian_root_history_version()
+        .await
+        .map(|(id, version)| (id, None, version)))
+}
+
 pub(super) struct AttachedApproval {
     provider: Arc<dyn AttachedReviewer>,
     config: GuardianReviewSessionConfig,
@@ -64,6 +86,7 @@ impl AttachedApproval {
             config.spawn_config.clone(),
             &parent.clone_history().await,
             &config.node_repl_policy,
+            /*uses_root_evidence*/ false,
         )
         .await
         .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
@@ -78,10 +101,21 @@ impl AttachedApproval {
         deadline: ReviewDeadline,
         cancel: &CancellationToken,
     ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+        let root_error = |error: codex_protocol::error::CodexErr| match error.details() {
+            super::CodexErrorDetails::Timeout => GuardianReviewSessionOutcome::TimedOut,
+            _ => GuardianReviewSessionOutcome::Aborted,
+        };
         let mut reservation = None;
         let mut analytics = GuardianReviewAnalyticsResult::without_session();
         let mut usage_at_start = None;
         let prepare = async {
+            if approval.root_history
+                != root_history_version(parent, self.provider.as_ref())
+                    .await
+                    .map_err(root_error)?
+            {
+                return Err(GuardianReviewSessionOutcome::Aborted);
+            }
             let first = self.first.lock().await.take();
             let model = match first {
                 Some(first) => first,
@@ -179,12 +213,8 @@ impl AttachedApproval {
                         return Err(GuardianReviewSessionOutcome::TimedOut);
                     }
                 }
-                root = parent.guardian_root_snapshot() => {
-                    let root = root.map_err(|error| match error.details() {
-                        super::CodexErrorDetails::Timeout => GuardianReviewSessionOutcome::TimedOut,
-                        _ => GuardianReviewSessionOutcome::Aborted,
-                    })?;
-                    if approval.root_history != root.as_ref().map(super::root_history_key) {
+                root = root_history_version(parent, self.provider.as_ref()) => {
+                    if approval.root_history != root.map_err(root_error)? {
                         return Err(GuardianReviewSessionOutcome::Aborted);
                     }
                 }
