@@ -599,12 +599,65 @@ fn git_hostname(url: &str) -> Option<String> {
             return None;
         }
     }
-    if let Ok(url) = Url::parse(url) {
-        return url.host_str().map(str::to_ascii_lowercase);
+    // Git looks for the first @[ and a closing ] even past the repository separator.
+    let has_bracketed_host = |path: &str| {
+        path.split_once("@[")
+            .is_some_and(|(_, rest)| rest.contains(']'))
+    };
+    let ssh_name_byte = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-');
+    if let Some(remote) = url.strip_prefix("git@") {
+        let (hostname, path) = remote.split_once(':')?;
+        if hostname.is_empty()
+            || hostname.starts_with('-')
+            || !hostname.bytes().all(ssh_name_byte)
+            || has_bracketed_host(path)
+        {
+            return None;
+        }
+        return Some(hostname.to_ascii_lowercase());
     }
-    let (_, host_and_path) = url.split_once('@')?;
-    let (hostname, _) = host_and_path.split_once(':')?;
-    (!hostname.is_empty()).then(|| hostname.to_ascii_lowercase())
+
+    let parsed = Url::parse(url).ok()?;
+    if let Some(remote) = url.strip_prefix("ssh://") {
+        // Git decodes escapes before splitting at / and treats ? as part of the authority.
+        // OpenSSH splits at the last @, so earlier literal or encoded @s belong to the username.
+        let (authority, path) = remote.split_once('/')?;
+        let (user, host_port) = authority.rsplit_once('@').unwrap_or(("", authority));
+        for (i, b) in user.bytes().enumerate() {
+            let b = if b == b'%' {
+                u8::from_str_radix(user.get(i + 1..i + 3)?, 16).ok()?
+            } else {
+                b
+            };
+            if (i == 0 && b == b'-')
+                || !(ssh_name_byte(b) || matches!(b, b'+' | b'~' | b'\\' | b'@'))
+            {
+                return None;
+            }
+        }
+        // Let Url validate ports and normalize bracketed IPv6 addresses.
+        if host_port.starts_with('-')
+            || !host_port
+                .bytes()
+                .all(|b| ssh_name_byte(b) || matches!(b, b':' | b'[' | b']'))
+        {
+            return None;
+        }
+        // Only user@[IPv6] consumes the first @[ before the path. A bare
+        // [IPv6] host can still be displaced by a bracketed host in the path.
+        if !authority.contains("@[") {
+            let decoded = path.contains('%').then(|| {
+                path.to_ascii_lowercase()
+                    .replace("%40", "@")
+                    .replace("%5b", "[")
+                    .replace("%5d", "]")
+            });
+            if has_bracketed_host(decoded.as_deref().unwrap_or(path)) {
+                return None;
+            }
+        }
+    }
+    parsed.host_str().map(str::to_ascii_lowercase)
 }
 
 #[cfg(test)]

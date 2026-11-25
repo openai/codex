@@ -281,13 +281,23 @@ url = "https://github.com/example/allowed.git"
 
 [marketplaces.allowed_sources.internal]
 source = "host_pattern"
-host_pattern = '^allowed\.test$'
+host_pattern = '^(allowed\.test|\[2001:db8::7\])$'
 "#,
         );
         for source in [
             "https://github.com/example/blocked.git",
             "https://127.0.0.1:18767/r.git",
             "https://allowed.test@127.0.0.1:18767/r.git",
+            "ssh://allowed.test?user@denied.test/r.git",
+            "ssh://alice@allowed.test@denied.test/r.git",
+            "ssh://denied.test%2fuser@allowed.test/r.git",
+            "ssh://git@allowed.test:x@[denied.test]/r.git",
+            "git@allowed.test:x@[denied.test]:r.git",
+            "ssh://allowed.test/a%40%5bdenied.test%5D/r.git",
+            "ssh://git@[denied.test]@allowed.test/r.git",
+            "ssh://[2001:db8::7]/team/plugins@[denied.test]/r.git",
+            "ssh://%2Doption@allowed.test/r.git",
+            "ssh://git%09user@allowed.test/r.git",
             r"http://allowed.test\@127.0.0.1:18767/r.git",
             r"https://allowed.test\@127.0.0.1:18767/r.git",
             r"http://allowed.test\anything@127.0.0.1:18767/r.git",
