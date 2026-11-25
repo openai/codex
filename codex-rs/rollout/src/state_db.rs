@@ -580,21 +580,21 @@ pub async fn read_repair_rollout_path(
             return;
         }
         saw_existing_metadata = true;
-        let mut repaired = metadata.clone();
-        repaired.rollout_path = rollout_path.to_path_buf();
-        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
-        match archived_only {
-            Some(true) if repaired.archived_at.is_none() => {
-                repaired.archived_at = Some(repaired.updated_at);
-            }
-            Some(false) => {
-                repaired.archived_at = None;
-            }
-            Some(true) | None => {}
-        }
-        if repaired == metadata {
+        let cwd = normalize_cwd_for_state_db(&metadata.cwd);
+        let archived_at = match archived_only {
+            Some(true) => Some(metadata.archived_at.unwrap_or(metadata.updated_at)),
+            Some(false) => None,
+            None => metadata.archived_at,
+        };
+        if cwd == metadata.cwd && archived_at == metadata.archived_at {
             return;
         }
+        let repaired = codex_state::ThreadMetadata {
+            rollout_path: rollout_path.to_path_buf(),
+            cwd,
+            archived_at,
+            ..metadata
+        };
         warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
         if let Err(err) = ctx.upsert_thread(&repaired).await {
             warn!(
