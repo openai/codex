@@ -611,6 +611,9 @@ impl App {
                     app_server.cancel_older_history_page(thread_id, &cursor);
                     if self.chat_widget.thread_id() == Some(thread_id) {
                         self.transcript_view.history = TranscriptHistoryState::Failed;
+                        if self.transcript_reflow.refill_deadline.is_some() {
+                            self.transcript_reflow.schedule_immediate();
+                        }
                         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
                             overlay.set_history_state(TranscriptHistoryState::Failed);
                         }

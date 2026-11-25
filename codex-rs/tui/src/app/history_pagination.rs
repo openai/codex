@@ -18,6 +18,8 @@ use codex_app_server_protocol::ThreadItemsListResponse;
 #[path = "history_completion.rs"]
 mod completion;
 
+const SCROLLBACK_REFILL_MAX_WAIT: Duration = Duration::from_secs(5);
+
 impl App {
     /// Start one bounded page request shared by scrollback refill and the transcript overlay.
     pub(crate) fn request_older_history_page(
@@ -472,7 +474,7 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    /// Preserve the legacy overlay and inline scrollback refill behavior.
+    /// Update the overlay per page and batch native scrollback replays.
     fn finish_inline_history_page(
         &mut self,
         tui: &mut tui::Tui,
@@ -489,18 +491,30 @@ impl App {
             });
             continue_to_start = previous_state == TranscriptHistoryState::LoadingBeginning
                 && self.scrollback_has_older_history;
+            // Finish a deferred refill if the overlay opened between pages.
+            if self.transcript_reflow.refill_deadline.take().is_some() {
+                self.schedule_immediate_resize_reflow(tui);
+            }
         } else {
             let wrap_width = self.chat_widget.history_wrap_width(width);
             let rendered_rows = self
                 .render_transcript_lines_for_reflow(wrap_width)
                 .lines
                 .len();
-            self.schedule_immediate_resize_reflow(tui);
             if self.scrollback_history_needs_top_up(rendered_rows)
                 && self.request_older_history_page(app_server, thread_id)
             {
+                // Bound the wait from the first buffered page, even if later requests stall.
+                if self.transcript_reflow.refill_deadline.is_none() {
+                    self.transcript_reflow.refill_deadline =
+                        Some(Instant::now() + SCROLLBACK_REFILL_MAX_WAIT);
+                    tui.frame_requester()
+                        .schedule_frame_in(SCROLLBACK_REFILL_MAX_WAIT);
+                }
                 return;
             }
+            self.transcript_reflow.refill_deadline = None;
+            self.schedule_immediate_resize_reflow(tui);
         }
         if continue_to_start
             && self.request_older_history_page(app_server, thread_id)

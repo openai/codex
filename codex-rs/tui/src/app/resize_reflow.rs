@@ -471,7 +471,13 @@ impl App {
             self.discard_scrollback_render_work(tui);
             return Ok(());
         }
-        let Some(deadline) = self.transcript_reflow.pending_until() else {
+        let Some(deadline) = self
+            .transcript_reflow
+            .pending_until()
+            .into_iter()
+            .chain(self.transcript_reflow.refill_deadline)
+            .min()
+        else {
             return Ok(());
         };
         let now = Instant::now();
@@ -519,6 +525,7 @@ impl App {
             tui.frame_requester().schedule_frame();
             return Ok(terminal_width);
         }
+        let flushing_refill = self.transcript_reflow.refill_deadline.take().is_some();
         let width = self.chat_widget.history_wrap_width(terminal_width.0);
         if self.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
@@ -558,7 +565,10 @@ impl App {
         if self.pending_thread_usage_history_refresh {
             self.refresh_thread_usage_history_tail(tui)?;
         }
-        self.request_scrollback_history_top_up(reflowed_rows);
+        // When flushing a partial refill, the next request is in flight or just failed.
+        if !flushing_refill {
+            self.request_scrollback_history_top_up(reflowed_rows);
+        }
 
         Ok(terminal_width)
     }
@@ -607,6 +617,7 @@ impl App {
             return Ok(());
         }
         self.native_history.replayed();
+        self.transcript_reflow.refill_deadline = None;
         let width = self.chat_widget.history_wrap_width(terminal_width.0);
         let reflowed_lines = if self.transcript_cells.is_empty() {
             self.reset_history_emission_state();

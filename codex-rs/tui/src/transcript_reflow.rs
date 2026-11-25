@@ -25,6 +25,8 @@ pub(crate) const TRANSCRIPT_REFLOW_DEBOUNCE: Duration = Duration::from_millis(75
 /// final rebuild instead of assuming the latest observed size has already been repaired.
 #[derive(Debug, Default)]
 pub(crate) struct TranscriptReflowState {
+    /// Latest replay time for older pages buffered while another page is fetched.
+    pub(crate) refill_deadline: Option<Instant>,
     last_observed_width: Option<u16>,
     last_reflow_width: Option<u16>,
     pending_reflow_width: Option<u16>,
