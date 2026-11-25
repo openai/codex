@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use super::https_mock::https_mock_server;
 use anyhow::Error;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
@@ -37,6 +38,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -256,6 +258,87 @@ fn expected_visible_models() -> Vec<Model> {
         .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
         .collect()
+}
+
+#[tokio::test]
+async fn model_list_discovers_https_gateway_preserves_picker_without_catalog() -> Result<()> {
+    let bundled: Vec<_> = expected_visible_models()
+        .into_iter()
+        .map(|model| model.id)
+        .collect();
+    for response in [
+        ResponseTemplate::new(200).set_body_json(json!({
+            "object": "list",
+            "data": [
+                {"id": "gateway-coder", "object": "model", "created": 1, "owned_by": "gateway"},
+                {"id": "gateway-image-only", "object": "model", "created": 1, "owned_by": "gateway"}
+            ]
+        })),
+        ResponseTemplate::new(403),
+    ] {
+        assert_eq!(https_gateway_picker_ids(response).await?, bundled);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_list_discovers_https_gateway_uses_codex_catalog() -> Result<()> {
+    let model = ModelInfo {
+        visibility: codex_protocol::openai_models::ModelVisibility::List,
+        ..codex_models_manager::model_info::model_info_from_slug("gateway-coder")
+    };
+    let picker =
+        https_gateway_picker_ids(ResponseTemplate::new(200).set_body_json(ModelsResponse {
+            models: vec![model],
+        }))
+        .await?;
+    assert_eq!(picker, ["gateway-coder"]);
+    Ok(())
+}
+
+async fn https_gateway_picker_ids(response: ResponseTemplate) -> Result<Vec<String>> {
+    let home = TempDir::new()?;
+    let gateway = MockServer::start().await;
+    let (origin, ca, _tls) = https_mock_server(home.path(), &gateway).await?;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(query_param(
+            "client_version",
+            codex_models_manager::client_version_to_whole(),
+        ))
+        .and(header("authorization", "Bearer gateway-test-key"))
+        .respond_with(response)
+        .expect(1..)
+        .mount(&gateway)
+        .await;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"model_provider = "gateway"
+[model_providers.gateway]
+name = "Test Gateway"
+base_url = "{origin}/v1"
+env_key = "GATEWAY_TEST_KEY"
+"#
+        ),
+    )?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
+            ("CODEX_CA_CERTIFICATE", ca.to_str()),
+            ("GATEWAY_TEST_KEY", Some("gateway-test-key")),
+            ("NO_PROXY", Some("127.0.0.1")),
+        ])
+        .build_initialized()
+        .await?;
+    let result: ModelListResponse = app
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams::default(),
+        })
+        .await?;
+    Ok(result.data.into_iter().map(|model| model.id).collect())
 }
 
 #[tokio::test]

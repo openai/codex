@@ -884,8 +884,10 @@ impl OpenAiModelsManager {
                 // A failed fetch is not an authoritative empty catalog. Keep the last
                 // successful snapshot (and its original freshness) unless access was
                 // explicitly rejected. Provider/auth identity checks still govern reuse.
-                let is_provider_catalog =
-                    matches!(&self.catalog_source, CatalogSource::ExplicitProvider(_));
+                let implicit_gateway = matches!(self.catalog_source, CatalogSource::Default)
+                    && self.endpoint_client.supports_gateway_catalog();
+                let is_provider_catalog = implicit_gateway
+                    || matches!(&self.catalog_source, CatalogSource::ExplicitProvider(_));
                 let access_denied = matches!(error.http_status_code_value(), Some(401 | 403));
                 let credentials_rejected = matches!(
                     error.details(),
@@ -909,7 +911,13 @@ impl OpenAiModelsManager {
                         current.models.clear();
                         provider_model_ids.clear();
                         current.etag = None;
-                        current.identity.clone_from(&request_identity);
+                        // A gateway can deny the optional catalog route and still allow inference.
+                        // Drop its snapshot identity so the picker uses the bundled models.
+                        if implicit_gateway && !credentials_rejected {
+                            current.identity = None;
+                        } else {
+                            current.identity.clone_from(&request_identity);
+                        }
                         *initialized = true;
                         self.catalog_updates.send_replace(None);
                     }
@@ -933,6 +941,11 @@ impl OpenAiModelsManager {
                             error!("failed to invalidate models cache: {err}");
                         }
                     }
+                }
+                if implicit_gateway && !credentials_rejected {
+                    // Automatic discovery is optional. Let the picker use the available catalog.
+                    tracing::debug!(%error, "gateway model catalog unavailable");
+                    return Ok(());
                 }
                 return Err(error);
             }
@@ -1021,7 +1034,10 @@ impl OpenAiModelsManager {
                         .auth_mode()
                         .is_some_and(AuthMode::has_chatgpt_account)
                 }));
-        if !remote_only && let Some(models) = self.catalog_source.fallback_models() {
+        if !remote_only
+            && !self.endpoint_client.supports_gateway_catalog()
+            && let Some(models) = self.catalog_source.fallback_models()
+        {
             let mut models = models.to_vec();
             for model in std::mem::take(&mut entry.models) {
                 if let Some(index) = models

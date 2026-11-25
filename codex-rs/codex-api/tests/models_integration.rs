@@ -55,7 +55,7 @@ async fn invalid_models_response_reports_bounded_decode_metadata() {
     let server = MockServer::start().await;
     for (body, category, column_offset) in [
         (
-            json!({ "data": [{ "id": "private-model" }] }).to_string(),
+            json!({ "object": "list", "data": [{ "id": "private-model" }] }).to_string(),
             "Data",
             0,
         ),

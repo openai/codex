@@ -50,23 +50,28 @@ const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 const FEDRAMP_CODEX_BASE_URL: &str = "https://gov.chatgpt.com/backend-api/codex";
 
-// Catalog requests use the model provider's credentials. Before enabling a fetch
-// with gateway OAuth alone, check that the catalog URL has the same origin as the gateway.
+// Only probe routes owned by the configured gateway. An explicit URL on another
+// origin keeps its existing auth rules; automatic discovery must not widen token delivery.
 fn supports_gateway_catalog(info: &ModelProviderInfo) -> bool {
-    if info.is_openai() || info.gateway_oauth.is_none() {
+    if info.is_openai() {
         return false;
     }
-    let (Some(base), Some(catalog)) = (info.base_url.as_deref(), info.model_catalog_url.as_deref())
+    let Some(base) = info
+        .base_url
+        .as_deref()
+        .and_then(|url| codex_http_client::validate_endpoint_url(url, "base_url").ok())
     else {
         return false;
     };
-    match (
-        codex_http_client::validate_endpoint_url(base, "base_url"),
-        codex_http_client::validate_endpoint_url(catalog, "model_catalog_url"),
-    ) {
-        (Ok(base), Ok(catalog)) => base.origin() == catalog.origin(),
-        _ => false,
+    match info.model_catalog_url.as_deref() {
+        Some(url) => codex_http_client::validate_endpoint_url(url, "model_catalog_url")
+            .is_ok_and(|url| url.origin() == base.origin()),
+        None => base.scheme() == "https" && base.query().is_none(),
     }
+}
+
+fn is_provider_catalog(info: &ModelProviderInfo) -> bool {
+    info.model_catalog_url.is_some() || supports_gateway_catalog(info)
 }
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
@@ -91,7 +96,7 @@ impl OpenAiModelsEndpoint {
         {
             *manager = manager.without_interactive_login();
         }
-        let redirect_policy = if provider_info.model_catalog_url.is_some()
+        let redirect_policy = if is_provider_catalog(&provider_info)
             || provider_info
                 .gateway_oauth
                 .as_ref()
@@ -227,8 +232,9 @@ impl OpenAiModelsEndpoint {
         } else {
             None
         };
+        let provider_catalog = is_provider_catalog(&self.provider_info);
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
-            include_response_debug: self.provider_info.model_catalog_url.is_none(),
+            include_response_debug: !provider_catalog,
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: auth_telemetry.attached,
             auth_header_name: auth_telemetry.name,
@@ -246,11 +252,12 @@ impl OpenAiModelsEndpoint {
                 .list_models(
                     request_url,
                     HeaderMap::new(),
-                    /*response_body_limit_bytes*/ None,
+                    (provider_catalog && self.provider_info.model_catalog_url.is_none())
+                        .then_some(1024 * 1024),
                 )
                 .await
                 .map_err(|mut error| {
-                    if self.provider_info.model_catalog_url.is_some()
+                    if provider_catalog
                         && let codex_api::ApiError::Transport(TransportError::Http {
                             url,
                             headers,
@@ -266,7 +273,7 @@ impl OpenAiModelsEndpoint {
                     map_api_error(error)
                 })
         }?;
-        if self.provider_info.model_catalog_url.is_some() {
+        if provider_catalog {
             let mut slugs = HashSet::new();
             if models
                 .iter()
@@ -315,7 +322,7 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
     }
 
     fn supports_api_key_models(&self) -> bool {
-        self.provider_info.model_catalog_url.is_some()
+        is_provider_catalog(&self.provider_info)
             || (self.provider_info.is_openai() && self.provider_info.base_url.is_none())
     }
 

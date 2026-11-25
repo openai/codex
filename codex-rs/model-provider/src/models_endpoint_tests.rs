@@ -83,7 +83,7 @@ async fn api_key_discovery_respects_provider_routing() {
             "test-api-key",
             "Azure",
             Some("https://example.openai.azure.com/openai/v1"),
-            None,
+            Some("https://example.openai.azure.com/openai/v1/models"),
             "https://example.openai.azure.com/openai/v1",
         ),
         (
