@@ -56,11 +56,11 @@ const REDUCTION_BPS_METRIC: &str = "codex.skills.shadow_selection.reduction_bps"
 
 pub(crate) struct ShadowSelectionExperiment {
     selectors: Vec<Box<dyn CheapSkillSelector>>,
-    metrics_client: Option<MetricsClient>,
+    metrics_client: MetricsClient,
 }
 
 impl ShadowSelectionExperiment {
-    pub(crate) fn new(metrics_client: Option<MetricsClient>) -> Self {
+    pub(crate) fn new(metrics_client: MetricsClient) -> Self {
         Self {
             selectors: vec![
                 Box::new(WeightedLexicalSkillSelector),
@@ -178,9 +178,6 @@ impl ShadowSelectionExperiment {
                 return;
             }
         };
-        let Some(metrics_client) = self.metrics_client.as_ref() else {
-            return;
-        };
         while let Some(skill_resource) = invocations.recv().await {
             for selection in &ranked_selections {
                 let rank = selection
@@ -194,7 +191,7 @@ impl ShadowSelectionExperiment {
                     ("rank", rank_bucket(rank)),
                     ("query_script", query_script),
                 ];
-                let _ = metrics_client.counter(
+                let _ = self.metrics_client.counter(
                     "codex.skills.shadow_selection.invocation",
                     /*inc*/ 1,
                     &tags,
@@ -325,9 +322,7 @@ impl ShadowSelectionExperiment {
     }
 
     fn record_metrics(&self, observation: ShadowSelectionObservation<'_>) {
-        let Some(metrics_client) = self.metrics_client.as_ref() else {
-            return;
-        };
+        let metrics_client = &self.metrics_client;
         let ShadowSelectionObservation {
             method,
             selection,

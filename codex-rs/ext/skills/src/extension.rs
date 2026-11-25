@@ -77,7 +77,7 @@ struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
-    shadow_selection: Arc<ShadowSelectionExperiment>,
+    shadow_selection: Option<Arc<ShadowSelectionExperiment>>,
 }
 
 #[derive(Default)]
@@ -376,14 +376,16 @@ where
             }
 
             let selected_entries = collect_explicit_skill_mentions(input.user_input, &catalog);
-            let shadow_selection_turn = if config.shadow_selection_enabled {
+            let shadow_selection_turn = if config.shadow_selection_enabled
+                && let Some(experiment) = &self.shadow_selection
+            {
                 let mut shadow_catalog = catalog.clone();
                 if let Some(host_skills) = host_skills {
                     shadow_catalog.extend(host_skills.clone());
                 }
                 let shadow_selected_entries =
                     collect_explicit_skill_mentions(input.user_input, &shadow_catalog);
-                Some(self.shadow_selection.start(
+                Some(experiment.start(
                     &input,
                     shadow_catalog,
                     &shadow_selected_entries,
@@ -627,7 +629,8 @@ pub fn install_with_providers_and_metrics<C>(
         providers,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
-        shadow_selection: Arc::new(ShadowSelectionExperiment::new(metrics_client)),
+        shadow_selection: metrics_client
+            .map(|metrics| Arc::new(ShadowSelectionExperiment::new(metrics))),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.turn_lifecycle_contributor(Arc::new(SkillTelemetry));

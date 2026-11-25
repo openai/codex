@@ -31,21 +31,35 @@ fn rank_buckets_distinguish_results_above_twenty() {
 static RANKING_TESTS: Semaphore = Semaphore::const_new(1);
 
 #[tokio::test]
-async fn turn_input_and_history_advance_while_ranking_is_blocked()
--> Result<(), Box<dyn std::error::Error>> {
-    use std::collections::BTreeMap;
+async fn turns_without_metrics_skip_shadow_selection() -> Result<(), Box<dyn std::error::Error>> {
+    contribute_turns(/*metrics*/ None).await
+}
 
+fn test_metrics() -> MetricsClient {
+    use codex_otel::MetricsConfig;
+    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+
+    MetricsClient::new(
+        MetricsConfig::in_memory(
+            "test",
+            "codex-skills-extension",
+            env!("CARGO_PKG_VERSION"),
+            InMemoryMetricExporter::default(),
+        )
+        .with_runtime_reader(),
+    )
+    .unwrap()
+}
+
+async fn contribute_turns(
+    metrics: Option<&MetricsClient>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::SkillInvocationInput;
     use codex_extension_api::SkillInvocationKind;
     use codex_extension_api::ThreadStartInput;
-    use codex_otel::MetricsConfig;
     use codex_protocol::protocol::SessionSource;
-    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-    use opentelemetry_sdk::metrics::data::MetricData;
-    use opentelemetry_sdk::metrics::data::ScopeMetrics;
 
     use crate::SkillProviders;
     use crate::SkillsExtensionConfig;
@@ -57,22 +71,11 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
     use crate::step_state::CatalogStatus;
     use crate::step_state::SkillsStepState;
 
-    let _serial = RANKING_TESTS.acquire().await.unwrap();
-    let slots = RANKING_SLOTS.acquire_many(2).await?;
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-skills-extension",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )?;
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers_and_metrics(
         &mut builder,
         SkillProviders::new(),
-        Some(metrics.clone()),
+        metrics.cloned(),
         SkillsExtensionConfig::clone,
     );
     let registry = builder.build();
@@ -155,6 +158,16 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
         )
         .await?;
         assert!(fragments.is_empty());
+        let Some(metrics) = metrics else {
+            assert!(
+                thread_store
+                    .get::<SkillsThreadState>()
+                    .unwrap()
+                    .shadow_selection_turn(turn_id)
+                    .is_none()
+            );
+            continue;
+        };
         tokio::task::yield_now().await;
         // Synchronous ranking would emit run metrics despite the occupied budget;
         // awaiting admission in contribute would instead time out above.
@@ -190,9 +203,24 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
                 .snapshot()
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_input_and_history_advance_while_ranking_is_blocked()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+
+    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::MetricData;
+    use opentelemetry_sdk::metrics::data::ScopeMetrics;
+
+    let _serial = RANKING_TESTS.acquire().await.unwrap();
+    let slots = RANKING_SLOTS.acquire_many(2).await?;
+    let metrics = test_metrics();
+    contribute_turns(Some(&metrics)).await?;
     // Both observers disappear before either ranking starts. Their queued unique
     // invocations must still be scored against their own turn-start histories.
-    drop(thread_store);
     drop(slots);
 
     let mut runs = BTreeMap::new();
@@ -307,7 +335,7 @@ async fn ranking_budget_is_shared_and_held_until_blocking_work_finishes() {
                 started,
                 release: Mutex::new(releases),
             })],
-            metrics_client: None,
+            metrics_client: test_metrics(),
         });
         let query = ShadowQuery {
             text: "test".to_string(),
