@@ -603,6 +603,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
         assert_eq!(thread.get::<crate::host::RootWorker>().is_some(), expected);
         assert!(thread.get::<Arc<dyn AttachedReviewer>>().is_none());
     }
+    let old_worker = thread.get::<super::RootWorker>().context("first board")?;
     let old_reviewer = thread.get::<ShadowReviewer>().context("first reviewer")?;
     let child = ExtensionData::new(ThreadId::new().to_string());
     let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -638,6 +639,45 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     assert!(thread.get::<ShadowReviewer>().is_none());
     assert!(thread.get::<super::RootWorker>().is_none());
 
+    test.thread_store
+        .persist_thread(root, PersistContext::Standard)
+        .await?;
+    let enrollment = thread
+        .get::<super::shadow::Enrollment>()
+        .context("enrollment")?;
+    let set_reviewer = |reviewer| {
+        test.codex
+            .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(reviewer),
+                ..Default::default()
+            })
+    };
+    // A delayed Auto Review notification must not override the root's live settings.
+    set_reviewer(ApprovalsReviewer::User).await?;
+    settings.on_config_changed(&session, thread, &disabled, &config);
+    assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
+    enrollment.drain().await;
+    assert!(thread.get::<ShadowReviewer>().is_none());
+    assert!(thread.get::<super::RootWorker>().is_none());
+
+    // Keep the root eligible so only cancellation can stop the queued restart.
+    set_reviewer(ApprovalsReviewer::AutoReview).await?;
+    settings.on_config_changed(&session, thread, &disabled, &config);
+    assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
+    settings.on_config_changed(&session, thread, &config, &disabled);
+    enrollment.drain().await;
+    assert!(thread.get::<ShadowReviewer>().is_none());
+    assert!(thread.get::<super::RootWorker>().is_none());
+
+    settings.on_config_changed(&session, thread, &disabled, &config);
+    assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
+    enrollment.drain().await;
+    let new_worker = thread.get::<super::RootWorker>().context("fresh board")?;
+    let new_reviewer = thread.get::<ShadowReviewer>().context("fresh reviewer")?;
+    assert!(!Arc::ptr_eq(&old_worker.reader, &new_worker.reader));
+    assert!(!Arc::ptr_eq(&old_reviewer.reviewer, &new_reviewer.reviewer));
+    assert!(!new_reviewer.cancellation.is_cancelled());
     lifecycle
         .on_thread_stop(ThreadStopInput {
             thread_store: thread,

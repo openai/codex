@@ -121,6 +121,15 @@ impl Host {
     }
 }
 
+#[derive(Clone, Copy)]
+enum IntakeStart {
+    Initial(
+        codex_protocol::protocol::ThreadHistoryMode,
+        HistoryInitialization,
+    ),
+    Restart,
+}
+
 #[derive(Clone)]
 enum BoardStorage {
     File(SqliteConfig),
@@ -193,25 +202,32 @@ impl Host {
         root: ThreadId,
         tree: &TreeDelivery,
         thread: &ExtensionData,
-        mode: codex_protocol::protocol::ThreadHistoryMode,
-        initialization: HistoryInitialization,
+        start: IntakeStart,
     ) -> anyhow::Result<()> {
         let history = self
             .manager
             .upgrade()
             .context("Guardian host stopped")?
             .thread_store();
-        if matches!(self.storage, BoardStorage::Memory) {
-            anyhow::ensure!(
-                matches!(
-                    initialization,
-                    HistoryInitialization::New | HistoryInitialization::Cleared
-                ),
-                "in-memory Guardian evidence requires a fresh root"
-            );
-        }
-        let cursor =
-            EvidenceCursor::at_thread_ready(history.as_ref(), root, mode, initialization).await?;
+        let cursor = match start {
+            IntakeStart::Initial(mode, initialization) => {
+                if matches!(self.storage, BoardStorage::Memory) {
+                    anyhow::ensure!(
+                        matches!(
+                            initialization,
+                            HistoryInitialization::New | HistoryInitialization::Cleared
+                        ),
+                        "in-memory Guardian evidence requires a fresh root"
+                    );
+                }
+                EvidenceCursor::at_thread_ready(history.as_ref(), root, mode, initialization)
+                    .await?
+            }
+            IntakeStart::Restart => {
+                history.flush_thread(root).await?;
+                EvidenceCursor::from_now(history.as_ref(), root).await?
+            }
+        };
         let board_host = (self.board_host)(root);
         let board = match &self.storage {
             BoardStorage::File(sqlite) => {
@@ -414,16 +430,8 @@ impl ThreadLifecycleContributor<Config> for Host {
             if actor != root {
                 return;
             }
-            if let Err(error) = self
-                .activate(
-                    root,
-                    &tree,
-                    input.thread_store,
-                    input.history_mode,
-                    input.history_initialization,
-                )
-                .await
-            {
+            let start = IntakeStart::Initial(input.history_mode, input.history_initialization);
+            if let Err(error) = self.activate(root, &tree, input.thread_store, start).await {
                 tracing::warn!(%root, error = %error, "Guardian intake unavailable");
                 return;
             }

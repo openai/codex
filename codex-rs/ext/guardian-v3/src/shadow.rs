@@ -1,4 +1,5 @@
-//! Shadow intake starts off the live path and stops when the root leaves Auto Review.
+//! A root keeps its enrollment across settings changes, but each stretch of
+//! Auto Review owns a separate board, housekeeper and set of reviewers.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -10,12 +11,14 @@ use codex_core::config::Config;
 use codex_core::guardian_review::ShadowReviewer;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
+use codex_guardian_reviewer::routes_approval_policy_to_guardian;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use tokio_util::task::TaskTracker;
 
 use super::ActorReviewer;
 use super::Host;
+use super::IntakeStart;
 use super::RootWorker;
 use super::TreeDelivery;
 
@@ -25,19 +28,28 @@ pub(super) struct Actor {
     pub(super) path: AgentPath,
 }
 
-#[derive(Default)]
 enum State {
     // Covers startup and the published worker. Both share one cancellation token.
     Running(Arc<TreeDelivery>),
     Off,
-    #[default]
-    PendingStart,
+    PendingStart(IntakeStart),
 }
 
-#[derive(Default)]
 pub(super) struct Enrollment {
     state: Mutex<State>,
     tasks: TaskTracker,
+}
+
+impl Default for Enrollment {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(State::PendingStart(IntakeStart::Initial(
+                codex_protocol::protocol::ThreadHistoryMode::Paginated,
+                codex_history::HistoryInitialization::New,
+            ))),
+            tasks: TaskTracker::new(),
+        }
+    }
 }
 
 impl Enrollment {
@@ -85,6 +97,14 @@ impl ConfigContributor<Config> for Host {
         };
         if !self.enabled(config) {
             enrollment.stop(thread);
+        } else {
+            let mut state = enrollment
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if matches!(*state, State::Off) {
+                *state = State::PendingStart(IntakeStart::Restart);
+            }
         }
     }
 }
@@ -117,8 +137,11 @@ impl Host {
         };
         let root = identity.root;
         if identity.actor != root {
-            // The root board may become available after a child starts.
-            if thread.get::<ShadowReviewer>().is_some() {
+            // A surviving child joins the new board on its next turn.
+            if thread
+                .get::<ShadowReviewer>()
+                .is_some_and(|r| !r.cancellation.is_cancelled())
+            {
                 return;
             }
             self.attach_shadow(thread, &identity, &self.tree_delivery(root));
@@ -131,7 +154,7 @@ impl Host {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let State::PendingStart = *state else {
+        let State::PendingStart(start) = *state else {
             return;
         };
         let tree = self.tree_delivery(root);
@@ -139,6 +162,8 @@ impl Host {
         let host = self.clone();
         let current = Arc::clone(&enrollment);
         enrollment.tasks.spawn(async move {
+            // On restart the durable tail may already include the enabling turn.
+            // Missing it is preferable to delaying the turn or replaying disabled history.
             let startup = async {
                 let manager = host.manager.upgrade().context("Guardian host stopped")?;
                 let root_thread = manager
@@ -146,18 +171,37 @@ impl Host {
                         std::ptr::eq(e, current.as_ref())
                     })
                     .await?;
+                // Config notifications can arrive out of order. Confirm the root
+                // still uses Auto Review before opening a board or reading history.
+                if matches!(start, IntakeStart::Restart) {
+                    let settings = root_thread.thread_settings_snapshot().await;
+                    if !routes_approval_policy_to_guardian(
+                        settings.approval_policy,
+                        settings.approvals_reviewer,
+                    ) {
+                        let mut state = current.state.lock().unwrap_or_else(PoisonError::into_inner);
+                        if !tree.stop.is_cancelled() {
+                            *state = State::Off;
+                        }
+                        return anyhow::Ok(());
+                    }
+                }
                 let thread = root_thread.thread_extension_data();
-                host.activate(root, &tree, thread, codex_protocol::protocol::ThreadHistoryMode::Paginated, codex_history::HistoryInitialization::New).await?;
+                host.activate(root, &tree, thread, start).await?;
                 host.attach_shadow(thread, &identity, &tree);
                 if !tree.stop.is_cancelled() {
-                    tracing::debug!(event.name = "guardian_v3.shadow_intake_started", %root, "Guardian shadow intake started");
+                    let event_name = match start {
+                        IntakeStart::Initial(..) => "guardian_v3.shadow_intake_started",
+                        IntakeStart::Restart => "guardian_v3.shadow_intake_restarted",
+                    };
+                    tracing::debug!(event.name = event_name, %root, "Guardian shadow intake started");
                 }
                 anyhow::Ok(())
             };
             if let Some(Err(_)) = tree.stop.run_until_cancelled(startup).await {
                 let mut state = current.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if !tree.stop.is_cancelled() {
-                    *state = State::PendingStart;
+                    *state = State::PendingStart(start);
                     drop(state);
                     tracing::warn!(%root, "Guardian shadow intake unavailable until the next turn");
                 }

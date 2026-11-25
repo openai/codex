@@ -28,6 +28,107 @@ fn expects_field(request: &responses::ResponsesRequest, field: &str) -> bool {
         .is_some()
 }
 
+#[tokio::test]
+async fn returning_to_auto_review_restarts_shadow_intake_without_replaying_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const FIRST: &str = "Review the first release.";
+    const PRIVATE: &str = "I will review the second release.";
+    const RESUME: &str = "Resume auto review.";
+    const LATER: &str = "Review the third release.";
+
+    let server = responses::start_mock_server().await;
+    let routed = Arc::new(Notify::new());
+    let later_routed = Arc::new(Notify::new());
+    let notify_first = routed.clone();
+    let notify_later = later_routed.clone();
+    let requests = responses::mount_response_handler(&server, move |request| {
+        let body = request.body_json();
+        let text =
+            if let Some(routes) = body["text"]["format"]["schema"]["properties"].get("routes") {
+                let count = routes["minItems"].as_u64().expect("routing batch size") as usize;
+                let input = body["input"].to_string();
+                if input.contains(FIRST) {
+                    notify_first.notify_one();
+                }
+                if input.contains(LATER) {
+                    notify_later.notify_one();
+                }
+                json!({
+                    "routes": vec![vec!["release"]; count],
+                    "descriptions": [{"channel": "release", "description": "Release policy"}],
+                })
+                .to_string()
+            } else {
+                "Done.".to_owned()
+            };
+        responses::sse_response(assistant_response(&text).expect("mock response"))
+    })
+    .await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_provider_config("supports_websockets = false")
+        .with_approval_policy("on-request")
+        .enable_feature(Feature::GuardianApproval)
+        .enable_feature(Feature::GuardianV2)
+        .enable_feature(Feature::GuardianV3Shadow)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_json_logging("warn,codex_guardian_v3::host=debug")
+        .build_initialized_with_timeout(TIMEOUT)
+        .await?;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    for (reviewer, text) in [
+        (ApprovalsReviewer::AutoReview, FIRST),
+        (ApprovalsReviewer::User, PRIVATE),
+        (ApprovalsReviewer::AutoReview, RESUME),
+        (ApprovalsReviewer::AutoReview, LATER),
+    ] {
+        let completed = app
+            .start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: thread.id.clone(),
+                approvals_reviewer: Some(reviewer),
+                input: vec![UserInput::Text {
+                    text: text.to_owned(),
+                    text_elements: vec![],
+                }],
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Completed);
+        if text == FIRST {
+            timeout(TIMEOUT, routed.notified()).await?;
+        } else if text == RESUME {
+            // The enabling turn may precede the new board's history cursor.
+            app.wait_for_json_log_event("guardian_v3.shadow_intake_restarted", TIMEOUT)
+                .await?;
+        }
+    }
+    timeout(TIMEOUT, later_routed.notified()).await?;
+    app.shutdown_gracefully().await?;
+    for request in requests
+        .requests()
+        .iter()
+        .filter(|r| expects_field(r, "routes"))
+    {
+        let body = request.body_json();
+        assert_eq!(body["model"], "gpt-5.6-luna");
+        let input = body["input"].to_string();
+        assert!(!input.contains(PRIVATE));
+        if input.contains(LATER) {
+            assert!(!input.contains(FIRST));
+        }
+    }
+    Ok(())
+}
+
 fn received_user_instruction(request: &responses::ResponsesRequest, text: &str) -> bool {
     request
         .inputs_of_type("function_call_output")
