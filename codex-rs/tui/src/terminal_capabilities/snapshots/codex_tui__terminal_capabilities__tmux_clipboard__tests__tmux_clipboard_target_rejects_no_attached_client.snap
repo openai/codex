@@ -1,6 +1,6 @@
 ---
-source: tui/src/clipboard_copy/tmux_tests.rs
-assertion_line: 58
+source: tui/src/terminal_capabilities/tmux_clipboard_tests.rs
+assertion_line: 60
 expression: "result.expect_err(\"no receiving client\")"
 ---
 tmux clipboard forwarding is unavailable: no attached client

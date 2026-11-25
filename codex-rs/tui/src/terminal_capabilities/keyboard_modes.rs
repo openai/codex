@@ -29,7 +29,7 @@ pub(crate) enum VscodeDetection {
     Unknown,
 }
 
-pub(super) fn keyboard_enhancement_disabled() -> bool {
+pub(crate) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
     let is_wsl = running_in_wsl();
     let vscode_detection = if is_wsl {
@@ -83,7 +83,7 @@ fn running_in_wsl() -> bool {
     }
 }
 
-pub(super) fn running_in_vscode_terminal() -> bool {
+pub(crate) fn running_in_vscode_terminal() -> bool {
     detect_vscode_terminal() == VscodeDetection::VsCode
 }
 
@@ -193,7 +193,7 @@ fn read_windows_vscode_detection_with_timeout(
 mod windows_term_program_tests;
 
 /// Restore keyboard reporting and return the settings from the same tmux probe.
-pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::Options {
+pub(crate) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::Options {
     let tmux_options = super::tmux::options();
     if keyboard_enhancement_disabled() {
         set_reports_key_releases(/*reports*/ false);
@@ -249,11 +249,11 @@ fn keyboard_enhancement_flags(
     }
 }
 
-pub(super) fn reports_key_releases() -> bool {
+pub(crate) fn reports_key_releases() -> bool {
     REPORTS_KEY_RELEASES.load(Ordering::Relaxed)
 }
 
-pub(super) fn set_reports_key_releases(reports: bool) {
+pub(crate) fn set_reports_key_releases(reports: bool) {
     REPORTS_KEY_RELEASES.store(reports, Ordering::Relaxed);
 }
 
@@ -278,13 +278,13 @@ fn tmux_should_enable_modify_other_keys_for(
     running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
 }
 
-pub(super) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
+pub(crate) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
     if execute!(writer, PopKeyboardEnhancementFlags, DisableModifyOtherKeys).is_ok() {
         set_reports_key_releases(/*reports*/ false);
     }
 }
 
-pub(super) fn reset_keyboard_reporting_after_exit(writer: &mut impl Write) {
+pub(crate) fn reset_keyboard_reporting_after_exit(writer: &mut impl Write) {
     if execute!(
         writer,
         PopKeyboardEnhancementFlags,
@@ -342,7 +342,7 @@ impl Command for EnableModifyOtherKeys {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct DisableModifyOtherKeys;
+pub(crate) struct DisableModifyOtherKeys;
 
 impl Command for DisableModifyOtherKeys {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {

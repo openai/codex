@@ -51,6 +51,8 @@ use crate::insert_history::HistoryLineWrapPolicy;
 use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::terminal_capabilities::keyboard_modes;
+use crate::terminal_capabilities::tmux;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::tui::alternate_screen::ALTERNATE_SCREEN;
@@ -71,7 +73,6 @@ mod history_tail;
 mod input_boundary;
 #[cfg(unix)]
 mod job_control;
-mod keyboard_modes;
 mod link_pointer;
 pub(crate) use link_pointer::PointerShape;
 #[cfg(test)]
@@ -94,7 +95,6 @@ mod startup_tests;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
-mod tmux;
 #[cfg(any(windows, test))]
 mod windows_console;
 #[cfg(any(windows, test))]

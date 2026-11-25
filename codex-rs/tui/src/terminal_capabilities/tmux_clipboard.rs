@@ -12,7 +12,7 @@ use std::path::Path;
 /// `load-buffer -w -` lets tmux read the text from stdin, keep a matching tmux
 /// paste buffer, and forward the contents to the outer terminal clipboard when
 /// possible without relying on DCS passthrough.
-pub(super) fn copy(text: &str) -> Result<(), String> {
+pub(crate) fn copy(text: &str) -> Result<(), String> {
     let executable = codex_utils_path::system_executable("tmux")
         .ok_or_else(|| "tmux is unavailable in the system PATH".to_string())?;
     let path = codex_utils_path::system_path()
@@ -145,5 +145,5 @@ fn command_output<const N: usize>(
 }
 
 #[cfg(test)]
-#[path = "tmux_tests.rs"]
+#[path = "tmux_clipboard_tests.rs"]
 mod tests;

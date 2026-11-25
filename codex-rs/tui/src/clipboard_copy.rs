@@ -21,7 +21,6 @@
 //! Image paste lives in `clipboard_paste`.
 
 pub(crate) mod primary;
-mod tmux;
 pub(crate) mod worker;
 mod wsl;
 
@@ -29,10 +28,10 @@ use crate::terminal_capabilities::ClipboardCapabilities;
 use crate::terminal_capabilities::ClipboardCopyMode;
 pub(crate) use crate::terminal_capabilities::is_ssh_session;
 use crate::terminal_capabilities::is_tmux_session;
+use crate::terminal_capabilities::tmux_clipboard::copy as tmux_clipboard_copy;
 use base64::Engine;
 use std::io::Write;
 use std::sync::Arc;
-use tmux::copy as tmux_clipboard_copy;
 
 /// Maximum raw bytes sent through tmux or directly encoded into OSC 52.
 /// Large payloads are rejected before encoding to avoid overwhelming the terminal.

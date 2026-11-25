@@ -17,6 +17,7 @@ use std::time::Duration;
 mod startup_replay;
 
 #[cfg(unix)]
+#[path = "terminal_identity.rs"]
 mod terminal_identity;
 
 #[cfg(any(windows, test))]

@@ -1,6 +1,13 @@
 //! Derives TUI capabilities from terminal identity and session environment.
 //! Keep environment-specific clipboard decisions here so delivery code only sees a strategy.
 
+pub(crate) mod images;
+pub(crate) mod keyboard_modes;
+pub(crate) mod resize_reflow_cap;
+pub(crate) mod terminal_probe;
+pub(crate) mod tmux;
+pub(crate) mod tmux_clipboard;
+
 use codex_terminal_detection::TerminalName;
 
 /// How clipboard writes should reach the attached terminal.

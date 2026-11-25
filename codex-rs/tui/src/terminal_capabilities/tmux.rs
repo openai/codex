@@ -20,7 +20,7 @@ static PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Capture policy for the current terminal setup, shared by fullscreen and overlays.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum MouseCapture {
+pub(crate) enum MouseCapture {
     #[default]
     Enabled,
     DisabledByTmux,
@@ -62,7 +62,7 @@ fn target() -> Option<String> {
 }
 
 /// A failed refresh must preserve the last confirmed policy, including mouse off.
-pub(super) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
+pub(crate) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
     let target = target()?;
     // tmux clears the socket's execute bits when its last client detaches.
     // Avoid spawning commands (and filling show-messages) on an idle server.
@@ -90,13 +90,13 @@ pub(super) fn sample_mouse(previous: MouseCapture) -> Option<MouseCapture> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct Options {
-    pub(super) extended_keys_format: Option<String>,
-    pub(super) mouse_capture: MouseCapture,
-    pub(super) kitty_image_base: Option<u32>,
+pub(crate) struct Options {
+    pub(crate) extended_keys_format: Option<String>,
+    pub(crate) mouse_capture: MouseCapture,
+    pub(crate) kitty_image_base: Option<u32>,
 }
 
-pub(super) fn options() -> Options {
+pub(crate) fn options() -> Options {
     let pane = target();
     if std::env::var_os("TMUX").is_none() && pane.is_none() {
         return Options::default();
