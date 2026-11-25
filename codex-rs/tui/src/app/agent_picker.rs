@@ -194,11 +194,7 @@ impl App {
             Ok(refresh) => refresh,
             Err(err) => {
                 tracing::warn!(%err, "failed to refresh agent picker descendants");
-                self.agent_navigation.prune_untracked_picker_exclusions();
-                if completion.follow_up_requested {
-                    self.refresh_agent_picker_threads(app_server, root);
-                }
-                return None;
+                AgentPickerThreadRefresh::default()
             }
         };
         for thread in refresh.threads {
@@ -249,8 +245,7 @@ impl App {
             if !live && update_liveness {
                 self.agent_navigation.set_running(thread_id, is_running);
             }
-            if sidebar_agent && !live && (is_running || thread.status == ThreadStatus::SystemError)
-            {
+            if sidebar_agent && !live {
                 self.seed_discovered_sidebar_agent(root, thread_id, &thread.status);
             }
         }
@@ -280,10 +275,19 @@ impl App {
 
         self.refresh_collab_history();
         self.refresh_agent_picker();
+        self.chat_widget.request_redraw();
+        let mut pending_link = pending_link.filter(|link| link.backend == app_server.backend_id());
         if completion.follow_up_requested {
+            if pending_link
+                .as_ref()
+                .is_some_and(|link| !self.is_confirmed_sidebar_agent(root, link.agent))
+                && let Some(pane) = self.sidebars.get_mut(&Some(root))
+            {
+                pane.agents.pending_link = pending_link.take();
+            }
             self.refresh_agent_picker_threads(app_server, root);
         }
-        pending_link.filter(|link| link.backend == app_server.backend_id())
+        pending_link.filter(|link| self.is_confirmed_sidebar_agent(root, link.agent))
     }
 
     pub(super) fn set_agent_picker_thread_visibility(

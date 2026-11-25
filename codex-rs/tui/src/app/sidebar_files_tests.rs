@@ -63,6 +63,7 @@ fn sidebar_files_chooser_matches_the_grouped_file_inventory() -> color_eyre::eyr
         name: "Reviewer".into(),
         symbol: "○",
         status: "Completed",
+        selectable: true,
     });
     pane.choice = pane.chat_tabs().file_start();
     pane.update_saved_chats(vec![ThreadId::new().into()]);

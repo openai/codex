@@ -31,8 +31,11 @@ impl State {
 
     pub(super) fn supersedes(self, previous: Option<Self>, start_hint: bool) -> bool {
         // Spawn activity can arrive after the child's own completion notification.
-        !(previous.is_some_and(Self::done)
-            && (matches!(self, Self::Idle | Self::Unavailable) || start_hint && !self.done()))
+        !previous.is_some_and(|previous| {
+            (previous.done()
+                && (matches!(self, Self::Idle | Self::Unavailable) || start_hint && !self.done()))
+                || (matches!(previous, Self::Running | Self::Waiting) && self == Self::Starting)
+        })
     }
 
     pub(super) fn done(self) -> bool {

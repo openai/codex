@@ -70,12 +70,19 @@ impl App {
         }
         self.zoomed_thread = None;
         let parent = self.current_displayed_thread_id();
-        let pane = self.sidebar_mut();
+        let sidebar_parent = self.sidebar_parent();
+        let pane = self.sidebars.entry(sidebar_parent).or_default();
         pane.closing_chats.retain(|_, task| !task.is_finished());
         pane.show(SidebarContent::Chooser, PaneFocus::Sidebar);
         if pane.creation.is_none()
             && let Some(parent) = parent
         {
+            if self.primary_thread_id == Some(parent) {
+                pane.sync_agent_rows(&self.agent_navigation);
+                if pane.agents.rows.iter().any(|agent| !agent.selectable) {
+                    self.refresh_agent_picker_threads(server, parent);
+                }
+            }
             self.refresh_saved_chats(server, parent);
             self.refresh_sidebar_files(server, parent).await;
         }
@@ -535,6 +542,10 @@ impl App {
             && pane.creation.is_none()
             && let Some(agent) = pane.chat_tabs().agent(index).map(|agent| agent.id)
         {
+            if pane.chat_tabs().agent_is_disabled(index) {
+                self.guard_chooser_key(activation);
+                return true;
+            }
             pane.choice = index;
             if self
                 .agent_navigation

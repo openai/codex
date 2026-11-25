@@ -54,8 +54,8 @@ fn idle_preserves_explicit_outcome_until_new_work() {
     observe(&thread_status(ThreadStatus::Idle), &mut overview);
     observe(&activity(SubAgentActivityKind::Interacted), &mut overview);
     observe(&activity(SubAgentActivityKind::Started), &mut overview);
-    observe(
-        &completed_item(ThreadItemPayload::CollabAgentToolCall {
+    let spawn = |status| {
+        completed_item(ThreadItemPayload::CollabAgentToolCall {
             id: "spawn".into(),
             tool: CollabAgentTool::SpawnAgent,
             status: codex_app_server_protocol::CollabAgentToolCallStatus::Completed,
@@ -67,13 +67,13 @@ fn idle_preserves_explicit_outcome_until_new_work() {
             agents_states: HashMap::from([(
                 id.to_string(),
                 codex_app_server_protocol::CollabAgentState {
-                    status: CollabAgentStatus::Running,
+                    status,
                     message: None,
                 },
             )]),
-        }),
-        &mut overview,
-    );
+        })
+    };
+    observe(&spawn(CollabAgentStatus::Running), &mut overview);
     assert_eq!(overview.states, HashMap::from([(id, State::Completed)]));
     observe(
         &thread_status(ThreadStatus::Active {
@@ -81,6 +81,8 @@ fn idle_preserves_explicit_outcome_until_new_work() {
         }),
         &mut overview,
     );
+    // A delayed spawn notification must not disable a transcript that is already running.
+    observe(&spawn(CollabAgentStatus::PendingInit), &mut overview);
     assert_eq!(overview.states, HashMap::from([(id, State::Running)]));
     observe(&completed(TurnStatus::Failed), &mut overview);
     observe(&thread_status(ThreadStatus::Idle), &mut overview);
@@ -126,6 +128,11 @@ async fn chooser_lists_subagents_by_observed_outcome() -> color_eyre::Result<()>
         );
     }
     app.agent_navigation.mark_parent_owned(first);
+    app.sidebar_mut()
+        .agents
+        .states
+        .insert(first, State::Starting);
+    assert!(app.confirm_sidebar_agent(root, second));
     app.observe_sidebar_agent_event(&ServerNotification::TurnCompleted(
         TurnCompletedNotification {
             thread_id: second.to_string(),
@@ -175,15 +182,21 @@ async fn chooser_lists_subagents_by_observed_outcome() -> color_eyre::Result<()>
 }
 
 #[tokio::test]
-async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result<()> {
+async fn discovery_updates_provisional_status_without_overwriting_newer_outcomes()
+-> color_eyre::Result<()> {
     use crate::app::owned_transcript::tests::attach_thread;
     use crate::app::test_support::enable_side_retention;
+    use crate::app::test_support::side_frame;
     use crate::app::tests::make_test_app_with_channels;
+    use crate::tui::TuiEvent;
+    use crossterm::event::KeyCode;
+    use ratatui::layout::Size;
 
-    let (mut app, _events, _ops) = Box::pin(make_test_app_with_channels()).await;
+    let (mut app, mut events, _ops) = Box::pin(make_test_app_with_channels()).await;
     enable_side_retention(&mut app)?;
-    let config = app.chat_widget.config_ref();
-    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(config)).await?;
+    app.local_settings.tui.animations = false;
+    let config = app.chat_widget.config_ref().clone();
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
     let root = ThreadId::new();
     let child = ThreadId::from_string(
         &app_test_support::create_fake_paginated_rollout(
@@ -210,7 +223,18 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
     let mut failed_thread = thread.clone();
     failed_thread.id = failed.to_string();
     failed_thread.status = ThreadStatus::SystemError;
-    let outcomes = [child, completed]
+    let idle = ThreadId::new();
+    let mut idle_thread = thread.clone();
+    idle_thread.id = idle.to_string();
+    idle_thread.status = ThreadStatus::Idle;
+    let saved = ThreadId::new();
+    let mut saved_thread = idle_thread.clone();
+    saved_thread.id = saved.to_string();
+    saved_thread.status = ThreadStatus::NotLoaded;
+    let unloaded = ThreadId::new();
+    let mut unloaded_thread = saved_thread.clone();
+    unloaded_thread.id = unloaded.to_string();
+    let outcomes = [child, completed, saved]
         .into_iter()
         .flat_map(|id| {
             [
@@ -235,6 +259,37 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
             status: thread.status.clone(),
         },
     ));
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+            matches!(event, crate::app_event::AppEvent::DiscoverSidebarAgents(id) if id == root)
+        }),
+        "a live status update must start discovery even without chooser input"
+    );
+    let request = app
+        .agent_navigation
+        .begin_picker_refresh(root)
+        .expect("start discovery");
+    assert!(
+        app.apply_agent_picker_thread_refresh(
+            &server,
+            root,
+            request,
+            Err("discovery failed".into()),
+        )
+        .is_none()
+    );
+    app.observe_sidebar_agent_event(&ServerNotification::ThreadStatusChanged(
+        ThreadStatusChangedNotification {
+            thread_id: child.to_string(),
+            status: thread.status.clone(),
+        },
+    ));
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+            matches!(event, crate::app_event::AppEvent::DiscoverSidebarAgents(id) if id == root)
+        }),
+        "a later active update must retry discovery for a running unconfirmed agent"
+    );
     app.restore_sidebar_agent_outcomes(
         root,
         &[crate::app::tests::test_turn(
@@ -244,10 +299,20 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
         )],
         super::super::OutcomeReplay::Reconnect,
     );
-    for id in [child, completed] {
+    for id in [idle, unloaded] {
+        assert!(app.register_sidebar_agent(root, id));
+        app.sidebar_mut().agents.states.insert(id, State::Starting);
+    }
+    for (id, name) in [
+        (child, "worker"),
+        (completed, "worker"),
+        (idle, "idle-worker"),
+        (saved, "worker"),
+        (unloaded, "saved-worker"),
+    ] {
         app.upsert_agent_picker_thread(
             id,
-            Some("worker".into()),
+            Some(name.into()),
             /*agent_role*/ None,
             /*is_closed*/ false,
         );
@@ -258,14 +323,42 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
             .agents
             .chooser_rows(&app.agent_navigation)
             .into_iter()
-            .map(|row| (row.id, row.status))
-            .collect::<Vec<_>>()
+            .map(|row| (row.id, (row.status, row.selectable)))
+            .collect::<HashMap<_, _>>()
     };
-    assert!(rows(&app).iter().all(|(_, state)| *state == "Completed"));
-    let request = app
-        .agent_navigation
-        .begin_picker_refresh(root)
-        .expect("start discovery");
+    assert_eq!(
+        rows(&app),
+        HashMap::from([
+            (child, ("Transcript unavailable", false)),
+            (completed, ("Transcript unavailable", false)),
+            (idle, ("Starting", false)),
+            (saved, ("Transcript unavailable", false)),
+            (unloaded, ("Starting", false)),
+        ])
+    );
+    // No frame has drawn the hidden chooser since discovery failed.
+    assert!(app.sidebar().unwrap().agents.rows.is_empty());
+    app.keymap.app.focus_sidebar_tabs = vec![crate::key_hint::plain(KeyCode::F(6))];
+    let size = Size::new(/*width*/ 210, /*height*/ 24);
+    let mut tui = crate::tui::test_support::make_test_tui_with_size(size)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::F(6).into())))
+        .await?;
+    assert_eq!(
+        app.chooser_focus(),
+        Some(crate::app::sidebar::PaneFocus::Sidebar)
+    );
+    assert!(
+        app.agent_navigation.picker_refresh.is_some(),
+        "opening the hidden chooser retries discovery before the first draw"
+    );
+    let request = loop {
+        if let crate::app_event::AppEvent::AgentPickerThreadsLoaded { request_id, .. } =
+            events.recv().await.expect("app event channel")
+        {
+            break request_id;
+        }
+    };
     // A completion arriving while the refresh is in flight wins over the active snapshot.
     app.observe_sidebar_agent_event(&ServerNotification::TurnCompleted(
         TurnCompletedNotification {
@@ -279,7 +372,14 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
             root,
             request,
             Ok(crate::app_event::AgentPickerThreadRefresh {
-                threads: vec![thread, completed_thread, failed_thread],
+                threads: vec![
+                    thread,
+                    completed_thread,
+                    failed_thread,
+                    idle_thread,
+                    saved_thread,
+                    unloaded_thread,
+                ],
                 ..Default::default()
             }),
         )
@@ -287,12 +387,45 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
     );
     assert_eq!(
         rows(&app),
-        vec![
-            (child, "Running"),
-            (completed, "Completed"),
-            (failed, "Failed")
-        ]
+        HashMap::from([
+            (child, ("Running", true)),
+            (completed, ("Completed", true)),
+            (failed, ("Failed", true)),
+            (idle, ("Idle", true)),
+            (saved, ("Completed", true)),
+            (unloaded, ("Unavailable", true)),
+        ])
     );
+    app.restore_sidebar_agent_outcomes(
+        root,
+        &[crate::app::tests::test_turn(
+            "reconnected-turn",
+            TurnStatus::Completed,
+            vec![ThreadItemPayload::SubAgentActivity {
+                id: "completed-while-disconnected".into(),
+                kind: SubAgentActivityKind::Completed,
+                agent_thread_id: idle.to_string(),
+                agent_path: "/root/idle-worker".into(),
+                model: None,
+                reasoning_effort: None,
+            }],
+        )],
+        super::super::OutcomeReplay::Reconnect,
+    );
+    assert_eq!(rows(&app).get(&idle), Some(&("Completed", true)));
+    let screen = side_frame(&mut app, &mut tui, size)?;
+    let ready_rows = screen
+        .lines()
+        .filter_map(|line| line.split_once('│').map(|(_, row)| row))
+        .filter(|row| row.contains("saved-worker") || row.contains("idle-worker"))
+        .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(ready_rows, @r"
+    ○ saved-worker Unavailable
+    ○ idle-worker Completed
+    ");
+    tui.set_owned_screen(/*owned*/ false)?;
     server.shutdown().await?;
     Ok(())
 }
@@ -383,7 +516,7 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
     ))?;
     tui.set_owned_screen(/*owned*/ true)?;
     // Hold the actual discovery response so the first click races it deterministically.
-    let discovery = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let mut discovery = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let event = rx.recv().await.expect("app event channel");
             if matches!(
@@ -396,6 +529,11 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
         }
     })
     .await??;
+    let crate::app_event::AppEvent::AgentPickerThreadsLoaded { result, .. } = &mut discovery else {
+        unreachable!();
+    };
+    // Model the first request taking its snapshot before either agent was spawned.
+    result.as_mut().expect("initial discovery").threads.clear();
     let activity = ThreadItemPayload::SubAgentActivity {
         id: "started".into(),
         agent_thread_id: child.to_string(),
@@ -404,6 +542,84 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
         model: None,
         reasoning_effort: None,
     };
+    // Parent notifications can expose a running row before an earlier lookup has finished.
+    app.observe_sidebar_agent_event(&ServerNotification::ItemCompleted(
+        ItemCompletedNotification::new(
+            root.to_string(),
+            "parent-turn".into(),
+            activity.clone(),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        ),
+    ));
+    assert!(
+        app.agent_navigation
+            .picker_refresh
+            .as_ref()
+            .unwrap()
+            .follow_up_requested,
+        "a lookup that started before the spawn needs a follow-up"
+    );
+    use crate::app::sidebar::PaneFocus;
+    use crate::app::sidebar::SidebarContent;
+    app.sidebar_mut()
+        .show(SidebarContent::Chooser, PaneFocus::Sidebar);
+    let size = Size::new(/*width*/ 210, /*height*/ 24);
+    let screen = side_frame(&mut app, &mut tui, size)?;
+    let loading_row = screen
+        .lines()
+        .filter_map(|line| line.split_once('│').map(|(_, row)| row.trim()))
+        .find(|row| row.contains("reviewer"))
+        .expect("visible agent loading row")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    insta::assert_snapshot!(loading_row, @"● reviewer Loading transcript…");
+    let (row, column) = screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            let offset = line.find("reviewer")?;
+            Some((row as u16, line[..offset].chars().count() as u16))
+        })
+        .expect("visible disabled row");
+    let status_column = screen.lines().nth(usize::from(row)).unwrap();
+    let status_column = status_column[..status_column.find("Loading transcript…").unwrap()]
+        .chars()
+        .count() as u16;
+    let buffer = tui.terminal.previous_buffer();
+    for col in [column, status_column] {
+        assert!(
+            buffer[(col, row)]
+                .modifier
+                .contains(ratatui::style::Modifier::DIM),
+            "the disabled name and status both use dim text"
+        );
+    }
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let click = crate::app::owned_transcript::tests::mouse(kind, column, row);
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, click)).await?;
+    }
+    assert_eq!(
+        app.sidebar().unwrap().choice,
+        0,
+        "click skips the disabled row"
+    );
+    assert_eq!(app.chooser_focus(), Some(PaneFocus::Sidebar));
+    for key in [KeyCode::Down, KeyCode::End, KeyCode::PageDown] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+        assert_eq!(
+            app.sidebar().unwrap().choice,
+            0,
+            "{key:?} skips the disabled row"
+        );
+    }
+    assert_eq!(app.docked_agent(), None);
+    app.sidebar_mut()
+        .show(SidebarContent::Chooser, PaneFocus::Main);
     let cell = crate::multi_agents::sub_agent_activity_history_cell(&activity).unwrap();
     use crate::history_cell::HistoryCell;
     let lines = cell.display_hyperlink_lines(/*width*/ 80);
@@ -473,6 +689,24 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
     }
     assert_eq!(app.current_displayed_thread_id(), Some(root));
     Box::pin(app.handle_event(&mut tui, &mut server, discovery)).await?;
+    assert_eq!(
+        app.sidebar()
+            .unwrap()
+            .agents
+            .pending_link
+            .as_ref()
+            .map(|link| link.agent),
+        Some(child),
+        "a click stays pending while the follow-up checks ancestry"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while app.current_displayed_thread_id() == Some(root) {
+            let event = rx.recv().await.expect("app event channel");
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        }
+        Ok::<_, color_eyre::Report>(())
+    })
+    .await??;
     while let Ok(event) = rx.try_recv() {
         Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
     }
@@ -528,6 +762,24 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
     assert_eq!(app.docked_agent(), None);
     let screen = side_frame(&mut app, &mut tui, Size::new(140, 20))?;
     assert!(screen.contains("Subagents  2"), "{screen}");
+    let (row, column) = screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            let (main, sidebar) = line.split_once('│')?;
+            let offset = sidebar.find("reviewer")?;
+            Some((
+                row as u16,
+                (main.chars().count() + 1 + sidebar[..offset].chars().count()) as u16,
+            ))
+        })
+        .expect("visible selectable row");
+    assert!(
+        !tui.terminal.previous_buffer()[(column, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "the name uses normal emphasis once the transcript is available"
+    );
     let pane = app.sidebar().unwrap();
     assert!(
         !pane

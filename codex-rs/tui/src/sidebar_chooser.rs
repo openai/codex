@@ -21,6 +21,7 @@ use codex_utils_path_uri::PathUri;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -107,7 +108,9 @@ pub(crate) fn footer(
     let movement = [ListAction::MoveUp, ListAction::MoveDown]
         .into_iter()
         .filter(|_| {
-            new_chat == NewChatState::Available || !tabs.files.is_empty() || !tabs.agents.is_empty()
+            new_chat == NewChatState::Available
+                || !tabs.files.is_empty()
+                || tabs.agents.iter().any(|agent| agent.selectable)
         })
         .filter_map(hint)
         .collect::<Vec<_>>()
@@ -120,6 +123,7 @@ pub(crate) fn footer(
             hint(ListAction::Accept)
                 .filter(|_| {
                     visible
+                        && !tabs.agent_is_disabled(choice)
                         && (new_chat == NewChatState::Available
                             || selected_file.is_some()
                             || tabs.agent(choice).is_some())
@@ -206,6 +210,7 @@ pub(crate) struct AgentRow {
     pub(crate) name: String,
     pub(crate) symbol: &'static str,
     pub(crate) status: &'static str,
+    pub(crate) selectable: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -248,6 +253,10 @@ impl<'a> ChatTabs<'a> {
             .iter()
             .position(|agent| agent.id == id)
             .map(|offset| self.first_agent() + offset)
+    }
+
+    pub(crate) fn agent_is_disabled(self, index: usize) -> bool {
+        self.agent(index).is_some_and(|agent| !agent.selectable)
     }
 
     fn first_agent(self) -> usize {
@@ -502,6 +511,14 @@ pub(crate) fn navigate(
             .max((choice + 1).min(last)),
         _ => return (choice, tabs.scroll),
     };
+    let selectable = |index: &usize| !tabs.agent_is_disabled(*index);
+    let choice = match action {
+        ListAction::MoveDown | ListAction::PageDown => (choice..=last)
+            .find(selectable)
+            .or_else(|| (0..choice).rev().find(selectable)),
+        _ => (0..=choice).rev().find(selectable),
+    }
+    .unwrap_or_default();
     if choice == 0 {
         return (choice, ChooserScroll::default());
     }
@@ -542,6 +559,7 @@ pub(crate) fn row_targets(
             let first = lines.start.max(start);
             let last = lines.end.min(end);
             (first < last
+                && !tabs.agent_is_disabled(index)
                 && match tabs.file(index) {
                     Some(_) => tabs.file_preview_unavailable.is_none(),
                     None => new_chat == NewChatState::Available || tabs.agent(index).is_some(),
@@ -802,6 +820,12 @@ pub(crate) fn paint(
     {
         let (marker, fill, subtitle) = row_style(index);
         if let Some(agent) = tabs.agent(index) {
+            let (marker, fill, subtitle) = if agent.selectable {
+                (marker, fill, subtitle)
+            } else {
+                let disabled = Style::default().dim();
+                (' ', disabled, disabled)
+            };
             let name = format!("{marker} {} {}", agent.symbol, agent.name);
             let status = agent.status;
             if rows.wide {

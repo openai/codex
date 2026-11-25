@@ -73,12 +73,22 @@ impl Overview {
                             )
                         }
                     });
-                let (symbol, status) = state.label();
+                let (symbol, label) = state.label();
+                let confirmed = self.confirmed_members.contains(&id);
+                let selectable = confirmed && state != State::Starting;
+                let status = if selectable || state == State::Starting {
+                    label
+                } else if nav.picker_refresh.is_some() {
+                    "Loading transcript…"
+                } else {
+                    "Transcript unavailable"
+                };
                 AgentRow {
                     id,
                     name,
                     symbol,
                     status,
+                    selectable,
                 }
             })
             .collect()
@@ -258,21 +268,37 @@ impl App {
         }
     }
 
-    // Active or failed discovery supersedes saved history. Live notifications can arrive during
-    // discovery and take precedence over its response.
+    // Idle and unloaded threads have readable history. Clear a provisional start and let
+    // navigation supply the status so reconnect can still restore explicit outcomes.
     pub(super) fn seed_discovered_sidebar_agent(
         &mut self,
         root: ThreadId,
         child: ThreadId,
         status: &ThreadStatus,
     ) {
-        if let Some(pane) = self.sidebars.get_mut(&Some(root))
-            && (pane.agents.restored_outcomes.remove(&child)
-                || !pane.agents.states.contains_key(&child))
-        {
-            pane.agents
-                .states
-                .insert(child, status::thread_status(status));
+        let Some(pane) = self.sidebars.get_mut(&Some(root)) else {
+            return;
+        };
+        match status {
+            ThreadStatus::Idle | ThreadStatus::NotLoaded => {
+                if pane.agents.states.get(&child) == Some(&State::Starting) {
+                    pane.agents.states.remove(&child);
+                }
+            }
+            ThreadStatus::Active { .. } | ThreadStatus::SystemError => {
+                // A discovery snapshot can supersede saved history. Live updates take precedence.
+                if pane.agents.restored_outcomes.remove(&child)
+                    || pane
+                        .agents
+                        .states
+                        .get(&child)
+                        .is_none_or(|state| *state == State::Starting)
+                {
+                    pane.agents
+                        .states
+                        .insert(child, status::thread_status(status));
+                }
+            }
         }
     }
 
@@ -300,6 +326,16 @@ impl App {
             self.chat_widget.request_redraw();
         }
         true
+    }
+
+    fn discover_observed_sidebar_agent(&mut self, child: ThreadId) {
+        if let Some(root) = self.primary_thread_id
+            && !self.is_confirmed_sidebar_agent(root, child)
+            && !self.agent_navigation.queue_picker_refresh(root)
+        {
+            self.app_event_tx
+                .send(AppEvent::DiscoverSidebarAgents(root));
+        }
     }
 
     pub(in crate::app) fn observe_sidebar_agent_event(&mut self, event: &ServerNotification) {
@@ -336,8 +372,11 @@ impl App {
                 if let Ok(id) = ThreadId::from_string(&e.thread_id)
                     && self.is_sidebar_agent(id)
                 {
-                    self.agent_navigation
-                        .set_running(id, matches!(e.status, ThreadStatus::Active { .. }));
+                    let running = matches!(e.status, ThreadStatus::Active { .. });
+                    if running {
+                        self.discover_observed_sidebar_agent(id);
+                    }
+                    self.agent_navigation.set_running(id, running);
                     self.chat_widget.request_redraw();
                 }
             }
@@ -352,6 +391,7 @@ impl App {
                 };
                 if let Some(activity) = sub_agent_activity_display(item) {
                     if self.register_sidebar_agent(parent, activity.thread_id) {
+                        self.discover_observed_sidebar_agent(activity.thread_id);
                         self.agent_navigation.record_sub_agent_activity(activity);
                         self.chat_widget.request_redraw();
                     }
@@ -372,12 +412,14 @@ impl App {
                         }
                         if *tool == CollabAgentTool::SpawnAgent
                             && self.register_sidebar_agent(parent, child)
-                            && self.agent_navigation.get(&child).is_none()
                         {
-                            self.upsert_agent_picker_thread(
-                                child, /*agent_nickname*/ None, /*agent_role*/ None,
-                                /*is_closed*/ false,
-                            );
+                            self.discover_observed_sidebar_agent(child);
+                            if self.agent_navigation.get(&child).is_none() {
+                                self.upsert_agent_picker_thread(
+                                    child, /*agent_nickname*/ None, /*agent_role*/ None,
+                                    /*is_closed*/ false,
+                                );
+                            }
                         }
                         if let Some(state) = state
                             && self.is_sidebar_agent(child)

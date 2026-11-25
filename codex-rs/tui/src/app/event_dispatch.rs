@@ -3740,6 +3740,7 @@ impl App {
             AppEvent::DiscoverSidebarAgents(root) => {
                 if self.primary_thread_id == Some(root) && !self.reconnect.offline {
                     self.refresh_agent_picker_threads(app_server, root);
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::AgentPickerThreadsLoaded {

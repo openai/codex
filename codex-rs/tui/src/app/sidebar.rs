@@ -253,7 +253,7 @@ impl SidebarPane {
             .ne(rows.iter().map(|agent| agent.id));
         let selection = self.input_state().choice;
         self.agents.rows = rows;
-        if reordered {
+        if reordered || self.chat_tabs().agent_is_disabled(self.choice) {
             self.restore_choice(selection);
             self.tabs_revision += 1;
         }
@@ -264,7 +264,9 @@ impl SidebarPane {
         let index = match selection {
             ChooserSelection::New => Some(0),
             ChooserSelection::Chat(id) => tabs.choice_index(id),
-            ChooserSelection::Agent(id) => tabs.agent_index(id),
+            ChooserSelection::Agent(id) => tabs
+                .agent_index(id)
+                .filter(|&index| !tabs.agent_is_disabled(index)),
             ChooserSelection::File(offset) => {
                 Some(tabs.file_start() + offset).filter(|&index| tabs.file(index).is_some())
             }
