@@ -47,6 +47,10 @@ pub(crate) enum UiNode {
         props: RowProps,
         children: Vec<Option<UiNode>>,
     },
+    Box {
+        props: BoxProps,
+        children: Vec<Option<UiNode>>,
+    },
     Col {
         props: ColProps,
         children: Vec<Option<UiNode>>,
@@ -66,6 +70,24 @@ pub(crate) enum UiNode {
     },
     #[serde(untagged)]
     String(String),
+}
+
+/// A box defaults to a column when direction is omitted.
+/// Horizontal boxes group adjacent strings even without justify. Use separate elements for a gap.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
+pub(crate) enum BoxProps {
+    Directed(DirectedBox),
+    DefaultColumn(#[cfg_attr(test, ts(type = "BoxColumnProps & { direction?: never }"))] ColProps),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "direction", rename_all = "lowercase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
+pub(crate) enum DirectedBox {
+    Row(RowProps),
+    Col(#[cfg_attr(test, ts(type = "BoxColumnProps"))] ColProps),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

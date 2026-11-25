@@ -43,6 +43,7 @@ impl std::str::FromStr for UiTree {
                 | UiNode::Underline { children }
                 | UiNode::Link { children, .. }
                 | UiNode::Row { children, .. }
+                | UiNode::Box { children, .. }
                 | UiNode::Col { children, .. } => {
                     pending.extend(children.iter().flatten().map(|child| (child, depth + 1)));
                 }

@@ -14,6 +14,12 @@ export type ApprovalPolicy = "untrusted" | "on-request" | "granular" | "never";
 
 export type ApprovalReviewer = "user" | "auto-review";
 
+/**
+ * A box defaults to a column when direction is omitted.
+ * Horizontal boxes group adjacent strings even without justify. Use separate elements for a gap.
+ */
+export type BoxProps = DirectedBox | BoxColumnProps & { direction?: never };
+
 export type ColProps = {
 /**
  * Blank terminal rows between flex items, as a non-negative JavaScript-safe integer.
@@ -29,9 +35,11 @@ export type Context = { context_window_size?: number, used_tokens?: number, used
 
 export type Cost = { total_cost_usd?: number, total_credits?: number, };
 
+export type DirectedBox = { "direction": "row" } & RowProps | { "direction": "col" } & BoxColumnProps;
+
 export type DisplayMode = "standard" | "raw";
 
-export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
+export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "box", props: BoxProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
 
 export type FileSystem = { "type": "restricted" } | { "type": "unrestricted" };
 
@@ -114,7 +122,9 @@ export type UnderlineElement = Extract<Element, { type: "underline" }>;
 export type LinkElement = Extract<Element, { type: "link" }>;
 export type RowElement = Extract<Element, { type: "row" }>;
 export type ColElement = Extract<Element, { type: "col" }>;
+export type BoxElement = Extract<Element, { type: "box" }>;
 export type CodeElement = Extract<Element, { type: "code" }>;
+type BoxColumnProps = ColProps & { [K in Exclude<keyof RowProps, keyof ColProps>]?: never };
 export type RateLimitWindow = {
 /**
  * Percentage of the allowance consumed during the window. Can exceed 100.

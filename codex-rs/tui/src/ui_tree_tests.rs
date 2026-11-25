@@ -287,6 +287,47 @@ fn clamped_link_keeps_whole_graphemes_and_an_unlinked_marker() {
 }
 
 #[test]
+fn empty_horizontal_box_keeps_its_flex_slot_and_separates_text_blocks() {
+    let empty = json!({"type":"box","props":{"direction":"row","gap":0},"children":[]});
+    let children = json!(["A", empty, "B"]);
+    for props in [json!({"gap":1}), json!({"gap":1,"justify":"start"})] {
+        let row = tree(json!({"type":"row","props":props,"children":children}));
+        assert_eq!(painted_rows(&row, Size::new(9, 1)), ["A  B"]);
+    }
+    let block = tree(json!({"type":"text","children":children}));
+    assert_eq!(painted_rows(&block, Size::new(9, 3)), ["A", "B"]);
+}
+
+#[test]
+fn box_defaults_to_a_column_and_uses_row_options_in_row_direction() {
+    let make = |props: Value| json!({"type":"box","props":props,"children":["a","b",null,{"type":"text","children":["c"]}]});
+    let bounds = Size::new(5, 4);
+    for props in [json!({"gap":1}), json!({"direction":"col","gap":1})] {
+        let value = make(props);
+        assert_eq!(
+            serde_json::to_value(parse(value.clone()).unwrap()).unwrap(),
+            value
+        );
+        assert_eq!(painted_rows(&tree(value), bounds), ["ab", "", "c"]);
+    }
+    let row = make(json!({"direction":"row","gap":1,"wrap":"wrap","justify":"end"}));
+    assert_eq!(
+        painted_rows(&tree(row.clone()), Size::new(2, 3)),
+        ["ab", " c"]
+    );
+    let nested = tree(json!({"type":"text","children":["x",row,"y"]}));
+    insta::assert_snapshot!(painted_rows(&nested, bounds).join("\n"), @"x\n ab c\ny");
+    for props in [
+        json!({}),
+        json!({"direction":"vertical","gap":0}),
+        json!({"direction":"col","gap":0,"justify":"end"}),
+        json!({"gap":-1}),
+    ] {
+        assert!(parse(make(props)).is_err());
+    }
+}
+
+#[test]
 fn wrapped_code_keeps_a_leading_hyphen_with_the_hash() {
     let bounds = Size::new(8, 3);
     for children in [

@@ -3,6 +3,8 @@
 use super::text::InlineText;
 use super::text::Paint;
 use super::text::PreparedText;
+use crate::ui_tree::BoxProps;
+use crate::ui_tree::DirectedBox;
 use crate::ui_tree::RowProps;
 use crate::ui_tree::RowWrap;
 use crate::ui_tree::UiNode;
@@ -203,17 +205,19 @@ impl PreparedNode {
                 child => {
                     items.extend(Self::text(std::mem::take(&mut strings)));
                     // An explicit empty element still separates flex gaps.
-                    items.push(
-                        Self::from_node(child, paint.clone()).unwrap_or_else(|| Self {
-                            kind: NodeKind::Empty,
-                            widths: Widths::default(),
-                        }),
-                    );
+                    items.push(Self::flex_item(child, paint));
                 }
             }
         }
         items.extend(Self::text(strings));
         items
+    }
+
+    fn flex_item(child: UiNode, paint: &Paint) -> Self {
+        Self::from_node(child, paint.clone()).unwrap_or_else(|| Self {
+            kind: NodeKind::Empty,
+            widths: Widths::default(),
+        })
     }
 
     fn collect_inline(flow: &mut Flow, inline: &mut InlineText, node: UiNode, mut paint: Paint) {
@@ -232,6 +236,22 @@ impl PreparedNode {
                     .modifiers
                     .remove_modifier(ratatui::style::Modifier::BOLD);
                 children
+            }
+            UiNode::Box { props, children } => {
+                let node = match props {
+                    BoxProps::DefaultColumn(props)
+                    | BoxProps::Directed(DirectedBox::Col(props)) => {
+                        UiNode::Col { props, children }
+                    }
+                    BoxProps::Directed(DirectedBox::Row(mut props)) => {
+                        // Boxes always use flex items, including anonymous runs of strings.
+                        props.justify.get_or_insert_default();
+                        UiNode::Row { props, children }
+                    }
+                };
+                flow.finish_line(inline);
+                flow.blocks.push(Self::flex_item(node, &paint));
+                return;
             }
             UiNode::Col { props, children } => {
                 flow.finish_line(inline);
