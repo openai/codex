@@ -215,6 +215,7 @@ impl App {
                     .tui
                     .mouse_scroll_speed
                     .unwrap_or(/*default*/ 1.0),
+                tui.terminal.bidi_layout,
             )
             .with_copy_on_select_clear_selection(
                 self.local_settings.tui.copy_on_select_clear_selection,

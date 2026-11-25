@@ -413,7 +413,18 @@ impl TranscriptView {
             Scope::Block(block) => block.swap(),
         }
         mode.preferred_column = None;
+        // A mouse sweep can include bytes beyond both pointer glyphs. Swapping
+        // changes which endpoint moves, but only motion should resize the range.
+        let swept = self
+            .selection
+            .as_ref()
+            .and_then(|s| s.mouse_endpoints.map(|(a, b)| (s.end, s.start, (b, a))));
         self.sync_select_range(cells);
+        if let (Some(selection), Some((start, end, pointers))) = (&mut self.selection, swept) {
+            selection.start = start;
+            selection.end = end;
+            selection.mouse_endpoints = Some(pointers);
+        }
         self.reveal_select_cursor(cells);
     }
 
@@ -511,9 +522,16 @@ impl TranscriptView {
             return;
         };
         let (start, end, unit) = (selection.start, selection.end, selection.unit());
+        let mouse_endpoints = selection.mouse_endpoints;
         let snapshot = self.snapshot_cells();
         let cells = snapshot.as_deref().unwrap_or_default();
         let mark = has_range.then(|| {
+            if let Some((anchor, active)) = mouse_endpoints {
+                return Mark {
+                    active,
+                    ..Mark::at(anchor, unit)
+                };
+            }
             if self.anchor_order(cells, start) <= self.anchor_order(cells, end) {
                 let active = self.before_grapheme(cells, end);
                 let anchor_end = self

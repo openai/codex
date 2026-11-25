@@ -18,6 +18,85 @@ use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 use std::time::Instant;
 
+fn rtl_view(cells: &[Arc<dyn HistoryCell>]) -> (TranscriptView, String) {
+    let mut view = TranscriptView {
+        bidi_layout: true,
+        ..Default::default()
+    };
+    let painted = render(&mut view, cells, /*width*/ 20, /*height*/ 2);
+    (view, painted)
+}
+
+#[test]
+fn rtl_transcript_keyboard_crosses_original_mouse_anchor() {
+    let cell = AgentMarkdownCell::new("A אבג B".into(), std::path::Path::new("."));
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(cell)];
+    let (mut view, painted) = rtl_view(&cells);
+    let column = |ch| painted.chars().position(|c| c == ch).unwrap() as u16;
+    let margin = view.area.width - 2;
+    view.begin_selection(&cells, margin, /*row*/ 0, /*clicks*/ 1);
+    view.extend_selection(margin + 1, /*row*/ 0);
+    assert_eq!(view.selected_text(&cells), None);
+    view.begin_selection(&cells, column('ג'), /*row*/ 0, /*clicks*/ 1);
+    view.extend_selection(column('B'), /*row*/ 0);
+    assert!(view.begin_select_mode(&cells));
+    for _ in 0..2 {
+        view.handle_key(KeyCode::Char('o').into(), &cells);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("אבג B"));
+    }
+    for _ in 0..3 {
+        view.handle_key(KeyCode::Left.into(), &cells);
+    }
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("בג"));
+}
+
+#[test]
+fn rtl_transcript_keyboard_selection_is_logical_and_mouse_selection_is_visual() {
+    let text = "אבג Codex Two זחט";
+    let cell = AgentMarkdownCell::new(format!("דהו  \n{text}"), std::path::Path::new("."));
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(cell)];
+    let (mut view, painted) = rtl_view(&cells);
+    let line = painted.lines().last().unwrap();
+    let column = |ch| line.chars().position(|c| c == ch).unwrap() as u16;
+    assert!(view.begin_select_mode(&cells));
+    // Right advances in source order through the Hebrew word.
+    view.handle_key(KeyCode::Char('v').into(), &cells);
+    for _ in 0..2 {
+        view.handle_key(KeyCode::Right.into(), &cells);
+    }
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("אבג"));
+    let (mut view, _) = rtl_view(&cells);
+    view.begin_selection(&cells, column('ט'), /*row*/ 1, /*clicks*/ 2);
+    view.extend_selection(column('T'), /*row*/ 1);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("Codex Two זחט"));
+
+    view.begin_selection(&cells, column('ט'), /*row*/ 1, /*clicks*/ 1);
+    view.extend_selection(column('T'), /*row*/ 1);
+    assert!(view.begin_select_mode(&cells));
+    let mode = view.select_mode.unwrap();
+    let cursor = mode.cursor(view.selection.as_ref().unwrap());
+    assert_eq!(cursor.offset, "דהו\nאבג Codex ".len());
+    let (mut view, _) = rtl_view(&cells);
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 1);
+    view.extend_selection(view.area.width - 1, /*row*/ 0);
+    let selection = view.selection.as_ref().unwrap();
+    let end = std::cmp::max_by_key(selection.start, selection.end, |a| a.offset);
+    assert_eq!(
+        view.move_selection_endpoint(&cells, end, KeyCode::Up, /*preferred_column*/ None),
+        Some(end)
+    );
+    for (start, end, expected) in [
+        ((column('ט'), 1), (view.area.width - 1, 1), text),
+        ((column('א'), 1), (0, 1), text),
+        ((0, 0), (column('א'), 1), "דהו\nאבג Codex Two זחט"),
+        ((column('א'), 1), (0, 0), "דהו\nאבג Codex Two זחט"),
+    ] {
+        view.begin_selection(&cells, start.0, start.1, /*clicks*/ 1);
+        view.extend_selection(end.0, end.1);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some(expected));
+    }
+}
+
 #[test]
 fn selection_highlights_hard_breaks_within_and_between_entries() {
     let mut frames = Vec::new();

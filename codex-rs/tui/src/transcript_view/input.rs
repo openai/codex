@@ -326,6 +326,15 @@ impl TranscriptView {
         if modifiers == KeyModifiers::CONTROL && code == KeyCode::Char(' ') {
             self.begin_selection(cells, self.area.x, self.area.y, /*clicks*/ 1);
             if let Some(selection) = &mut self.selection {
+                // Ctrl+Space extends a half-open source range with the arrow keys.
+                // Start at the logical boundary even if the leftmost glyph is RTL.
+                if let Some(first) = self.visible.first()
+                    && first.layout.visual_hit(first.row, /*column*/ 0).is_some()
+                {
+                    let mut anchor = selection.start;
+                    anchor.offset = first.layout.position_at(first.row, /*column*/ 0);
+                    selection.set_keyboard_range(anchor, anchor);
+                }
                 selection.dragging = false;
                 selection.resume_on_empty = false;
             }
@@ -367,6 +376,7 @@ impl TranscriptView {
                 selection.end,
                 selection.unit(),
                 selection.has_table_scope(),
+                selection.mouse_endpoints,
             )
         });
         let action =
@@ -377,6 +387,7 @@ impl TranscriptView {
                 selection.end,
                 selection.unit(),
                 selection.has_table_scope(),
+                selection.mouse_endpoints,
             )
         });
         if endpoint_changed && before != after {

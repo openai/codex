@@ -781,6 +781,7 @@ async fn run_session_picker_event_loop(
     state.copy_on_select = options.copy_on_select;
     state.copy_on_select_clear_selection = options.copy_on_select_clear_selection;
     state.mouse_scroll_speed = options.mouse_scroll_speed;
+    state.bidi_layout = alt.tui.terminal.bidi_layout;
     state.density = options.initial_density;
     state.view_persistence = options.view_persistence;
     state.keymap = options.keymap;
@@ -1148,6 +1149,7 @@ struct PickerState {
     copy_on_select: bool,
     copy_on_select_clear_selection: bool,
     mouse_scroll_speed: f64,
+    bidi_layout: bool,
     // Resolve local filesystem membership once per cwd for each page-loading cycle.
     local_cwd_matches: HashMap<PathBuf, bool>,
     requester: FrameRequester,
@@ -1372,6 +1374,7 @@ impl PickerState {
             copy_on_select: false,
             copy_on_select_clear_selection: false,
             mouse_scroll_speed: 1.0,
+            bidi_layout: false,
             requester,
             relative_time_reference: None,
             pagination: PaginationState::new(),
@@ -1524,6 +1527,7 @@ impl PickerState {
             self.keymap.pager.clone(),
             self.copy_on_select,
             self.mouse_scroll_speed,
+            self.bidi_layout,
         )
         .with_copy_on_select_clear_selection(self.copy_on_select_clear_selection);
         if let Overlay::Transcript(view) = &mut overlay {
@@ -5982,8 +5986,6 @@ mod tests {
 
     #[tokio::test]
     async fn loaded_transcript_waits_for_loading_frame_before_opening_overlay() {
-        use crate::history_cell::PlainHistoryCell;
-
         let thread_id = ThreadId::new();
         let (tx, mut receipts) = tokio::sync::mpsc::unbounded_channel();
         let mut state = PickerState::new(
@@ -6006,8 +6008,13 @@ mod tests {
         let owner = BackendId::new();
         let key = (owner, thread_id);
         state.pending_transcript_open = Some(key);
-        let cells: TranscriptCells =
-            vec![Arc::new(PlainHistoryCell::new(vec!["transcript".into()]))];
+        state.bidi_layout = true;
+        let cells: TranscriptCells = vec![Arc::new(crate::history_cell::new_user_prompt(
+            "transcript שלום".into(),
+            vec![],
+            vec![],
+            vec![],
+        ))];
 
         state
             .transcript_cells
@@ -6110,6 +6117,7 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
+        assert!(text.contains("transcript םולש"), "{text}");
         assert!(text.contains("BAtail"), "Find query: {text}");
 
         state.overlay = None;
@@ -6152,6 +6160,7 @@ mod tests {
                 state.keymap.pager.clone(),
                 state.copy_on_select,
                 state.mouse_scroll_speed,
+                state.bidi_layout,
             ));
             let mut tui = crate::tui::test_support::make_test_tui().expect("tui");
             state

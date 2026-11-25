@@ -12,6 +12,7 @@ use icu_properties::CodePointMapData;
 use icu_properties::props::BidiMirroringGlyph;
 use ratatui::text::Line;
 use std::borrow::Cow;
+use std::ops::Range;
 use std::sync::Arc;
 use unicode_bidi::BidiClass;
 use unicode_bidi::Level;
@@ -24,6 +25,13 @@ pub(crate) fn prepare_message(lines: &mut [HyperlinkLine]) {
     for source in lines.iter_mut().filter_map(|line| line.source.as_mut()) {
         source.message = true;
     }
+}
+
+pub(crate) fn session_lines(mut lines: Vec<HyperlinkLine>, enabled: bool) -> Vec<HyperlinkLine> {
+    if enabled {
+        resolve_paragraphs(&mut lines);
+    }
+    lines
 }
 
 pub(crate) fn resolve_paragraphs(lines: &mut [HyperlinkLine]) {
@@ -77,6 +85,12 @@ pub(crate) fn resolve_paragraphs(lines: &mut [HyperlinkLine]) {
     }
 }
 
+/// A projected row and the logical body bytes under each of its visible body cells.
+pub(crate) struct VisualRow {
+    pub(crate) line: HyperlinkLine,
+    pub(crate) offsets: Vec<Range<usize>>,
+}
+
 pub(crate) fn paint_rows(lines: &mut [HyperlinkLine], width: usize) {
     resolve_paragraphs(lines);
     for line in lines {
@@ -85,12 +99,12 @@ pub(crate) fn paint_rows(lines: &mut [HyperlinkLine], width: usize) {
             && let Some(levels) = levels.get(source.range.clone())
             && let Some(visual) = project(line, levels, width)
         {
-            *line = visual;
+            *line = visual.line;
         }
     }
 }
 
-fn project(line: &HyperlinkLine, levels: &[Level], width: usize) -> Option<HyperlinkLine> {
+pub(crate) fn project(line: &HyperlinkLine, levels: &[Level], width: usize) -> Option<VisualRow> {
     let source = line.source.as_ref()?;
     // Never reorder across terminal autowrap boundaries (e.g. an oversized URL).
     if line.width() > width || levels.len() != source.range.len() {
@@ -130,14 +144,15 @@ fn project(line: &HyperlinkLine, levels: &[Level], width: usize) -> Option<Hyper
             .peek()
             .copied()
             .filter(|link| link.columns.contains(&column));
-        graphemes.push((grapheme, cells, span.style, link));
+        graphemes.push((byte, grapheme, cells, span.style, link));
         column += cells;
     }
     let mut visual = HyperlinkLine::new(Line::default().style(line.line.style));
     visual.line.alignment = line.line.alignment;
+    let mut offsets = Vec::new();
     column = 0;
     for index in ParagraphBidiInfo::reorder_visual(&row_levels) {
-        let (grapheme, cells, style, link) = graphemes[index];
+        let (byte, grapheme, cells, style, link) = graphemes[index];
         if cells == 0 {
             continue;
         }
@@ -156,7 +171,14 @@ fn project(line: &HyperlinkLine, levels: &[Level], width: usize) -> Option<Hyper
         if let Some(link) = link {
             push_link_range(&mut visual, column..column + cells, link);
         }
+        if (start..start + body.len()).contains(&byte) {
+            let offset = byte - start;
+            offsets.resize(offsets.len() + cells, offset..offset + grapheme.len());
+        }
         column += cells;
     }
-    Some(visual)
+    Some(VisualRow {
+        line: visual,
+        offsets,
+    })
 }

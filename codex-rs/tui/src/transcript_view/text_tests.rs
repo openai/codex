@@ -483,6 +483,58 @@ fn document_link_navigation_preserves_occurrences_across_wraps() {
 }
 
 #[test]
+fn rtl_transcript_reflow_keeps_link_hits_highlights_and_copy_logical() {
+    use crate::terminal_hyperlinks::TerminalHyperlink;
+    use crate::terminal_hyperlinks::bidi;
+
+    let text = "سَلَام file.rs 123 «بكم»";
+    let mut line = HyperlinkLine::from(text);
+    // The link crosses a direction change and occupies two separate visual ranges.
+    let destination = "https://example.org";
+    line.hyperlinks
+        .push(TerminalHyperlink::web(2..9, destination.into()));
+    let tabbed = "\tשלום עולם";
+    let mut lines = prefix_hyperlink_lines(vec![line, tabbed.into()], "• ".dim(), "  ".into());
+    bidi::prepare_message(&mut lines);
+    bidi::resolve_paragraphs(&mut lines);
+    let wide = TextLayout::new(lines, /*width*/ 40);
+    let narrow = wide.rewrap(/*width*/ 12);
+    let mut snapshots = Vec::new();
+    for layout in [&wide, &narrow] {
+        assert_eq!(layout.text(), format!("{text}\n{tabbed}"));
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            layout.width,
+            layout.row_count() as u16,
+        );
+        let mut buf = Buffer::empty(area);
+        layout.render(area, &mut buf, /*start_row*/ 0);
+        let range = text.find('ا').unwrap()..text.find('.').unwrap();
+        layout.highlight(range.clone(), area, &mut buf, /*start_row*/ 0);
+        for (row, line) in layout.rows.iter().enumerate() {
+            let mut rendered = String::new();
+            for col in 0..area.width {
+                let cell = &buf[(col, row as u16)];
+                let offset = layout.cursor_position_at(row, col);
+                let linked = range.contains(&offset)
+                    && col >= 2
+                    && usize::from(col) < line.painted_line().width();
+                assert_eq!(layout.raw_link_at(row, col).is_some(), linked);
+                assert_eq!(cell.modifier.contains(Modifier::REVERSED), linked);
+                if linked {
+                    assert_eq!(layout.column_for_offset(offset), col);
+                    assert!(cell.symbol().contains(destination));
+                }
+                rendered.push_str(&crate::terminal_hyperlinks::strip_osc8(cell.symbol()));
+            }
+            snapshots.push(rendered.trim_end().to_string());
+        }
+    }
+    insta::assert_snapshot!(snapshots.join("\n"));
+}
+
+#[test]
 fn rtl_transcript_preserves_command_boundaries() {
     use crate::terminal_hyperlinks::bidi;
     let paint = |command: &'static str| {

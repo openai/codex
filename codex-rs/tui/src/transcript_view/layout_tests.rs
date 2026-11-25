@@ -46,6 +46,7 @@ fn layouts_refresh_for_width_animation_and_mutable_frames() {
                 &history,
                 width,
                 CellPresentation {
+                    bidi_layout: false,
                     summarized: false,
                     separated: false,
                     shares_prompt_background: false,
@@ -105,6 +106,7 @@ fn recent_entries_are_reused_and_old_entries_are_evicted() {
             &history,
             /*width*/ 20,
             CellPresentation {
+                bidi_layout: false,
                 summarized: false,
                 separated: false,
                 shares_prompt_background: false,
@@ -128,6 +130,7 @@ fn recent_entries_are_reused_and_old_entries_are_evicted() {
             &history,
             /*width*/ 20,
             CellPresentation {
+                bidi_layout: false,
                 summarized: false,
                 separated: false,
                 shares_prompt_background: false,

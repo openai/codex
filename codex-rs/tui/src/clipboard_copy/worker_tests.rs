@@ -131,6 +131,7 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
         RuntimeKeymap::defaults().pager,
         /*copy_on_select*/ false,
         /*mouse_scroll_speed*/ 1.0,
+        /*bidi_layout*/ false,
     );
     overlay
         .handle_event(

@@ -26,6 +26,7 @@ use crate::motion::MotionMode;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::sidebar_tab_strip::TabState;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::bidi;
 use crate::transcript_image::ImagePlacement;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
@@ -234,8 +235,11 @@ impl App {
                 chat_widget.active_cell_transcript_hyperlink_lines(width)
             })
         } else if let Some(row) = live_summary {
+            let bidi_layout = view.bidi_layout;
             view.sync_live_layout(transcript_width, active_key, |width| {
-                Some(row.layout(width, expanded, chat_widget.active_auxiliary_lines(width)))
+                let lines =
+                    bidi::session_lines(chat_widget.active_auxiliary_lines(width), bidi_layout);
+                Some(row.layout(width, expanded, lines))
             })
         } else {
             view.sync_live_activity_tail(transcript_width, active_key, expanded, |width| {
@@ -394,6 +398,7 @@ impl App {
                         id == panes.passive_thread && self.agent_navigation.is_parent_owned(id)
                     });
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
+                        companion.view.bidi_layout = self.transcript_view.bidi_layout;
                         companion.view.agent_links = self.transcript_view.agent_links;
                         companion.view.image_protocol = self.transcript_view.image_protocol;
                         panes.paint_companion(

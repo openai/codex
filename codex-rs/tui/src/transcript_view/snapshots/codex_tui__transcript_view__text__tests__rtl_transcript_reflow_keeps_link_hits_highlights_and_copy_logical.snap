@@ -1,0 +1,11 @@
+---
+source: tui/src/transcript_view/text_tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+• «مكب» file.rs 123 مالَسَ
+        שלום עולם
+• مالَسَ
+  file.rs
+  «مكب» 123
+        שלום
+  עולם

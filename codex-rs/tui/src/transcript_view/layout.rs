@@ -25,13 +25,14 @@ pub(super) fn activity_layout(
     mut lines: ActivityTranscriptLines,
     width: u16,
     expanded: bool,
+    bidi_layout: bool,
     shortcut: Option<ShortcutHint>,
 ) -> TextLayout {
     let has_details = !lines.activity.is_empty() && (expanded || lines.disclosure.is_some());
     let source_offset = (!lines.auxiliary.is_empty())
         .then(|| TextLayout::new(lines.activity.clone(), width).text().len());
     lines.activity.extend(lines.auxiliary);
-    let layout = TextLayout::new(lines.activity, width);
+    let layout = TextLayout::new(bidi::session_lines(lines.activity, bidi_layout), width);
     if !has_details {
         return layout;
     }
@@ -78,13 +79,13 @@ fn cell_content_layout(
             },
             width,
             presentation.expanded,
+            presentation.bidi_layout,
             shortcut,
         )
     } else {
-        TextLayout::new(
-            crate::history_cell::fullscreen_session_lines(cell, width, presentation.detailed, mode),
-            width,
-        )
+        let lines =
+            crate::history_cell::fullscreen_session_lines(cell, width, presentation.detailed, mode);
+        TextLayout::new(bidi::session_lines(lines, presentation.bidi_layout), width)
     };
     if let Some(protocol) = presentation.image_protocol
         && let Some(path) = cell.image_path()
@@ -143,6 +144,7 @@ pub(super) struct CellPresentation {
     shares_prompt_background: bool,
     turn_tip_space: bool,
     expanded: bool,
+    bidi_layout: bool,
     disclosure: bool,
     detailed: bool,
     image_protocol: Option<crate::pets::ImageProtocol>,
@@ -163,6 +165,7 @@ impl TranscriptView {
             self.disclosure.expanded.extend(ids);
         }
         CellPresentation {
+            bidi_layout: self.bidi_layout,
             summarized: false,
             separated: false,
             shares_prompt_background: false,
@@ -439,6 +442,7 @@ impl LayoutCache {
     fn evict(&mut self) {
         let retained_bytes = |entry: &CachedLayout| {
             entry.layout.text().len()
+                + entry.layout.mapping_bytes
                 + entry
                     .layout
                     .image

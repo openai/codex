@@ -69,7 +69,10 @@ impl TranscriptView {
             return false;
         }
         self.search.live_key = next;
-        let live = lines(width).map(|lines| Arc::new(TextLayout::new(lines, width)));
+        let live = lines(width).map(|lines| {
+            let lines = bidi::session_lines(lines, self.bidi_layout);
+            Arc::new(TextLayout::new(lines, width))
+        });
         let changed = self.search.live.as_ref().map(|layout| layout.text())
             != live.as_ref().map(|layout| layout.text());
         if changed {

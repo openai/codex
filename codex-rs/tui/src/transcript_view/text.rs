@@ -36,6 +36,7 @@ use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::LogicalLineSource;
 use crate::terminal_hyperlinks::ReaderLink;
 use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::bidi;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
@@ -54,6 +55,7 @@ pub(crate) struct TextLayout {
     logical: Vec<LogicalLine>,
     text: String,
     rows: Vec<TextRow>,
+    pub(super) mapping_bytes: usize,
     pub(super) width: u16,
     pub(super) separated: bool,
     pub(super) disclosure: bool,
@@ -74,6 +76,7 @@ struct DisclosureControl {
 }
 
 struct TextRow {
+    visual: Option<Box<bidi::VisualRow>>,
     line: HyperlinkLine,
     source: Range<usize>,
     /// Source offset at the logical line end; absent on soft wraps and synthetic rows.
@@ -83,6 +86,14 @@ struct TextRow {
     prefix_columns: usize,
     marker_only: bool,
     tabs: tabs::TabStops,
+}
+
+impl TextRow {
+    fn painted_line(&self) -> &HyperlinkLine {
+        self.visual
+            .as_ref()
+            .map_or(&self.line, |visual| &visual.line)
+    }
 }
 
 pub(super) struct TableCellHit {
@@ -366,6 +377,7 @@ impl TextLayout {
         self.rows.insert(
             index,
             TextRow {
+                visual: None,
                 line: HyperlinkLine::from(line),
                 source: offset..offset,
                 line_end: None,
@@ -707,8 +719,11 @@ impl TextLayout {
                 Rect::new(area.x, area.y + screen_row, area.width, /*height*/ 1);
             buf.set_style(row_area, row.line.line.style);
             row_area.width = row.content_width;
-            HyperlinkParagraph::new(std::slice::from_ref(&row.line), row.line.line.style)
-                .render(row_area, buf);
+            HyperlinkParagraph::new(
+                std::slice::from_ref(row.painted_line()),
+                row.line.line.style,
+            )
+            .render(row_area, buf);
         }
     }
 
@@ -729,8 +744,74 @@ impl TextLayout {
         row.source.end
     }
 
+    pub(super) fn visual_margin(&self, row: usize, column: u16) -> Option<Alignment> {
+        let row = self.rows.get(row)?;
+        let width = row.visual.as_ref()?.offsets.len();
+        let column = usize::from(column);
+        if column < row.first_column {
+            Some(Alignment::Left)
+        } else {
+            (column >= row.first_column + width).then_some(Alignment::Right)
+        }
+    }
+
+    /// A reordered row has no single logical boundary between adjacent visual runs.
+    /// Include both endpoint graphemes on drag, clamping padding to the nearest glyph.
+    pub(super) fn visual_hit(&self, row: usize, column: u16) -> Option<Range<usize>> {
+        let row = self.rows.get(row)?;
+        let offsets = &row.visual.as_ref()?.offsets;
+        let column = usize::from(column).saturating_sub(row.first_column);
+        let bytes = offsets.get(column).or_else(|| offsets.last())?;
+        Some(row.source.start + bytes.start..row.source.start + bytes.end)
+    }
+
+    /// Selection is contiguous in source order. At a direction change the glyphs
+    /// between the endpoints can extend beyond both endpoints in the source.
+    /// Missing endpoints lie in a different entry. On different rows the sweep
+    /// extends to the right edge of the first row and from the left edge of the last.
+    pub(super) fn visual_selection(
+        &self,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) -> Range<usize> {
+        let mut range = start.unwrap_or(0)..end.unwrap_or(self.text.len());
+        if range.is_empty() {
+            return range;
+        }
+        let last = end.and_then(|end| end.checked_sub(1));
+        let swept = |offset| {
+            let row = self.rows.get(self.row_for_offset(offset))?;
+            let offsets = &row.visual.as_ref()?.offsets;
+            let column = |offset: usize| {
+                let offset = offset.checked_sub(row.source.start)?;
+                offsets.iter().position(|bytes| bytes.contains(&offset))
+            };
+            let from = start.and_then(column).unwrap_or(0);
+            let to = last
+                .and_then(column)
+                .unwrap_or(offsets.len().checked_sub(1)?);
+            let cells = &offsets[from.min(to)..=from.max(to)];
+            if cells.len() == offsets.len() {
+                return Some(row.source.clone());
+            }
+            let start = cells.iter().map(|bytes| bytes.start).min()?;
+            let end = cells.iter().map(|bytes| bytes.end).max()?;
+            Some(row.source.start + start..row.source.start + end)
+        };
+        if let Some(first) = start.and_then(swept) {
+            range.start = range.start.min(first.start);
+        }
+        if let Some(last) = last.and_then(swept) {
+            range.end = range.end.max(last.end);
+        }
+        range
+    }
+
     /// Resolve a keyboard caret to a grapheme start while leaving truly empty rows blank.
     pub(super) fn cursor_position_at(&self, row: usize, column: u16) -> usize {
+        if let Some(bytes) = self.visual_hit(row, column) {
+            return bytes.start;
+        }
         let offset = self.position_at(row, column);
         let Some(row) = self.rows.get(row) else {
             return offset;
@@ -811,6 +892,14 @@ impl TextLayout {
         let offset = self
             .text
             .floor_char_boundary(offset.clamp(row.source.start, row.source.end));
+        if let Some(visual) = &row.visual {
+            let column = visual
+                .offsets
+                .iter()
+                .position(|bytes| bytes.contains(&(offset - row.source.start)))
+                .unwrap_or(visual.offsets.len());
+            return (row.first_column + column).min(usize::from(self.width)) as u16;
+        }
         let column = row.first_column
             + row.tabs.column_for_offset(
                 display_width(&self.text[row.source.start..offset]),
@@ -828,6 +917,19 @@ impl TextLayout {
         start_row: usize,
     ) {
         for (screen_row, row) in self.visible_rows(area, start_row) {
+            if let Some(visual) = &row.visual {
+                for (column, bytes) in visual.offsets.iter().enumerate() {
+                    let x = row.first_column + column;
+                    if x < usize::from(row.content_width)
+                        && row.source.start + bytes.start < range.end
+                        && row.source.start + bytes.end > range.start
+                    {
+                        buf[(area.x + x as u16, area.y + screen_row)]
+                            .set_style(Style::default().add_modifier(Modifier::REVERSED));
+                    }
+                }
+                continue;
+            }
             let mut column = row.first_column;
             for (offset, grapheme) in
                 self.text[row.source.clone()].grapheme_indices(/*is_extended*/ true)
@@ -953,7 +1055,10 @@ impl TextLayout {
 
     pub(super) fn row_links(&self, row: usize) -> Option<(usize, &[TerminalHyperlink])> {
         let row = self.rows.get(row)?;
-        Some((row.first_column - row.prefix_columns, &row.line.hyperlinks))
+        Some((
+            row.first_column - row.prefix_columns,
+            &row.painted_line().hyperlinks,
+        ))
     }
 
     fn visible_rows(&self, area: Rect, start_row: usize) -> impl Iterator<Item = (u16, &TextRow)> {
@@ -994,6 +1099,11 @@ impl TextLayout {
             image_left_aligned: false,
             logical,
             text,
+            mapping_bytes: rows
+                .iter()
+                .filter_map(|row| row.visual.as_ref())
+                .map(|row| row.offsets.capacity() * size_of::<Range<usize>>())
+                .sum(),
             rows,
             width,
             separated: false,
@@ -1080,7 +1190,16 @@ fn layout_line(logical: &LogicalLine, text_start: usize, width: u16) -> Vec<Text
                 Alignment::Right => columns.saturating_sub(text_width),
             };
             let range = text_start + source.start..text_start + source.end;
+            let visual = logical.origin.bidi.as_ref().and_then(|levels| {
+                let start = logical.origin.range.start;
+                bidi::project(
+                    &wrapped,
+                    levels.get(start + source.start..start + source.end)?,
+                    columns,
+                )
+            });
             TextRow {
+                visual: visual.map(Box::new),
                 line: wrapped,
                 source: range,
                 line_end: None,

@@ -923,6 +923,7 @@ impl App {
                 self.agents_overview.workspace.divider_drag_viewport = None;
             }
         }
+        self.transcript_view.bidi_layout = tui.terminal.bidi_layout;
         self.transcript_view.agent_links = self
             .side_retention_enabled(tui)
             .then(|| app_server.backend_id());

@@ -115,8 +115,11 @@ pub(super) struct Selection {
     pub(super) moved: bool,
     moved_vertically: bool,
     pointer_origin_row: u16,
+    origin_margin: Option<ratatui::layout::Alignment>,
     pub(super) resume_on_empty: bool,
     pub(super) pointer: Option<ScreenPosition>,
+    /// Pointer endpoints before a bidi sweep expands the contiguous copy range.
+    pub(super) mouse_endpoints: Option<(Anchor, Anchor)>,
     pub(super) pressed_link: Option<crate::terminal_hyperlinks::ReaderLink>,
     origin: (Anchor, Anchor),
     table_cell: Option<TableSelection>,
@@ -136,7 +139,9 @@ impl Selection {
             moved: true,
             moved_vertically: false,
             pointer_origin_row: 0,
+            origin_margin: None,
             resume_on_empty: false,
+            mouse_endpoints: None,
             pointer: None,
             pressed_link: None,
             origin: (cursor, cursor),
@@ -164,7 +169,9 @@ impl Selection {
         }
         self.start = start;
         self.end = end;
+        self.mouse_endpoints = None;
         self.origin = (start, end);
+        self.origin_margin = None;
         self.preferred_column = None;
     }
 
@@ -231,6 +238,28 @@ impl Selection {
         self.unit = unit;
     }
 
+    /// Include each painted glyph crossed by a mouse drag.
+    fn include_swept_glyphs(&mut self) {
+        let (mut first, mut last) = (&mut self.start, &mut self.end);
+        if (first.index, first.offset) > (last.index, last.offset) {
+            std::mem::swap(&mut first, &mut last);
+        }
+        let same = first.key == last.key;
+        if let Some(layout) = self.snapshot.pinned.get(&first.key) {
+            let range = layout.visual_selection(Some(first.offset), same.then_some(last.offset));
+            first.offset = range.start;
+            if same {
+                last.offset = range.end;
+                return;
+            }
+        }
+        if let Some(layout) = self.snapshot.pinned.get(&last.key) {
+            last.offset = layout
+                .visual_selection(/*start*/ None, Some(last.offset))
+                .end;
+        }
+    }
+
     pub(super) fn unit(&self) -> SelectionUnit {
         self.unit
     }
@@ -274,7 +303,9 @@ impl TranscriptView {
             moved: false,
             moved_vertically: false,
             pointer_origin_row: 0,
+            origin_margin: None,
             resume_on_empty: false,
+            mouse_endpoints: None,
             pointer: None,
             pressed_link: None,
             origin: (start, end),
@@ -293,11 +324,11 @@ impl TranscriptView {
         clicks: u8,
     ) {
         self.copy_mode = None;
-        let Some((anchor, layout, layout_row)) = self.hit_test(column, row) else {
+        let unit = SelectionUnit::from_clicks(clicks);
+        let Some((anchor, layout, layout_row, range)) = self.hit_test(column, row, unit) else {
             return;
         };
         self.cancel_beginning();
-        let unit = SelectionUnit::from_clicks(clicks);
         let table_cell = if self.select_mode.is_none()
             && matches!(clicks, 1 | 3)
             && let Some(cell) = layout.table_cell_at(
@@ -320,7 +351,7 @@ impl TranscriptView {
             Some(table) => {
                 layout.table_cell_pointer_range(&table.ranges, layout_row, anchor.offset)
             }
-            None => unit.range(layout.text(), anchor.offset),
+            None => range,
         };
         let snapshot = self.capture_snapshot(cells);
         self.held_reading = None;
@@ -347,7 +378,9 @@ impl TranscriptView {
             moved: false,
             moved_vertically: false,
             pointer_origin_row: row,
+            origin_margin: layout.visual_margin(layout_row, column.saturating_sub(self.area.x)),
             resume_on_empty: was_following,
+            mouse_endpoints: None,
             pointer: Some(ScreenPosition::new(column, row)),
             pressed_link: None,
         });
@@ -405,7 +438,11 @@ impl TranscriptView {
     }
 
     pub(super) fn extend_selection(&mut self, column: u16, row: u16) {
-        let Some((end, layout, layout_row)) = self.hit_test(column, row) else {
+        let Some(selection) = &self.selection else {
+            return;
+        };
+        let Some((end, layout, layout_row, range)) = self.hit_test(column, row, selection.unit)
+        else {
             return;
         };
         let Some(mut selection) = self.selection.take() else {
@@ -437,10 +474,17 @@ impl TranscriptView {
             }
             selection.clear_table_cell_scope();
             let origin = selection.origin;
-            let range = selection.unit.range(layout.text(), end.offset);
-            selection.snapshot.pinned.entry(end.key).or_insert(layout);
+            if selection.unit == SelectionUnit::Character
+                && origin.0 == end
+                && selection.origin_margin.is_some()
+                && selection.origin_margin
+                    == layout.visual_margin(layout_row, column.saturating_sub(self.area.x))
+            {
+                return (end, end);
+            }
             let backwards = (self.resolve(&cells, end), end.offset)
                 < (self.resolve(&cells, origin.0), origin.0.offset);
+            selection.snapshot.pinned.entry(end.key).or_insert(layout);
             (
                 if backwards { origin.1 } else { origin.0 },
                 Anchor {
@@ -454,6 +498,12 @@ impl TranscriptView {
         selection.pointer = Some(ScreenPosition::new(column, row));
         selection.preferred_column = None;
         self.pin_selection_range(&cells, &mut selection);
+        let bounds = (selection.start, selection.end);
+        if selection.table_cell.is_none() && selection.unit != SelectionUnit::Line {
+            selection.include_swept_glyphs();
+        }
+        selection.mouse_endpoints =
+            (bounds != (selection.start, selection.end)).then_some((selection.origin.0, end));
         if previous != (selection.start, selection.end) || previous_head != table_head(&selection) {
             selection.primary_owner = None;
             selection.pending_copy = None;
@@ -833,6 +883,7 @@ impl TranscriptView {
             if selection.end != next {
                 selection.primary_owner = None;
             }
+            selection.mouse_endpoints = None;
             selection.end = next;
             selection.dragging = false;
             selection.preferred_column = column;
@@ -973,22 +1024,36 @@ impl TranscriptView {
         }
     }
 
-    fn hit_test(&self, column: u16, row: u16) -> Option<(Anchor, Arc<TextLayout>, usize)> {
+    fn hit_test(
+        &self,
+        column: u16,
+        row: u16,
+        unit: SelectionUnit,
+    ) -> Option<(Anchor, Arc<TextLayout>, usize, Range<usize>)> {
         let row = row.saturating_sub(self.area.y) as usize;
         let visible = self
             .visible
             .get(row.min(self.visible.len().saturating_sub(/*rhs*/ 1)))?;
+        let column = column.saturating_sub(self.area.x);
+        let hit = visible.layout.visual_hit(visible.row, column);
+        let offset = hit.as_ref().map_or_else(
+            || visible.layout.position_at(visible.row, column),
+            |bytes| bytes.start,
+        );
+        let range = match hit {
+            Some(bytes) if unit == SelectionUnit::Character => bytes,
+            _ => unit.range(visible.layout.text(), offset),
+        };
         Some((
             Anchor {
                 key: visible.key,
                 index: visible.index,
-                offset: visible
-                    .layout
-                    .position_at(visible.row, column.saturating_sub(self.area.x)),
+                offset,
                 row_bias: 0,
             },
             Arc::clone(&visible.layout),
             visible.row,
+            range,
         ))
     }
 
@@ -1045,13 +1110,17 @@ impl TranscriptView {
                 let row = layout
                     .row_for_offset(offset)
                     .saturating_add_signed(end.row_bias.saturating_neg());
-                let (next, row) = self.move_rows(cells, index, row, direction);
+                let target = self.move_rows(cells, index, row, direction);
+                if target == (index, row) {
+                    return Some(end);
+                }
+                let (next, row) = target;
                 index = next;
                 let next_layout = self.layout(cells, index)?;
-                let offset = next_layout.position_at(
-                    row,
-                    preferred_column.unwrap_or_else(|| layout.column_for_offset(offset)),
-                );
+                let column = preferred_column.unwrap_or_else(|| layout.column_for_offset(offset));
+                let offset = next_layout
+                    .visual_hit(row, column)
+                    .map_or_else(|| next_layout.position_at(row, column), |bytes| bytes.start);
                 row_bias = next_layout.row_for_offset(offset) as isize - row as isize;
                 offset
             }
