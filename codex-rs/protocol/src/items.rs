@@ -6,6 +6,7 @@ pub use display::AnswerAnnotation;
 pub use display::AnswerReplacement;
 pub use display::BlockReason;
 pub use display::HelplineSubject;
+pub use display::PromptWellbeingResult;
 pub use display::TrustedContacts;
 
 use crate::AgentPath;
@@ -163,6 +164,13 @@ pub struct AsyncUserInputQuestion {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(from = "display::StoredModeration")]
 pub struct AgentMessageModeration {
+    #[serde(
+        rename = "promptWellbeingResults",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub prompt_wellbeing_results: Option<Vec<PromptWellbeingResult>>,
     pub moderated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

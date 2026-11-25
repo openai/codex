@@ -666,6 +666,7 @@ impl ThreadHistoryBuilder {
                 .moderation
                 .as_ref()
                 .map(|decision| AgentMessageModeration {
+                    prompt_wellbeing_results: decision.prompt_wellbeing_results.clone(),
                     moderated: decision.moderated,
                     display: decision.display.clone(),
                 }),

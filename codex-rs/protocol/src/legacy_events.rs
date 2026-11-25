@@ -145,6 +145,7 @@ impl AgentMessageItem {
                 texts.collect(),
                 Some(crate::protocol::TargetedAnswerModeration {
                     item_id: self.id.clone(),
+                    prompt_wellbeing_results: decision.prompt_wellbeing_results.clone(),
                     moderated: decision.moderated,
                     display: decision.display.clone(),
                 }),

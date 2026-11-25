@@ -3947,6 +3947,15 @@ class ProjectSortKey(Enum):
     recency_at = "recencyAt"
 
 
+class PromptWellbeingResult(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    input_item_id: Annotated[str, Field(alias="inputItemId")]
+    labels: list[str]
+    scores: dict[str, float]
+
+
 class OpenaiProviderSettings(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11909,6 +11918,9 @@ class AgentMessageModeration(BaseModel):
     )
     display: AgentMessageDisplay | None = None
     moderated: bool
+    prompt_wellbeing_results: Annotated[
+        list[PromptWellbeingResult] | None, Field(alias="promptWellbeingResults")
+    ] = None
 
 
 class AppInfo(BaseModel):

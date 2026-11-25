@@ -7720,6 +7720,15 @@
           },
           "moderated": {
             "type": "boolean"
+          },
+          "promptWellbeingResults": {
+            "items": {
+              "$ref": "#/definitions/v2/PromptWellbeingResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -19729,6 +19738,33 @@
           "recencyAt"
         ],
         "type": "string"
+      },
+      "PromptWellbeingResult": {
+        "description": "Wellbeing results for a single scored input item.",
+        "properties": {
+          "inputItemId": {
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scores": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "inputItemId",
+          "labels",
+          "scores"
+        ],
+        "type": "object"
       },
       "ProviderSettings": {
         "oneOf": [

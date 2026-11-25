@@ -341,6 +341,7 @@ pub(crate) fn apply_answer_moderation(
         && answer.id == decision.item_id
     {
         answer.moderation = Some(codex_protocol::items::AgentMessageModeration {
+            prompt_wellbeing_results: decision.prompt_wellbeing_results.clone(),
             moderated: decision.moderated,
             display: decision.display.clone(),
         });

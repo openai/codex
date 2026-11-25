@@ -123,25 +123,41 @@ pub enum BlockReason {
     },
 }
 
+/// Wellbeing results for a single scored input item.
+#[derive(derive_more::Debug, Clone, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]
+#[debug("PromptWellbeingResult([redacted])")]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptWellbeingResult {
+    pub input_item_id: String,
+    #[ts(type = "Record<string, number>")]
+    #[schemars(with = "std::collections::BTreeMap<String, f64>")]
+    pub scores: std::collections::BTreeMap<String, serde_json::Number>,
+    pub labels: Vec<String>,
+}
+
 /// An unreadable instruction leaves the answer restricted.
 #[derive(Deserialize)]
 pub(super) struct StoredModeration {
     moderated: bool,
     display: Option<Value>,
+    #[serde(rename = "promptWellbeingResults")]
+    prompt_wellbeing_results: Option<Value>,
 }
 
 impl From<StoredModeration> for AgentMessageModeration {
     fn from(stored: StoredModeration) -> Self {
-        let Some(value) = stored.display else {
-            return Self {
-                moderated: stored.moderated,
-                display: None,
-            };
-        };
-        let display = serde_json::from_value(value).ok();
+        let has_display = stored.display.is_some();
+        let display = stored
+            .display
+            .and_then(|value| serde_json::from_value(value).ok());
         Self {
-            moderated: stored.moderated || display.is_none(),
+            moderated: stored.moderated || (has_display && display.is_none()),
             display,
+            // An invalid optional result must never discard a block or clear a check.
+            prompt_wellbeing_results: stored
+                .prompt_wellbeing_results
+                .and_then(|value| serde_json::from_value(value).ok()),
         }
     }
 }

@@ -141,6 +141,15 @@
         },
         "moderated": {
           "type": "boolean"
+        },
+        "promptWellbeingResults": {
+          "items": {
+            "$ref": "#/definitions/PromptWellbeingResult"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1342,6 +1351,33 @@
           "type": "object"
         }
       ]
+    },
+    "PromptWellbeingResult": {
+      "description": "Wellbeing results for a single scored input item.",
+      "properties": {
+        "inputItemId": {
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scores": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "inputItemId",
+        "labels",
+        "scores"
+      ],
+      "type": "object"
     },
     "ReasoningEffort": {
       "description": "A non-empty reasoning effort value advertised by the model.",

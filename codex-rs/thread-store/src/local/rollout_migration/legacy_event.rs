@@ -160,6 +160,7 @@ pub(super) fn completed_item(
             TurnItem::AgentMessage(AgentMessageItem {
                 moderation: event.moderation.as_ref().map(|decision| {
                     codex_protocol::items::AgentMessageModeration {
+                        prompt_wellbeing_results: decision.prompt_wellbeing_results.clone(),
                         moderated: decision.moderated,
                         display: decision.display.clone(),
                     }

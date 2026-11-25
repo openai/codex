@@ -38,6 +38,7 @@ use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
 pub use codex_protocol::items::McpAppDisplayMode;
 pub use codex_protocol::items::McpAppUi;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
+pub use codex_protocol::items::PromptWellbeingResult;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
@@ -156,6 +157,7 @@ pub enum CommandAction {
 #[ts(export_to = "v2/")]
 #[serde(from = "CoreAgentMessageModeration")]
 pub struct AgentMessageModeration {
+    pub prompt_wellbeing_results: Option<Vec<PromptWellbeingResult>>,
     pub moderated: bool,
     pub display: Option<AgentMessageDisplay>,
 }
@@ -163,6 +165,7 @@ pub struct AgentMessageModeration {
 impl From<CoreAgentMessageModeration> for AgentMessageModeration {
     fn from(value: CoreAgentMessageModeration) -> Self {
         Self {
+            prompt_wellbeing_results: value.prompt_wellbeing_results,
             moderated: value.moderated,
             display: value.display,
         }
