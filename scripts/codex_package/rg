@@ -4,74 +4,74 @@
   "name": "rg",
   "platforms": {
     "macos-aarch64": {
-      "size": 1764284,
+      "size": 1750703,
       "hash": "sha256",
-      "digest": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+      "digest": "5a145656d5067144001bfce6648767fd3254599aa736f1ffdb7fb907760b8ca1",
       "format": "tar.gz",
-      "path": "ripgrep-15.2.0-aarch64-apple-darwin/rg",
+      "path": "ripgrep-16.0.0-aarch64-apple-darwin/rg",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-aarch64-apple-darwin.tar.gz"
         }
       ]
     },
     "linux-aarch64": {
-      "size": 1854661,
+      "size": 1857628,
       "hash": "sha256",
-      "digest": "a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d",
+      "digest": "0b0bddcfaf42be1f3c56bf929d70defd1a2d96f2577aecbd7029a3734ddb4740",
       "format": "tar.gz",
-      "path": "ripgrep-15.2.0-aarch64-unknown-linux-gnu/rg",
+      "path": "ripgrep-16.0.0-aarch64-unknown-linux-gnu/rg",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-gnu.tar.gz"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-aarch64-unknown-linux-gnu.tar.gz"
         }
       ]
     },
     "macos-x86_64": {
-      "size": 1878284,
+      "size": 1855282,
       "hash": "sha256",
-      "digest": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+      "digest": "aa9183b0e0bfac03c5818895ad18b75001c402d230063898abfe5a58cd413caa",
       "format": "tar.gz",
-      "path": "ripgrep-15.2.0-x86_64-apple-darwin/rg",
+      "path": "ripgrep-16.0.0-x86_64-apple-darwin/rg",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-x86_64-apple-darwin.tar.gz"
         }
       ]
     },
     "linux-x86_64": {
-      "size": 2265718,
+      "size": 2230229,
       "hash": "sha256",
-      "digest": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+      "digest": "54268ab4643c00a290a29b0086066d64b3f56236dd805ec64629a86f9bd29fd0",
       "format": "tar.gz",
-      "path": "ripgrep-15.2.0-x86_64-unknown-linux-musl/rg",
+      "path": "ripgrep-16.0.0-x86_64-unknown-linux-musl/rg",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-x86_64-unknown-linux-musl.tar.gz"
         }
       ]
     },
     "windows-x86_64": {
-      "size": 1789611,
+      "size": 1782487,
       "hash": "sha256",
-      "digest": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+      "digest": "f418ae83e63046a94a7b5f3a44bf3a169f66e689164856ecee02547131c73931",
       "format": "zip",
-      "path": "ripgrep-15.2.0-x86_64-pc-windows-msvc/rg.exe",
+      "path": "ripgrep-16.0.0-x86_64-pc-windows-msvc/rg.exe",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-x86_64-pc-windows-msvc.zip"
         }
       ]
     },
     "windows-aarch64": {
-      "size": 1640124,
+      "size": 1672586,
       "hash": "sha256",
-      "digest": "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+      "digest": "3302ede09745d33ca2b287bf3c6434c54cb35c3b408a7d3a265939961add5a1a",
       "format": "zip",
-      "path": "ripgrep-15.2.0-aarch64-pc-windows-msvc/rg.exe",
+      "path": "ripgrep-16.0.0-aarch64-pc-windows-msvc/rg.exe",
       "providers": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-pc-windows-msvc.zip"
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/16.0.0/ripgrep-16.0.0-aarch64-pc-windows-msvc.zip"
         }
       ]
     }
