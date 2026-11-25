@@ -1,6 +1,6 @@
 use crate::FeatureConfig;
 use crate::FeatureToml;
-use codex_network_proxy::CredentialProviderConfig;
+use codex_network_policy_types::CredentialProviderConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_redacted_string::RedactedString;
 use schemars::JsonSchema;

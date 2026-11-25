@@ -97,7 +97,7 @@ async fn saved_grant_cannot_open_loopback_under_fixed_allowlist() -> anyhow::Res
 async fn attachment_socket_grants_respect_configured_restrictions_at_remote_launch()
 -> anyhow::Result<()> {
     let profile = PermissionProfile::workspace_write();
-    let owner = EnvironmentNetworkPolicy::from_config(
+    let owner = environment_policy_from_config(
         &NetworkProxyConfig {
             dangerously_allow_all_unix_sockets: Some(true),
             ..Default::default()
@@ -330,7 +330,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     owner.dangerously_allow_all_unix_sockets = Some(true);
     owner.allow_local_binding = Some(true);
     let owner_policy =
-        EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
+        environment_policy_from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert_eq!(
         validate_environment_network_policy(&owner_policy, &profile, Platform::Linux),
         Ok(())
@@ -387,7 +387,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         .insert(0, "controller-review.example".to_string());
     assert_eq!(
         restricted.environment_policy(),
-        EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false)
+        environment_policy_from_config(&owner, /*managed_allowed_domains_only*/ false)
     );
     let external = PermissionProfile::External {
         network: NetworkSandboxPolicy::Enabled,
@@ -416,7 +416,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     assert!(compose(Some(&spec), &owner_policy, &external, &empty).is_err());
     owner.set_allowed_domains(vec!["*".to_string()]);
     let wildcard_policy =
-        EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
+        environment_policy_from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert!(compose(Some(&spec), &wildcard_policy, &profile, &empty).is_err());
     assert_eq!(
         validate_environment_network_policy(&wildcard_policy, &profile, Platform::Linux),
@@ -424,7 +424,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     );
     owner.set_allowed_domains(vec!["[".to_string()]);
     let malformed_policy =
-        EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
+        environment_policy_from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert_eq!(
         validate_environment_network_policy(&malformed_policy, &profile, Platform::Linux),
         Err(EnvironmentNetworkConfigError)
@@ -932,8 +932,7 @@ async fn environment_local_binding_preserves_explicit_denials_and_inherits_omitt
                 ..Default::default()
             };
             owner_config.set_allowed_domains(vec!["example.com".to_string()]);
-            let owner =
-                EnvironmentNetworkPolicy::from_config(&owner_config, name == "managed_omitted");
+            let owner = environment_policy_from_config(&owner_config, name == "managed_omitted");
             let composed = NetworkProxySpec::for_environment(
                 controller.as_ref(),
                 &owner,

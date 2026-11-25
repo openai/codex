@@ -33,12 +33,12 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
-use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkDecisionSource;
 use codex_network_proxy::NetworkPolicyDecision;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProtocol;
+use codex_network_proxy::environment_policy_from_config;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
@@ -1082,7 +1082,7 @@ async fn sandbox_denied_retry_uses_the_action_policy_and_reviewer() {
         .primary()
         .expect("primary environment")
         .clone();
-    environment.config_mut().network_policy = Some(EnvironmentNetworkPolicy::from_config(
+    environment.config_mut().network_policy = Some(environment_policy_from_config(
         &NetworkProxyConfig {
             enabled: true,
             ..Default::default()

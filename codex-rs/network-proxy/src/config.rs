@@ -1,5 +1,10 @@
 mod standalone;
 
+pub use codex_network_policy_types::NetworkDomainPermission;
+pub use codex_network_policy_types::NetworkDomainPermissionEntry;
+pub use codex_network_policy_types::NetworkDomainPermissions;
+pub use codex_network_policy_types::NetworkUnixSocketPermission;
+pub use codex_network_policy_types::NetworkUnixSocketPermissions;
 pub use standalone::StaticNetworkProxyConfig;
 
 use anyhow::Context;
@@ -7,9 +12,7 @@ use anyhow::Result;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
-use serde::Serializer;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -21,104 +24,6 @@ use url::Url;
 use crate::Platform;
 use crate::mitm_hook::MitmHookConfig;
 use crate::policy::normalize_host;
-
-/// Variant order encodes effective precedence for duplicate patterns:
-/// `None < Allow < Deny`, so deny wins over allow when entries conflict.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "lowercase")]
-pub enum NetworkDomainPermission {
-    None,
-    Allow,
-    Deny,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetworkDomainPermissionEntry {
-    pub pattern: String,
-    pub permission: NetworkDomainPermission,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NetworkDomainPermissions {
-    pub entries: Vec<NetworkDomainPermissionEntry>,
-}
-
-impl Serialize for NetworkDomainPermissions {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.effective_entries()
-            .into_iter()
-            .map(|entry| (entry.pattern, entry.permission))
-            .collect::<BTreeMap<_, _>>()
-            .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for NetworkDomainPermissions {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let entries = BTreeMap::<String, NetworkDomainPermission>::deserialize(deserializer)?
-            .into_iter()
-            .map(|(pattern, permission)| NetworkDomainPermissionEntry {
-                pattern,
-                permission,
-            })
-            .collect();
-        Ok(Self { entries })
-    }
-}
-
-impl NetworkDomainPermissions {
-    fn effective_entries(&self) -> Vec<NetworkDomainPermissionEntry> {
-        let mut order = Vec::new();
-        let mut effective_permissions = BTreeMap::new();
-
-        for entry in &self.entries {
-            if !effective_permissions.contains_key(&entry.pattern) {
-                order.push(entry.pattern.clone());
-            }
-
-            let permission = effective_permissions
-                .entry(entry.pattern.clone())
-                .or_insert(entry.permission);
-            if entry.permission > *permission {
-                *permission = entry.permission;
-            }
-        }
-
-        order
-            .into_iter()
-            .filter_map(|pattern| {
-                effective_permissions.remove(&pattern).map(|permission| {
-                    NetworkDomainPermissionEntry {
-                        pattern,
-                        permission,
-                    }
-                })
-            })
-            .collect()
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum NetworkUnixSocketPermission {
-    Allow,
-    Deny,
-}
-
-/// Socket policy keys are preserved across controller and executor hosts.
-/// Allow entries must be NUL-free and absolute according to the executor OS;
-/// Deny entries are retained without path validation or expansion.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct NetworkUnixSocketPermissions {
-    #[serde(flatten)]
-    pub entries: BTreeMap<String, NetworkUnixSocketPermission>,
-}
 
 /// A caller-provided MITM CA for trusted proxy configuration, not sandbox `config.toml`.
 /// The private key file is readable only by the proxy process.

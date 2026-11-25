@@ -15,7 +15,6 @@ use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::EnvironmentConfig;
-use codex_core::EnvironmentNetworkPolicy;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -51,6 +50,7 @@ use codex_history::RolloutItem;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::environment_policy_from_config;
 use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -1900,7 +1900,7 @@ async fn owner_network_policy_rejects_unsupported_environment_authority() -> Res
         use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: None,
-        network_policy: Some(EnvironmentNetworkPolicy::from_config(
+        network_policy: Some(environment_policy_from_config(
             &NetworkProxyConfig::default(),
             /*managed_allowed_domains_only*/ true,
         )),

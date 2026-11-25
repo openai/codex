@@ -17,7 +17,9 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::apply_environment_policy;
 use codex_network_proxy::build_config_state;
+use codex_network_proxy::environment_policy_from_config;
 use codex_network_proxy::host_and_port_from_network_addr;
 #[cfg(any(target_os = "windows", test))]
 use codex_network_proxy::managed_proxy_ports;
@@ -268,7 +270,7 @@ impl NetworkProxySpec {
 
     /// Returns proxy activation and traffic policy without controller-owned runtime settings.
     pub fn environment_policy(&self) -> EnvironmentNetworkPolicy {
-        EnvironmentNetworkPolicy::from_config(&self.config, self.hard_deny_allowlist_misses)
+        environment_policy_from_config(&self.config, self.hard_deny_allowlist_misses)
     }
 
     pub(crate) fn for_environment(
@@ -320,7 +322,7 @@ impl NetworkProxySpec {
                 permission_profile,
             )?,
         };
-        policy.apply_to(&mut spec.config);
+        apply_environment_policy(policy, &mut spec.config);
         spec.config.allow_local_binding =
             Some(routed_binding.unwrap_or_default().resolve(&spec.config));
         let protected_denials = spec.config.denied_domains().unwrap_or_default();
