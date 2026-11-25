@@ -178,6 +178,33 @@ impl ChatWidget {
         .then_some((cycle, environment))
     }
 
+    pub(crate) fn interrupts_acknowledged_steer(&self, key: KeyEvent) -> bool {
+        self.turn_lifecycle.steer_hint == SteerHint::Acknowledged
+            && self.bottom_pane.should_interrupt_running_task(key)
+    }
+
+    fn ignore_late_interrupt(
+        &mut self,
+        key_event: KeyEvent,
+        activation_key: Option<KeyBinding>,
+    ) -> bool {
+        if !self.interrupts_acknowledged_steer(key_event) {
+            return false;
+        }
+        self.turn_lifecycle.steer_hint = SteerHint::Hidden;
+        let key = activation_key.unwrap_or_else(|| KeyBinding::from_event(key_event));
+        self.suppress_current_view_key_until_release(
+            key,
+            Instant::now(),
+            ActivationKeySuppression::ReportedRepeats,
+        );
+        self.bottom_pane.show_footer_flash(
+            "Message received. Ignored one interrupt.".dim().into(),
+            Duration::from_secs(3),
+        );
+        true
+    }
+
     pub(crate) fn handle_key_event_with_activation_key(
         &mut self,
         key_event: KeyEvent,
@@ -256,6 +283,9 @@ impl ChatWidget {
             && self.pending_image_submission.is_some()
         {
             if self.is_cancellable_work_active() {
+                if self.ignore_late_interrupt(key_event, activation_key) {
+                    return KeyEventAction::None;
+                }
                 self.requeue_image_submission();
                 self.input_queue.recovered_queue = true;
                 if self.submit_op(AppCommand::interrupt()) {
@@ -381,6 +411,9 @@ impl ChatWidget {
             }
             _ => {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                if self.ignore_late_interrupt(key_event, activation_key) {
+                    return KeyEventAction::None;
+                }
                 let should_pause_active_goal =
                     self.bottom_pane.should_interrupt_running_task(key_event);
                 let input_result = self

@@ -1615,13 +1615,14 @@ impl App {
             self.maybe_run_resize_reflow(tui, screen_size)?;
         }
         let hud = self.workspace_hud(tui, screen_size.into());
+        self.chat_widget.begin_steer_hint_draw();
+        let mut rendered_area = Rect::default();
         self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
             let desired_height = if dashboard_visible {
                 screen_size.height
             } else {
                 desired_height
             };
-            let mut rendered_area = Rect::default();
             tui.draw_with_resize_reflow(desired_height, screen_size, hud, |frame| {
                 let area = frame.area();
                 rendered_area = area;
@@ -1634,9 +1635,10 @@ impl App {
                     frame.set_cursor_style(chat_widget.cursor_style(area));
                     frame.set_cursor_position((x, y));
                 }
-            })?;
-            Ok(rendered_area)
-        })
+            })
+        })?;
+        self.chat_widget.finish_steer_hint_draw();
+        Ok(rendered_area)
     }
 
     fn with_chat_widget_frame<T>(

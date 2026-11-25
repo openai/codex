@@ -21,6 +21,7 @@ use crate::wrapping::adaptive_wrap_lines;
 /// queued user inputs to pop back into the composer. The displayed binding is
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
+    pub(super) painted_steer_hint: std::cell::Cell<bool>,
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
@@ -40,6 +41,7 @@ const PREVIEW_LINE_LIMIT: usize = 3;
 impl PendingInputPreview {
     pub(crate) fn new() -> Self {
         Self {
+            painted_steer_hint: Default::default(),
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
@@ -82,7 +84,7 @@ impl PendingInputPreview {
         ));
     }
 
-    fn as_renderable(&self, width: u16, questions: QuestionPresence) -> Box<dyn Renderable> {
+    fn layout(&self, width: u16, questions: QuestionPresence) -> (HyperlinkRows, Option<usize>) {
         let has_questions = matches!(questions, QuestionPresence::Present);
         if (self.pending_steers.is_empty()
             && self.rejected_steers.is_empty()
@@ -90,10 +92,11 @@ impl PendingInputPreview {
             && !has_questions)
             || width < 4
         {
-            return Box::new(());
+            return (HyperlinkRows::from(Vec::new()), None);
         }
 
         let mut lines = vec![];
+        let mut hint_height = None;
 
         if !self.pending_steers.is_empty() {
             let mut header = vec!["Messages to be submitted after next tool call".into()];
@@ -103,6 +106,8 @@ impl PendingInputPreview {
                 header.push(" to interrupt and send immediately)".dim());
             }
             Self::push_section_header(&mut lines, width, Line::from(header));
+
+            hint_height = self.interrupt_binding.map(|_| lines.len());
 
             for steer in &self.pending_steers {
                 let wrapped = wrap_preview_lines(
@@ -176,7 +181,14 @@ impl PendingInputPreview {
             lines.push(HyperlinkLine::new(hint));
         }
 
-        Box::new(HyperlinkRows::from(lines))
+        (HyperlinkRows::from(lines), hint_height)
+    }
+
+    fn render_preview(&self, area: Rect, buf: &mut Buffer, questions: QuestionPresence) {
+        let (rows, hint_height) = self.layout(area.width, questions);
+        rows.render(area, buf);
+        self.painted_steer_hint
+            .set(hint_height.is_some_and(|height| height <= usize::from(area.height)));
     }
 }
 
@@ -220,12 +232,12 @@ impl Renderable for PendingInputPreview {
             return;
         }
 
-        self.as_renderable(area.width, QuestionPresence::Absent)
-            .render(area, buf);
+        self.render_preview(area, buf, QuestionPresence::Absent);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable(width, QuestionPresence::Absent)
+        self.layout(width, QuestionPresence::Absent)
+            .0
             .desired_height(width)
     }
 }
@@ -235,14 +247,13 @@ pub(super) struct PendingInputPreviewContent<'a>(pub(super) &'a PendingInputPrev
 
 impl Renderable for PendingInputPreviewContent<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.0
-            .as_renderable(area.width, QuestionPresence::Present)
-            .render(area, buf);
+        self.0.render_preview(area, buf, QuestionPresence::Present);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         self.0
-            .as_renderable(width, QuestionPresence::Present)
+            .layout(width, QuestionPresence::Present)
+            .0
             .desired_height(width)
     }
 }

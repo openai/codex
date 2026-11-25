@@ -421,6 +421,7 @@ mod usage_history;
 use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
+use self::turn_lifecycle::SteerHint;
 use self::turn_lifecycle::TurnLifecycleState;
 mod usage;
 mod user_messages;
@@ -1416,6 +1417,14 @@ impl ChatWidget {
             }),
         };
         if let Some(pending) = matching.and_then(|index| steers.remove(index)) {
+            if steers.is_empty()
+                && self.turn_lifecycle.steer_hint == SteerHint::Pending
+                && self.turn_lifecycle.agent_turn_running
+                && self.last_turn_id() == Some(turn_id)
+                && !self.review.is_review_mode
+            {
+                self.turn_lifecycle.steer_hint = SteerHint::Acknowledged;
+            }
             self.refresh_pending_input_preview();
             if !already_rendered {
                 if !pending.optimistically_rendered {

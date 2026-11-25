@@ -530,3 +530,109 @@ async fn unsupported_legacy_permissions_are_shown_without_exiting() -> Result<()
     app_server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn interrupt_after_steer_commit_follows_the_displayed_preview() -> Result<()> {
+    for owned in [false, true] {
+        for (show_preview, redraw, prepare_image) in [
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+            let id = ThreadId::new();
+            let session = test_thread_session(id, app.config.cwd.to_path_buf());
+            app.chat_widget.handle_thread_session_quiet(session);
+            app.chat_widget.handle_server_notification(
+                turn_started_notification(id, "turn"),
+                /*replay_kind*/ None,
+            );
+            let mut server =
+                Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+            let mut tui = crate::tui::test_support::make_test_tui()?;
+            tui.set_owned_screen(owned)?;
+            let size = ratatui::layout::Size::new(/*width*/ 80, /*height*/ 24);
+            tui.terminal.resize(size)?;
+
+            app.chat_widget.apply_external_edit("Focus on setup".into());
+            app.chat_widget.handle_key_event(KeyCode::Enter.into());
+            let (client_id, content) = std::iter::from_fn(|| ops.try_recv().ok())
+                .find_map(|op| match op {
+                    Op::UserTurn {
+                        client_user_message_id,
+                        items,
+                        ..
+                    } => Some((client_user_message_id, items)),
+                    _ => None,
+                })
+                .expect("submitted steer");
+            if prepare_image {
+                app.chat_widget.snapshot_local_images = true;
+                let path = app.config.codex_home.join("image.png");
+                image::RgbImage::new(/*width*/ 2, /*height*/ 2).save(&path)?;
+                app.chat_widget
+                    .attach_image(path.into(), ClipboardPasteContext::Composer);
+                app.chat_widget.handle_key_event(KeyCode::Enter.into());
+            }
+            if show_preview {
+                app.render_chat_widget_frame(&mut tui, size)?;
+            }
+            app.chat_widget.handle_server_notification(
+                ServerNotification::ItemCompleted(
+                    codex_app_server_protocol::ItemCompletedNotification::new(
+                        id.to_string(),
+                        "turn".into(),
+                        ThreadItemPayload::UserMessage {
+                            id: "user".into(),
+                            client_id: Some(client_id),
+                            content,
+                        },
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 0,
+                    ),
+                ),
+                /*replay_kind*/ None,
+            );
+            if redraw {
+                app.render_chat_widget_frame(&mut tui, size)?;
+            }
+            let esc = KeyEvent::from(KeyCode::Esc);
+            let mut interrupted = || {
+                std::iter::from_fn(|| events.try_recv().ok())
+                    .chain(std::iter::from_fn(|| ops.try_recv().ok()).map(AppEvent::CodexOp))
+                    .any(|event| matches!(event, AppEvent::CodexOp(Op::Interrupt)))
+            };
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(esc))
+                .await?;
+            if show_preview && !redraw {
+                let repeat = KeyEvent {
+                    kind: crossterm::event::KeyEventKind::Repeat,
+                    ..esc
+                };
+                app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(repeat))
+                    .await?;
+                assert!(!interrupted());
+                assert!(app.chat_widget.queued_user_message_texts().is_empty());
+                if !owned {
+                    let pane = crate::chatwidget::tests::helpers::render_bottom_popup(
+                        &app.chat_widget,
+                        /*width*/ 80,
+                    );
+                    insta::allow_duplicates! {
+                        insta::assert_snapshot!(pane.lines().last().unwrap().trim(), @"Message received. Ignored one interrupt.");
+                    }
+                }
+                app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(esc))
+                    .await?;
+            }
+            assert!(interrupted());
+            if prepare_image {
+                assert_eq!(app.chat_widget.queued_user_message_texts(), ["[Image #1]"]);
+            }
+            server.shutdown().await?;
+            tui.set_owned_screen(/*owned*/ false)?;
+        }
+    }
+    Ok(())
+}

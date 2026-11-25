@@ -1890,6 +1890,10 @@ impl BottomPane {
         self.is_task_running
     }
 
+    pub(crate) fn take_painted_steer_hint(&self) -> bool {
+        self.pending_input_preview.painted_steer_hint.take()
+    }
+
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
         let is_agent_command = self
             .composer_text()

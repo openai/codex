@@ -446,6 +446,20 @@ impl ChatWidget {
         (!lines.is_empty()).then_some(lines)
     }
 
+    /// Discard offscreen renders. Only a successful terminal draw changes key routing.
+    pub(crate) fn begin_steer_hint_draw(&self) {
+        self.bottom_pane.take_painted_steer_hint();
+    }
+
+    pub(crate) fn finish_steer_hint_draw(&mut self) {
+        self.turn_lifecycle.steer_hint =
+            if self.bottom_pane.take_painted_steer_hint() && self.no_modal_or_popup_active() {
+                SteerHint::Pending
+            } else {
+                SteerHint::Hidden
+            };
+    }
+
     pub(crate) fn note_rendered_width(&self, width: u16) {
         self.last_rendered_width.set(Some(width));
     }

@@ -364,6 +364,7 @@ impl App {
         }
         prepared.floating_shortcuts = hud.is_some();
         let mut painted = PaintedConversation::default();
+        self.chat_widget.begin_steer_hint_draw();
         tui.draw_with_shortcut_hud(screen_size.height, hud, |frame| {
             if let Some(backdrop) = backdrop {
                 let viewport = frame.area();
@@ -658,6 +659,7 @@ impl App {
             }
             self.paint_centered_dialog(frame);
         })?;
+        self.chat_widget.finish_steer_hint_draw();
         // A shortcut HUD is painted after the conversation and can move over a stationary pointer.
         if hover_mouse != self.hover_pointer(tui, tui.link_hover.mouse) {
             frames.schedule_frame();
@@ -1278,6 +1280,8 @@ impl App {
         // Keys owned by the transcript and non-text keys still need fresh geometry immediately.
         if let TuiEvent::Key(key) = event
             && key.kind != KeyEventKind::Release
+            // Route this key against the hint it arrived on, before refreshing geometry.
+            && !self.chat_widget.interrupts_acknowledged_steer(*key)
             && (!self.chat_widget.is_in_paste_burst()
                 || self.transcript_view.is_search_editing()
                 || self.transcript_view.is_activity_focused()
