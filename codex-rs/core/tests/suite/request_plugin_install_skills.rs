@@ -119,7 +119,6 @@ async fn remote_skills_only_install_refreshes_warmed_cloud_catalog() -> Result<(
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()

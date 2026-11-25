@@ -533,7 +533,6 @@ async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         }
     });
     let test = test_codex()

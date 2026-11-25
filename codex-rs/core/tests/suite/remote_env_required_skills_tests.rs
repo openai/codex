@@ -80,7 +80,6 @@ async fn required_environment_skill_gates_inference(availability: Availability) 
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let server = start_mock_server().await;

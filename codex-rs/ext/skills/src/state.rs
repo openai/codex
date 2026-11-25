@@ -31,9 +31,6 @@ use crate::catalog_state::SkillReadCacheKey;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
-use crate::shadow_selection_experiment::RecentSkillInvocations;
-use crate::shadow_selection_experiment::ShadowSelectionTurnState;
-use crate::shadow_selection_experiment::ShadowTaskContext;
 use crate::sources::SkillProviders;
 use crate::step_state::SkillStepCatalog;
 
@@ -53,10 +50,7 @@ pub struct SkillsThreadState {
     catalog_state: Mutex<SkillCatalogState>,
     extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     aliases: SkillAliasState,
-    shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
-    pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
-    pub(crate) shadow_task_context: Arc<ShadowTaskContext>,
 }
 
 struct CloudSkillRefreshError {
@@ -78,10 +72,7 @@ impl SkillsThreadState {
             catalog_state: Mutex::new(SkillCatalogState::default()),
             extension_metrics,
             aliases: SkillAliasState::default(),
-            shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
-            recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
-            shadow_task_context: Arc::new(ShadowTaskContext::default()),
         }
     }
 
@@ -495,33 +486,6 @@ impl SkillsThreadState {
         }
         Ok(catalogs.cloud_resources.insert(cache_key, result))
     }
-
-    pub(crate) fn replace_shadow_selection_turn(
-        &self,
-        turn_id: String,
-        state: Option<ShadowSelectionTurnState>,
-    ) {
-        *self
-            .shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            state.map(|state| ShadowSelectionTurn {
-                turn_id,
-                state: Arc::new(state),
-            });
-    }
-
-    pub(crate) fn shadow_selection_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<Arc<ShadowSelectionTurnState>> {
-        self.shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .filter(|turn| turn.turn_id == turn_id)
-            .map(|turn| Arc::clone(&turn.state))
-    }
 }
 
 /// One bounded executor resource, retained for continuations until replacement or thread drop.
@@ -532,11 +496,6 @@ pub(crate) struct ExecutorReadSnapshot {
     // The key binds cached contents to their source filesystem and callback permissions.
     pub(crate) access: EnvironmentAccessKey,
     pub(crate) result: Arc<SkillReadResult>,
-}
-
-struct ShadowSelectionTurn {
-    turn_id: String,
-    state: Arc<ShadowSelectionTurnState>,
 }
 
 #[derive(Default)]

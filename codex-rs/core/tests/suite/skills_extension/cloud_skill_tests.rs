@@ -168,7 +168,6 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let chatgpt_base_url = server.uri();
@@ -513,7 +512,6 @@ async fn production_turn_aliases_discovered_singleton_cloud_locator() -> Result<
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let chatgpt_base_url = server.uri();
@@ -604,7 +602,6 @@ async fn cloud_skill_reads_run_in_parallel() -> Result<()> {
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let chatgpt_base_url = server.uri();
@@ -729,7 +726,6 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let chatgpt_base_url = responses_server.uri();

@@ -88,7 +88,6 @@ async fn executor_discovery_uses_current_environment_grants(
             omit_descriptions: false,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         }
     });
     let mut builder = test_codex()

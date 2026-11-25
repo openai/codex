@@ -3368,7 +3368,6 @@ async fn skill_instructions_in_parent_and_spawned_child(include_instructions: bo
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: false,
         cloud_skill_enabled: false,
-        shadow_selection_enabled: false,
     });
     let builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))

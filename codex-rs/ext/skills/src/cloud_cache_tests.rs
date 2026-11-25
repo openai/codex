@@ -99,7 +99,6 @@ fn state() -> SkillsThreadState {
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
         /*cloud_skills_available*/ true,
         /*extension_metrics*/ None,

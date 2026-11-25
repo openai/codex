@@ -45,7 +45,6 @@ codex-protocol-test-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 dunce = { workspace = true }
 insta = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

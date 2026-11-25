@@ -38,7 +38,6 @@ async fn frozen_cloud_skills_with_named_executor_request_history() -> Result<()>
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
         },
     );

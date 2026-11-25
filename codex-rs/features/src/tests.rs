@@ -789,10 +789,12 @@ fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
 }
 
 #[test]
-fn from_sources_accepts_and_ignores_removed_personality_feature_values() {
+fn from_sources_accepts_and_ignores_removed_boolean_feature_values() {
     for enabled in [false, true] {
-        let features_toml: FeaturesToml = toml::from_str(&format!("personality = {enabled}"))
-            .expect("legacy personality feature should deserialize");
+        let features_toml: FeaturesToml = toml::from_str(&format!(
+            "personality = {enabled}\nskill_search = {enabled}"
+        ))
+        .expect("legacy feature values should deserialize");
         let source = FeatureConfigSource {
             features: Some(&features_toml),
             ..Default::default()

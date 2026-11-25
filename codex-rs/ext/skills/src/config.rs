@@ -15,6 +15,4 @@ pub struct SkillsExtensionConfig {
     pub bundled_skills_enabled: bool,
     /// Whether cloud skills are discovered and exposed to the model.
     pub cloud_skill_enabled: bool,
-    /// Whether to evaluate skill selectors in the background when a metrics client is installed.
-    pub shadow_selection_enabled: bool,
 }

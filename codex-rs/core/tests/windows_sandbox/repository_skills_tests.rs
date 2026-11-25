@@ -30,7 +30,6 @@ async fn windows_elevated_repository_skills_enforce_cached_read_denials() -> any
         omit_descriptions: false,
         bundled_skills_enabled: false,
         cloud_skill_enabled: false,
-        shadow_selection_enabled: false,
     });
     let configured_codex_home = dunce::canonicalize(codex_home.path())?.abs();
     let builder = test_codex()

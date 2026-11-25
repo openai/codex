@@ -33,8 +33,6 @@ use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
 use codex_extension_api::SelectedPluginSnapshot;
-use codex_extension_api::SkillInvocationInput;
-use codex_extension_api::SkillInvocationKind;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallSource;
@@ -43,8 +41,6 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_models_manager::model_info::model_info_from_slug;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
 use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
 use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
 use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
@@ -82,7 +78,6 @@ use codex_skills_extension::catalog::SkillSearchResult;
 use codex_skills_extension::catalog::SkillSourceKind;
 use codex_skills_extension::install;
 use codex_skills_extension::install_with_providers;
-use codex_skills_extension::install_with_providers_and_metrics;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
 use codex_skills_extension::provider::SkillProviderFuture;
@@ -90,15 +85,9 @@ use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-#[path = "skills_extension/shadow_task_context_tests.rs"]
-mod shadow_task_context_tests;
 
 #[path = "skills_extension/presentation_dedup_tests.rs"]
 mod presentation_dedup_tests;
@@ -340,8 +329,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             .ok_or("skill path should have a parent")?,
     )?;
     std::fs::write(&skill_path, DEMO_SKILL_CONTENTS)?;
-    let mut config = default_config();
-    config.shadow_selection_enabled = true;
+    let config = default_config();
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder, skills_extension_config);
@@ -981,293 +969,6 @@ async fn host_world_state_uses_provider_catalog_with_core_compatible_rendering()
     assert!(body.contains("Fix lint errors."));
     assert!(!body.contains("Short description."));
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
-    Ok(())
-}
-
-#[tokio::test]
-async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> TestResult {
-    let list_calls = Arc::new(AtomicUsize::new(0));
-    let provider = Arc::new(StaticSkillProvider {
-        catalog: SkillCatalog {
-            is_partial: false,
-            entries: vec![test_entry(
-                SkillSourceKind::Host,
-                "host",
-                "host/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
-            warnings: Vec::new(),
-        },
-        read_requests: Arc::new(Mutex::new(Vec::new())),
-        list_calls: Some(Arc::clone(&list_calls)),
-        fail_first_list: false,
-    });
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-skills-extension",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )?;
-    let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers_and_metrics(
-        &mut builder,
-        SkillProviders::new().with_host_provider(provider),
-        Some(metrics.clone()),
-        skills_extension_config,
-    );
-    let registry = builder.build();
-    let session_store = ExtensionData::new("session");
-    let thread_store = ExtensionData::new("thread");
-    let mut config = default_config();
-    config.include_instructions = false;
-    config.shadow_selection_enabled = true;
-    registry.thread_lifecycle_contributors()[0]
-        .on_thread_start(ThreadStartInput {
-            config: &config,
-            session_source: &SessionSource::Cli,
-            persistent_thread_state_available: true,
-            environments: &[],
-            mcp_resource_client: None,
-            extension_metrics: None,
-            session_store: &session_store,
-            thread_store: &thread_store,
-        })
-        .await;
-    let turn_store = ExtensionData::new("turn-1");
-    let step_store = ExtensionData::new("step");
-    turn_store.insert(HostSkillsSnapshot::new(Arc::new(
-        SkillLoadOutcome::default(),
-    )));
-
-    let sections = prepared_world_state(
-        &registry,
-        &[],
-        WorldStateContributionInput {
-            previous_world_state: None,
-            step_store: &step_store,
-            model_info: &catalog_model_info(),
-            thread_id: codex_protocol::ThreadId::new(),
-            turn_id: "turn-1",
-            environments: &[],
-            extension_metrics: None,
-            session_store: &session_store,
-            thread_store: &thread_store,
-            turn_store: &turn_store,
-        },
-    )
-    .await;
-    let fragments = prepared_turn_input(
-        &registry,
-        TurnInputContext {
-            step_store: &step_store,
-            turn_id: "turn-1".to_string(),
-            user_input: &[UserInput::Text {
-                text: "Fix lint errors.".to_string(),
-                text_elements: Vec::new(),
-            }],
-            environments: Vec::new(),
-        },
-        /*extension_metrics*/ None,
-        &session_store,
-        &thread_store,
-        &turn_store,
-    )
-    .await;
-
-    assert!(
-        world_state_section(&sections, "host_skills")
-            .render_diff(PreviousWorldStateSection::Absent)
-            .1
-            .is_none()
-    );
-    assert!(fragments.is_empty());
-    let snapshots = shadow_task_context_tests::collect_shadow_observations(
-        &metrics,
-        "codex.skills.shadow_selection.catalog_entries",
-        /*expected*/ 12,
-    )
-    .await?;
-    let catalog_entry_counts = snapshots
-        .iter()
-        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .filter(|metric| metric.name() == "codex.skills.shadow_selection.catalog_entries")
-        .flat_map(|metric| match metric.data() {
-            AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
-                .data_points()
-                .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::sum),
-            data => panic!("unexpected shadow catalog metric data: {data:?}"),
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        catalog_entry_counts.iter().all(|count| *count == 1.0),
-        "every shadow selector should see the cached host skill: {catalog_entry_counts:?}"
-    );
-    assert_eq!(1, list_calls.load(Ordering::Relaxed));
-    Ok(())
-}
-
-#[tokio::test]
-async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> TestResult {
-    let provider = Arc::new(StaticSkillProvider {
-        catalog: SkillCatalog {
-            is_partial: false,
-            entries: vec![test_entry(
-                SkillSourceKind::Host,
-                "host",
-                "host/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
-            warnings: Vec::new(),
-        },
-        read_requests: Arc::new(Mutex::new(Vec::new())),
-        list_calls: None,
-        fail_first_list: false,
-    });
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-skills-extension",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )?;
-    let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers_and_metrics(
-        &mut builder,
-        SkillProviders::new().with_host_provider(provider),
-        Some(metrics.clone()),
-        skills_extension_config,
-    );
-    let registry = builder.build();
-    let session_store = ExtensionData::new("session");
-    let thread_store = ExtensionData::new("thread");
-    let mut config = default_config();
-    config.include_instructions = false;
-    config.shadow_selection_enabled = true;
-    registry.thread_lifecycle_contributors()[0]
-        .on_thread_start(ThreadStartInput {
-            config: &config,
-            session_source: &SessionSource::Cli,
-            persistent_thread_state_available: true,
-            environments: &[],
-            mcp_resource_client: None,
-            extension_metrics: None,
-            session_store: &session_store,
-            thread_store: &thread_store,
-        })
-        .await;
-
-    for (turn_id, text) in [("turn-1", "Fix lint errors."), ("turn-2", "continue")] {
-        let turn_store = ExtensionData::new(turn_id);
-        let fragments = prepared_turn_input(
-            &registry,
-            TurnInputContext {
-                step_store: &ExtensionData::new("step"),
-                turn_id: turn_id.to_string(),
-                user_input: &[UserInput::Text {
-                    text: text.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                environments: vec![codex_extension_api::TurnInputEnvironment {
-                    environment_id: "test".to_string(),
-                    cwd: PathUri::from_host_native_path(std::env::current_dir().expect("test cwd"))
-                        .expect("absolute cwd"),
-                    is_primary: true,
-                    fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
-                }],
-            },
-            /*extension_metrics*/ None,
-            &session_store,
-            &thread_store,
-            &turn_store,
-        )
-        .await;
-        assert!(fragments.is_empty());
-        registry.skill_invocation_contributors()[0]
-            .on_skill_invocation(SkillInvocationInput {
-                session_store: &session_store,
-                thread_store: &thread_store,
-                turn_store: &turn_store,
-                turn_id,
-                skill_resource: "lint-fix/SKILL.md",
-                kind: SkillInvocationKind::Implicit,
-            })
-            .await;
-    }
-
-    let snapshots = shadow_task_context_tests::collect_shadow_observations(
-        &metrics,
-        "codex.skills.shadow_selection.invocation",
-        /*expected*/ 24,
-    )
-    .await?;
-    let selector_hits = snapshots
-        .iter()
-        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .filter(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
-        .flat_map(|metric| match metric.data() {
-            AggregatedMetrics::U64(MetricData::Sum(sum)) => sum.data_points(),
-            data => panic!("unexpected shadow invocation metric data: {data:?}"),
-        })
-        .filter_map(|point| {
-            let method = point
-                .attributes()
-                .find(|attribute| attribute.key.as_str() == "method")?
-                .value
-                .as_str();
-            if !matches!(
-                method.as_ref(),
-                "lru_v1"
-                    | "lru_plus_lexical_v1"
-                    | "lru_plus_character_routing_v1"
-                    | "lru_plus_lexical_character_routing_v1"
-            ) {
-                return None;
-            }
-            let hit = point
-                .attributes()
-                .find(|attribute| attribute.key.as_str() == "hit")?
-                .value
-                .as_str()
-                .to_string();
-            Some((method.to_string(), hit, point.value()))
-        })
-        .fold(
-            std::collections::BTreeMap::new(),
-            |mut totals, (method, hit, count)| {
-                *totals.entry((method, hit)).or_insert(0) += count;
-                totals
-            },
-        )
-        .into_iter()
-        .map(|((method, hit), count)| (method, hit, count))
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        vec![
-            (
-                "lru_plus_character_routing_v1".to_string(),
-                "true".to_string(),
-                2,
-            ),
-            (
-                "lru_plus_lexical_character_routing_v1".to_string(),
-                "true".to_string(),
-                2,
-            ),
-            ("lru_plus_lexical_v1".to_string(), "true".to_string(), 2),
-            ("lru_v1".to_string(), "false".to_string(), 1),
-            ("lru_v1".to_string(), "true".to_string(), 1),
-        ],
-        selector_hits
-    );
     Ok(())
 }
 
@@ -3731,7 +3432,6 @@ struct TestConfig {
     omit_descriptions: bool,
     bundled_skills_enabled: bool,
     cloud_skill_enabled: bool,
-    shadow_selection_enabled: bool,
 }
 
 fn default_config() -> TestConfig {
@@ -3741,7 +3441,6 @@ fn default_config() -> TestConfig {
         omit_descriptions: false,
         bundled_skills_enabled: true,
         cloud_skill_enabled: true,
-        shadow_selection_enabled: false,
     }
 }
 
@@ -3753,7 +3452,6 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
         max_context_tokens: None,
         bundled_skills_enabled: config.bundled_skills_enabled,
         cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.shadow_selection_enabled,
     }
 }
 

@@ -320,7 +320,6 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
     });
     Arc::new(extensions.build())
 }
@@ -1766,7 +1765,6 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mock = mount_sse_sequence(
@@ -2256,7 +2254,6 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let server = start_mock_server().await;

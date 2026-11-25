@@ -129,10 +129,9 @@ pub(crate) fn thread_extensions(
     if let Some(provider) = cloud_skill_provider {
         skill_providers = skill_providers.with_cloud_provider(provider);
     }
-    codex_skills_extension::install_with_providers_and_metrics(
+    codex_skills_extension::install_with_providers(
         &mut builder,
         skill_providers,
-        codex_otel::global(),
         |config: &Config| codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             catalog_deltas_enabled: config
@@ -144,9 +143,6 @@ pub(crate) fn thread_extensions(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: config.bundled_skills_enabled(),
             cloud_skill_enabled: config.cloud_skill_enabled,
-            shadow_selection_enabled: config
-                .features
-                .enabled(codex_features::Feature::SkillSearch),
         },
     );
     builder.model_request_contributor(sample_responses);

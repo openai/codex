@@ -98,7 +98,6 @@ async fn cloud_preference_preserves_executor_aliases_and_description_budget(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
         },
     );
@@ -217,7 +216,6 @@ async fn skill_catalog_deltas_survive_resume_and_rebuild_after_compaction() -> R
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
         },
     );

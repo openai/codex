@@ -754,7 +754,6 @@ pub(super) async fn check_discovery_readiness(failure: DiscoveryFailure) -> Resu
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let model = responses::start_mock_server().await;
@@ -1265,7 +1264,6 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let test = test_codex()
@@ -1962,7 +1960,6 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     // Call both installations, then preserve the skill-read/auth-rotation/revocation flow.
