@@ -16,7 +16,7 @@ mod tests;
 use serde::Deserialize;
 use serde::Serialize;
 
-const MAX_GAP: u64 = (1 << 53) - 1;
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 
 /// A nullable root. JSON is limited to 64 KiB, 256 non-null nodes, depth 16 (root at 0),
@@ -101,6 +101,15 @@ pub(crate) struct TextProps {
     #[serde(rename = "preserveWhitespace", skip_serializing_if = "is_default")]
     #[cfg_attr(test, ts(as = "Option<bool>", optional))]
     preserve_whitespace: bool,
+    /// Clamp this text block after wrapping. Must be a positive safe integer.
+    /// If support is unknown for app.cli_version, return a literal string for the entire tree.
+    #[serde(
+        rename = "maxLines",
+        deserialize_with = "decode::max_lines",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(test, ts(type = "number", optional))]
+    max_lines: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

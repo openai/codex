@@ -27,6 +27,7 @@ pub(super) struct Paint {
     pub(super) href: Option<Arc<String>>,
     pub(super) inline_code: bool,
     pub(super) preserve_whitespace: bool,
+    pub(super) break_long_words: bool,
 }
 
 impl Paint {
@@ -327,19 +328,20 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
     let mut offset = 0;
     let mut previous: Option<char> = None;
     let mut word_hyphen = false;
-    let mut previous_preserved = false;
+    let mut previous_break_words = false;
     for run in runs {
+        let break_words = run.paint.preserve_whitespace || run.paint.break_long_words;
         let mut start = 0;
         for (i, grapheme) in run.text.grapheme_indices(true) {
             let position = offset + i;
             while breaks.next_if(|b| *b < position).is_some() {}
-            // Ordinary text uses textwrap’s word hyphens. In preserved text, Chromium also breaks
+            // Ordinary text uses textwrap’s word hyphens. In break-word text, Chromium also breaks
             // at flag hyphens and keeps paths and shell operators within a word.
             let first = grapheme.as_bytes()[0];
             let can_break = match previous {
                 _ if i == 0 && run.break_before => true,
                 Some(prev)
-                    if (previous_preserved || run.paint.preserve_whitespace)
+                    if (previous_break_words || break_words)
                         && prev.is_ascii_graphic()
                         && first.is_ascii_graphic() =>
                 {
@@ -348,7 +350,7 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
                 Some('-') => word_hyphen && grapheme.starts_with(char::is_alphanumeric),
                 // A collapsed separator can wrap before the first preserved space.
                 Some(' ' | '\t')
-                    if previous_preserved
+                    if previous_break_words
                         || (run.paint.preserve_whitespace && matches!(first, b' ' | b'\t')) =>
                 {
                     true
@@ -356,16 +358,16 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
                 Some('\u{ad}') => false,
                 _ => breaks.peek() == Some(&position),
             };
-            // Preserve normal word breaks first. An overlong preserved word can also
+            // Preserve normal word breaks first. An overlong preserved or clamped word can also
             // wrap at a grapheme boundary, as it does under overflow-wrap: break-word.
-            let preserved_boundary = position > 0
-                && (run.paint.preserve_whitespace
-                    || (previous_preserved && !matches!(run.text, RunText::Space)));
-            if can_break || preserved_boundary {
+            let emergency_boundary = position > 0
+                && (break_words || previous_break_words)
+                && !matches!(run.text, RunText::Space);
+            if can_break || emergency_boundary {
                 // A break after a literal space or tab can precede a collapsed
                 // prose separator. Keep the separator on this chunk, so only
                 // the prose space disappears when the line wraps.
-                let end = if previous_preserved && matches!(run.text, RunText::Space) {
+                let end = if previous_break_words && matches!(run.text, RunText::Space) {
                     run.text.len()
                 } else {
                     i
@@ -385,13 +387,13 @@ fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
                 }
                 chunk.break_before = if !can_break {
                     BreakBefore::Emergency
-                } else if previous_preserved && word_hyphen && first.is_ascii_digit() {
+                } else if previous_break_words && word_hyphen && first.is_ascii_digit() {
                     BreakBefore::AfterHyphenBeforeDigit
                 } else {
                     BreakBefore::Preferred
                 };
             }
-            previous_preserved = run.paint.preserve_whitespace;
+            previous_break_words = break_words;
             for ch in grapheme.chars() {
                 word_hyphen = ch == '-' && previous.is_some_and(char::is_alphanumeric);
                 previous = Some(ch);
@@ -423,6 +425,14 @@ impl Chunk {
         match self.runs.as_slice() {
             [run] if run.paint.preserve_whitespace && &*run.text == "\t" => Some(&run.paint),
             _ => None,
+        }
+    }
+
+    pub(super) fn minimum_cells(&self) -> usize {
+        if self.tab_paint().is_some() {
+            1
+        } else {
+            self.width_cells
         }
     }
 

@@ -86,6 +86,7 @@ enum Fragment<'a> {
     Background(usize, &'a Paint),
     /// A vertical gap takes up a line without advancing the horizontal position.
     BlankLine,
+    Ellipsis(&'a Paint),
 }
 
 impl<'a> Fragment<'a> {
@@ -96,11 +97,33 @@ impl<'a> Fragment<'a> {
             | Self::Gap(width, _)
             | Self::Background(width, _) => width,
             Self::BlankLine => 0,
+            Self::Ellipsis(_) => 1,
+        }
+    }
+
+    fn prefix(self, limit: usize) -> Self {
+        if self.width() <= limit {
+            return self;
+        }
+        match self {
+            Self::Text(chunks, _) => Self::Text(chunks, self.visit(limit, |_, _, _, _| {})),
+            Self::Padding(_, paint) => Self::Padding(limit, paint),
+            Self::Gap(_, paint) => Self::Gap(limit, paint),
+            Self::Background(_, paint) => Self::Background(limit, paint),
+            Self::Ellipsis(_) | Self::BlankLine => Self::BlankLine,
         }
     }
 
     fn visit(self, limit: usize, mut draw: impl FnMut(usize, &str, usize, &'a Paint)) -> usize {
         match self {
+            Self::Ellipsis(paint) => {
+                if limit > 0 {
+                    draw(0, "…", 1, paint);
+                    1
+                } else {
+                    0
+                }
+            }
             Self::Text(chunks, width) => visit_chunks(chunks, limit.min(width), draw),
             Self::BlankLine => 0,
             Self::Padding(width, paint)
@@ -123,6 +146,7 @@ type Visit<'a, 'b> = dyn FnMut(usize, Fragment<'a>) + 'b;
 /// Only the fragment that reaches the right edge must wait until overflow is known.
 #[derive(Default)]
 struct Row<'a> {
+    ends_in_marker: bool,
     width: usize,
     edge: Option<(usize, Fragment<'a>)>,
     last_paint: Option<&'a Paint>,
@@ -156,27 +180,37 @@ fn layout(root: Option<&PreparedNode>, bounds: Size, mut draw: Option<&mut Draw<
         in_aligned_row: false,
         fill_background: false,
     };
-    let total = layout_visible(root, available, height, &mut |y, fragment| {
-        if rows.len() <= y {
-            rows.resize_with(y + 1, Row::default);
-        }
-        let row = &mut rows[y];
-        let start = row.width;
-        row.width += fragment.width();
-        if start < width {
-            if row.width >= width {
-                row.edge = Some((start, fragment));
-            } else if let Some(draw) = draw.as_deref_mut() {
-                fragment.visit(usize::MAX, |offset, text, cells, paint| {
-                    draw(y, start + offset, text, cells, paint);
-                    row.last_paint = Some(paint);
-                });
+    let total = layout_visible(
+        root,
+        available,
+        height,
+        /*marker*/ None,
+        &mut |y, fragment| {
+            if rows.len() <= y {
+                rows.resize_with(y + 1, Row::default);
             }
-        }
-    });
+            let row = &mut rows[y];
+            let start = row.width;
+            row.width += fragment.width();
+            if fragment.width() > 0 {
+                row.ends_in_marker = matches!(fragment, Fragment::Ellipsis(_));
+            }
+            if start < width {
+                if row.width >= width {
+                    row.edge = Some((start, fragment));
+                } else if let Some(draw) = draw.as_deref_mut() {
+                    fragment.visit(usize::MAX, |offset, text, cells, paint| {
+                        draw(y, start + offset, text, cells, paint);
+                        row.last_paint = Some(paint);
+                    });
+                }
+            }
+        },
+    );
     let mut measured = Size::new(0, total.min(height) as u16);
     for (y, row) in rows.into_iter().enumerate() {
-        let clipped = row.width > width || (y + 1 == height && total > height);
+        let clipped =
+            row.width > width || (y + 1 == height && total > height && !row.ends_in_marker);
         let mut end = row.width;
         let mut last_paint = row.last_paint;
         if clipped && width == 1 {
@@ -213,6 +247,7 @@ fn layout_visible<'a>(
     root: &'a PreparedNode,
     width: AvailableWidth,
     height: usize,
+    marker: Option<&'a Paint>,
     visit: &mut Visit<'a, '_>,
 ) -> usize {
     let mut tail = Vec::new();
@@ -224,22 +259,41 @@ fn layout_visible<'a>(
         }
         if y + 1 == height {
             last_width += fragment.width();
-            if matches!(fragment, Fragment::Padding(..)) {
+            if matches!(fragment, Fragment::Padding(cells, _) if cells > 0) {
                 padding = Some(tail.len());
             }
-            if padding.is_some() {
+            if marker.is_some() || padding.is_some() {
                 tail.push(fragment);
                 return;
             }
         }
         visit(y, fragment);
     });
-    if total > height
+    let marked = tail
+        .iter()
+        .rev()
+        .find(|f| f.width() > 0)
+        .is_some_and(|f| matches!(f, Fragment::Ellipsis(_)));
+    let clipped = total > height && (!marked || last_width > width.cells);
+    if clipped
         && last_width == width.cells
         && let Some(index) = padding
         && let Fragment::Padding(cells, _) = &mut tail[index]
     {
         *cells -= 1;
+    }
+    if let Some(marker) = marker.filter(|_| clipped && width.cells > 0) {
+        let mut remaining = width.cells - 1;
+        for fragment in tail {
+            let prefix = fragment.prefix(remaining);
+            visit(height - 1, prefix);
+            remaining -= prefix.width();
+            if prefix.width() < fragment.width() {
+                break;
+            }
+        }
+        visit(height - 1, Fragment::Ellipsis(marker));
+        return height;
     }
     for fragment in tail {
         visit(height - 1, fragment);
@@ -255,6 +309,18 @@ fn layout_node<'a>(
 ) -> usize {
     match &node.kind {
         NodeKind::Empty => 0,
+        NodeKind::Clamped {
+            content,
+            max_lines,
+            marker,
+        } => {
+            if *max_lines >= limit as u64 {
+                layout_node(content, width, limit, visit)
+            } else {
+                let height = *max_lines as usize;
+                layout_visible(content, width, height, Some(marker), visit).min(height)
+            }
+        }
         NodeKind::Text(text) => text.layout(width, limit, visit),
         NodeKind::Col { children, gap } => {
             let gap = (*gap).min(limit as u64) as usize;
@@ -472,7 +538,7 @@ pub(crate) fn sanitize_leaf(mut raw: String) -> String {
 
 impl TextProps {
     fn apply_to(&self, paint: &mut Paint) {
-        paint.preserve_whitespace |= self.preserve_whitespace;
+        paint.preserve_whitespace |= self.preserve_whitespace && self.max_lines.is_none();
         if let Some(color) = self.color {
             paint.foreground = Some(color);
         }

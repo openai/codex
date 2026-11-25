@@ -19,7 +19,7 @@ pub(super) struct PreparedNode {
     pub(super) widths: Widths,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct Widths {
     pub(super) minimum: u64,
     pub(super) preferred: u64,
@@ -28,6 +28,11 @@ pub(super) struct Widths {
 #[derive(Debug, PartialEq)]
 pub(super) enum NodeKind {
     Text(PreparedText),
+    Clamped {
+        content: Box<PreparedNode>,
+        max_lines: u64,
+        marker: Paint,
+    },
     Col {
         children: Vec<PreparedNode>,
         gap: u64,
@@ -40,7 +45,7 @@ pub(super) enum NodeKind {
     Empty,
 }
 
-/// A column interrupts inline flow even when its contents have zero height.
+/// A block interrupts inline flow even when its contents have zero height.
 #[derive(Default)]
 struct Flow {
     blocks: Vec<PreparedNode>,
@@ -49,6 +54,12 @@ struct Flow {
 }
 
 impl Flow {
+    fn finish_line(&mut self, inline: &mut InlineText) {
+        self.line.extend(PreparedNode::text(std::mem::take(inline)));
+        let line = self.take_line();
+        self.blocks.extend(line);
+    }
+
     fn take_line(&mut self) -> Option<PreparedNode> {
         if self.line.len() <= 1 {
             self.line.pop()
@@ -80,6 +91,28 @@ impl PreparedNode {
             return flow.blocks.pop();
         }
         Some(Self::col(flow.blocks, /*gap*/ 0))
+    }
+
+    // Emergency word breaks allow each chunk to fit independently. Flex rows
+    // retain the space required by their children and gaps.
+    fn breakable_minimum(&self) -> u64 {
+        match &self.kind {
+            NodeKind::Text(text) => text
+                .lines
+                .iter()
+                .flatten()
+                .map(super::text::Chunk::minimum_cells)
+                .max()
+                .unwrap_or_default() as u64,
+            NodeKind::Col { children, .. } => children
+                .iter()
+                .map(Self::breakable_minimum)
+                .max()
+                .unwrap_or_default(),
+            NodeKind::Clamped { .. } | NodeKind::Row { .. } | NodeKind::Empty => {
+                self.widths.minimum
+            }
+        }
     }
 
     fn col(children: Vec<Self>, gap: u64) -> Self {
@@ -201,9 +234,7 @@ impl PreparedNode {
                 children
             }
             UiNode::Col { props, children } => {
-                flow.line.extend(Self::text(std::mem::take(inline)));
-                let line = flow.take_line();
-                flow.blocks.extend(line);
+                flow.finish_line(inline);
                 let children = Self::flex_items(children, &paint);
                 flow.blocks.push(Self::col(children, props.gap));
                 return;
@@ -228,6 +259,29 @@ impl PreparedNode {
             }
             UiNode::Text { props, children } => {
                 props.apply_to(&mut paint);
+                if let Some(max_lines) = props.max_lines {
+                    paint.break_long_words = true;
+                    flow.finish_line(inline);
+                    let node = UiNode::Text {
+                        props: Default::default(),
+                        children,
+                    };
+                    if let Some(content) = Self::from_node(node, paint.clone()) {
+                        paint.href = None;
+                        flow.blocks.push(Self {
+                            widths: Widths {
+                                minimum: content.breakable_minimum(),
+                                preferred: content.widths.preferred,
+                            },
+                            kind: NodeKind::Clamped {
+                                content: Box::new(content),
+                                max_lines,
+                                marker: paint,
+                            },
+                        });
+                    }
+                    return;
+                }
                 children
             }
             UiNode::Link { props, children } => {

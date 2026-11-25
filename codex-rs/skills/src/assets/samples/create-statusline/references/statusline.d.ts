@@ -83,7 +83,12 @@ export type TextProps = { color?: Color | null, weight?: TextWeight | null, ital
 /**
  * Preserve spaces and tabs across styled children.
  */
-preserveWhitespace?: boolean, };
+preserveWhitespace?: boolean,
+/**
+ * Clamp this text block after wrapping. Must be a positive safe integer.
+ * If support is unknown for app.cli_version, return a literal string for the entire tree.
+ */
+maxLines?: number, };
 
 export type TextWeight = "normal" | "bold";
 

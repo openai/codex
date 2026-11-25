@@ -32,7 +32,12 @@ fn elements_round_trip_and_require_explicit_row_spacing() {
     ] {
         assert!(parse(json!({"type":"link","props":{"href":href},"children":[]})).is_err());
     }
-    for (gap, expected) in [(0, "AB"), (1, "A B"), (2, "A  B"), (MAX_GAP, "A  …")] {
+    for (gap, expected) in [
+        (0, "AB"),
+        (1, "A B"),
+        (2, "A  B"),
+        (MAX_SAFE_INTEGER, "A  …"),
+    ] {
         let row = tree(json!({"type":"row","props":{"gap":gap},"children":["A","B"]}));
         assert_eq!(painted_rows(&row, Size::new(4, 1)), [expected]);
     }
@@ -215,6 +220,69 @@ fn preserved_text_keeps_spacing_across_inline_styles_and_wraps() {
         buf[(9, 0)]
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
+fn clamping_text_reserves_space_for_following_fields() {
+    let node = tree(json!({"type":"col","props":{"gap":0},"children":[
+        {"type":"text","props":{"maxLines":2,"preserveWhitespace":true},"children":["aa  bb cc dd ee"]},
+        "ok"
+    ]}));
+    insta::assert_snapshot!(painted_rows(&node, Size::new(5, 3)).join("\n"), @"aa bb\ncc d…\nok");
+    assert_eq!(
+        painted_rows(&node, Size::new(8, 3)),
+        ["aa bb cc", "dd ee", "ok"]
+    );
+    assert_eq!(painted_rows(&node, Size::new(5, 1)), ["aa b…"]);
+    assert_eq!(painted_rows(&node, Size::new(3, 2)), ["aa", "bb…"]);
+    let word = tree(json!({"type":"text","props":{"maxLines":2},"children":["123456789"]}));
+    assert_eq!(painted_rows(&word, Size::new(4, 3)), ["1234", "567…"]);
+    let job = tree(json!({"type":"text","props":{"maxLines":2},"children":["job-123"]}));
+    assert_eq!(painted_rows(&job, Size::new(3, 2)), ["job", "-1…"]);
+    for invalid in [
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!(null),
+        json!(9007199254740992u64),
+    ] {
+        assert!(parse(json!({"type":"text","props":{"maxLines":invalid},"children":[]})).is_err());
+    }
+}
+
+#[test]
+fn viewport_overflow_cannot_reclaim_padding_already_used_by_a_clamp() {
+    let node = tree(json!({"type":"col","props":{"gap":0},"children":[
+        {"type":"row","props":{"gap":0},"children":[
+            {"type":"text","props":{"maxLines":1},"children":[
+                {"type":"row","props":{"gap":1,"justify":"end","wrap":"wrap"},"children":[
+                    {"type":"text","children":["X"]}, {"type":"text","children":["Y"]}
+                ]}
+            ]},
+            "B"
+        ]},
+        "C"
+    ]}));
+    assert_eq!(painted_rows(&node, Size::new(3, 1)), ["X……"]);
+    assert_eq!(painted_rows(&node, Size::new(3, 2)), ["X…B", "C"]);
+    assert_eq!(painted_rows(&node, Size::new(4, 2)), ["X YB", "C"]);
+}
+
+#[test]
+fn clamped_link_keeps_whole_graphemes_and_an_unlinked_marker() {
+    let href = "https://example.com/";
+    let node = tree(json!({"type":"link","props":{"href":href},"children":[
+        {"type":"text","props":{"maxLines":1},"children":["a界\nb"]}
+    ]}));
+    let bounds = Size::new(3, 3);
+    assert_eq!(node.measure(bounds), Size::new(2, 1));
+    assert_eq!(
+        painted_rows(&node, bounds),
+        [format!(
+            "{}…",
+            crate::terminal_hyperlinks::osc8_hyperlink(href, "a")
+        )]
     );
 }
 
@@ -805,7 +873,7 @@ fn col_stacks_rows_after_wrapping_and_skips_absent_children() {
         ["model", "main", "", "75% 1k"]
     );
     let clipped = tree(
-        json!({"type":"col","props":{"gap":MAX_GAP},"children":[{"type":"text","children":["a"]},{"type":"text","children":["b"]}]}),
+        json!({"type":"col","props":{"gap":MAX_SAFE_INTEGER},"children":[{"type":"text","children":["a"]},{"type":"text","children":["b"]}]}),
     );
     assert_eq!(painted_rows(&clipped, Size::new(5, 3)), ["a", "", "…"]);
 }
@@ -1349,6 +1417,38 @@ fn blank_nested_row_keeps_its_height_without_displacing_a_wide_sibling() {
         }));
         assert_eq!(painted_rows(&node, Size::new(width, 2)), expected);
     }
+}
+
+#[test]
+fn clamped_word_shrinks_to_keep_its_sibling_visible() {
+    let node = tree(json!({"type":"row","props":{"gap":1},"children":[
+        {"type":"text","props":{"maxLines":1},"children":["abcdefghij"]}, "!"
+    ]}));
+    assert_eq!(painted_rows(&node, Size::new(8, 1)), ["abcde… !"]);
+    assert_eq!(painted_rows(&node, Size::new(3, 1)), ["… !"]);
+    assert_eq!(painted_rows(&node, Size::new(1, 1)), ["…"]);
+}
+
+#[test]
+fn blank_clamp_keeps_its_sibling_end_aligned_without_a_marker() {
+    let node = tree(
+        json!({"type":"row","props":{"gap":0,"justify":"end"},"children":[
+            {"type":"text","props":{"maxLines":1},"children":["\n\n"]}, "ok"
+        ]}),
+    );
+    assert_eq!(painted_rows(&node, Size::new(5, 1)), ["   ok"]);
+    assert_eq!(painted_rows(&node, Size::new(2, 1)), ["ok"]);
+}
+
+#[test]
+fn clamped_blank_text_keeps_its_height_in_a_zero_width_slot() {
+    let node = tree(json!({
+        "type": "row", "props": {"gap": 0}, "children": [
+            {"type": "text", "props": {"maxLines": 2}, "children": ["\n\n\n"]},
+            "A"
+        ]
+    }));
+    assert_eq!(painted_rows(&node, Size::new(1, 3)), ["A", ""]);
 }
 
 #[test]
