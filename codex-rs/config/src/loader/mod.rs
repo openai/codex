@@ -1404,6 +1404,7 @@ fn sanitize_project_config(
             "respect_system_proxy",
             "system_proxy_fallback",
             "credential_masking",
+            "guardianv3_shadow",
         ] {
             if features.remove(key).is_some() {
                 ignored_keys.push(format!("features.{key}"));

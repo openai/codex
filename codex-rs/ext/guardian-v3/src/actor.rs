@@ -57,7 +57,9 @@ impl PreparedReviewer {
     }
 
     pub fn finish(mut self, disposition: SessionDisposition) {
-        if disposition == SessionDisposition::Reusable {
+        if disposition == SessionDisposition::Reusable
+            && !self.conversation.thread.has_shutdown_status()
+        {
             self.conversation.kind = GuardianReviewSessionKind::TrunkReused;
             *self.slot = Some(self.conversation);
         }
@@ -72,6 +74,7 @@ impl ActorReviewer {
         path: AgentPath,
         retrieval: ReviewRetrieval,
         tree: Arc<TreeDelivery>,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             manager,
@@ -84,7 +87,10 @@ impl ActorReviewer {
                 binding: None,
             })),
             slot: Default::default(),
-            lifetime: Default::default(),
+            lifetime: ReviewerTasks {
+                cancellation,
+                ..Default::default()
+            },
         }
     }
 
@@ -92,6 +98,11 @@ impl ActorReviewer {
         self.lifetime.cancellation.cancel();
         self.lifetime.tasks.close();
         self.lifetime.tasks.wait().await;
+        // A loaded child may keep its cancelled registration until its next
+        // turn. Release the retired conversation and its board handles now.
+        if let Ok(mut slot) = self.slot.try_lock() {
+            slot.take();
+        }
         let delivery = self
             .delivery
             .lock()
@@ -113,6 +124,7 @@ impl ActorReviewer {
         }
         let delivery = state
             .tree
+            .delivery
             .get()
             .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
         let binding = LiveRetrievalBinding::new(board, self.actor, self.path.clone(), delivery)
@@ -197,10 +209,16 @@ impl ActorReviewer {
     ) -> Result<Conversation, ReviewPreparationError> {
         let binding = self.binding(Arc::clone(&worker.reader))?;
         let stop = self.lifetime.cancellation.child_token();
-        let conversation =
-            Conversation::start(manager, setup, &self.lifetime, binding, stop.clone())
-                .await
-                .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
+        let conversation = Conversation::start(
+            manager,
+            setup,
+            &self.lifetime,
+            binding,
+            stop.clone(),
+            worker.shadow,
+        )
+        .await
+        .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
         self.observe_inbox(
             Arc::clone(&worker.reader),
             &conversation.inbox,

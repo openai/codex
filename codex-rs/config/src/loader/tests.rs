@@ -1359,11 +1359,12 @@ fn project_config_cannot_supply_guardian_v3_prompts_or_their_cap() {
 }
 
 #[test]
-fn project_config_cannot_change_system_proxy_routing_or_credential_masking() {
+fn project_config_cannot_change_protected_features() {
     for key in [
         "respect_system_proxy",
         "system_proxy_fallback",
         "credential_masking",
+        "guardianv3_shadow",
     ] {
         for enabled in [false, true] {
             let mut config: TomlValue =

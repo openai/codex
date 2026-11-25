@@ -496,3 +496,162 @@ async fn committed_posts_reach_current_subscribers_once_across_channel_retries()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
+    use codex_core::guardian_review::AttachedReviewer;
+    use codex_core::guardian_review::ShadowReviewer;
+    use codex_extension_api::ExtensionData;
+    use codex_extension_api::ExtensionRegistryBuilder;
+    use codex_extension_api::ThreadReadyInput;
+    use codex_extension_api::ThreadStopInput;
+    use codex_features::Feature;
+    use codex_protocol::AgentPath;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+    use futures::FutureExt;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&server)
+        .await?;
+    let root = test.session_configured.thread_id;
+    let session = ExtensionData::new(root.to_string());
+    let thread = test.codex.thread_extension_data();
+    let mut registry = ExtensionRegistryBuilder::default();
+    crate::install_shadow(
+        &mut registry,
+        Arc::downgrade(&test.thread_manager),
+        |root| board_host(root),
+    );
+    let registry = registry.build();
+    let lifecycle = &registry.thread_lifecycle_contributors()[0];
+    let mut config = test.config.clone();
+    config.features.enable(Feature::GuardianV2)?;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+    let mode = test
+        .codex
+        .thread_settings_snapshot()
+        .await
+        .collaboration_mode;
+    let turn = ExtensionData::new("retry");
+    let start = || codex_extension_api::TurnStartInput {
+        turn_id: "retry",
+        collaboration_mode: &mode,
+        token_usage_at_turn_start: None,
+        session_store: &session,
+        thread_store: thread,
+        turn_store: &turn,
+    };
+    let turns = &registry.turn_lifecycle_contributors()[0];
+    // Force the first lookup to fail, then retry with the live manager on a turn.
+    let mut unavailable = ExtensionRegistryBuilder::default();
+    crate::install_shadow(&mut unavailable, std::sync::Weak::new(), |root| {
+        board_host(root)
+    });
+    let unavailable = unavailable.build();
+    for (enrolled, history, expected) in [
+        (false, HistoryInitialization::New, false),
+        (true, HistoryInitialization::ColdResume, false),
+        (true, HistoryInitialization::WarmFork, false),
+        (true, HistoryInitialization::New, true),
+    ] {
+        if enrolled {
+            config.features.enable(Feature::GuardianV3Shadow)?;
+        }
+        lifecycle
+            .on_thread_start(codex_extension_api::ThreadStartInput {
+                config: &config,
+                session_source: &SessionSource::Exec,
+                persistent_thread_state_available: true,
+                environments: &[],
+                mcp_resource_client: None,
+                extension_metrics: None,
+                session_store: &session,
+                thread_store: thread,
+            })
+            .await;
+        assert!(thread.get::<PreserveReviewWrites>().is_none());
+        let ready = unavailable.thread_lifecycle_contributors()[0]
+            .on_thread_ready(ThreadReadyInput {
+                config: &config,
+                session_source: &SessionSource::Exec,
+                history_initialization: history,
+                history_mode: ThreadHistoryMode::Paginated,
+                session_store: &session,
+                thread_store: thread,
+            })
+            .now_or_never();
+        assert_eq!(ready, Some(()));
+        assert!(thread.get::<ShadowReviewer>().is_none());
+        if let Some(enrollment) = thread.get::<super::shadow::Enrollment>() {
+            enrollment.drain().await;
+            assert!(thread.get::<ShadowReviewer>().is_none());
+            assert!(thread.get::<super::RootWorker>().is_none());
+            assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
+            enrollment.drain().await;
+        }
+        assert_eq!(thread.get::<ShadowReviewer>().is_some(), expected);
+        assert_eq!(thread.get::<crate::host::RootWorker>().is_some(), expected);
+        assert!(thread.get::<Arc<dyn AttachedReviewer>>().is_none());
+    }
+    let old_reviewer = thread.get::<ShadowReviewer>().context("first reviewer")?;
+    let child = ExtensionData::new(ThreadId::new().to_string());
+    let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: root,
+        depth: 1,
+        agent_path: Some(
+            AgentPath::root()
+                .join("worker")
+                .map_err(anyhow::Error::msg)?,
+        ),
+        agent_nickname: None,
+        agent_role: None,
+    });
+    lifecycle
+        .on_thread_ready(ThreadReadyInput {
+            config: &config,
+            session_source: &source,
+            history_initialization: HistoryInitialization::WarmFork,
+            history_mode: ThreadHistoryMode::Paginated,
+            session_store: &session,
+            thread_store: &child,
+        })
+        .await;
+    let child_reviewer = child.get::<ShadowReviewer>().context("child reviewer")?;
+    assert!(child.get::<super::RootWorker>().is_none());
+
+    let mut disabled = config.clone();
+    disabled.approvals_reviewer = ApprovalsReviewer::User;
+    let settings = &registry.config_contributors()[0];
+    settings.on_config_changed(&session, thread, &config, &disabled);
+    assert!(old_reviewer.cancellation.is_cancelled());
+    assert!(child_reviewer.cancellation.is_cancelled());
+    assert!(thread.get::<ShadowReviewer>().is_none());
+    assert!(thread.get::<super::RootWorker>().is_none());
+
+    lifecycle
+        .on_thread_stop(ThreadStopInput {
+            thread_store: thread,
+            session_store: &session,
+        })
+        .await;
+    assert!(thread.get::<crate::host::RootWorker>().is_none());
+    assert!(
+        !config
+            .sqlite_config()
+            .home()
+            .join("message_board_guardian_1.sqlite")
+            .exists()
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}

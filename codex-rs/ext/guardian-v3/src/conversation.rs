@@ -64,11 +64,19 @@ impl Conversation {
         owner: &ReviewerTasks,
         binding: LiveRetrievalBinding,
         stop: CancellationToken,
+        shadow: bool,
     ) -> anyhow::Result<Self> {
         let key = prepared.reuse_key(/*previous*/ None);
         let (mut options, state) = prepared
             .thread_options(GuardianReviewSessionKind::TrunkNew, /*snapshot*/ None)
             .await;
+        if shadow {
+            options.config.ephemeral = true;
+            options.config.feedback_enabled = false;
+            options
+                .thread_extension_init
+                .insert(codex_core::guardian_review::ShadowReviewSession);
+        }
         options.initial_history = codex_history::InitialHistory::New;
         let mut registry = ExtensionRegistryBuilder::<Config>::default();
         crate::install_retrieval_tools(&mut registry);

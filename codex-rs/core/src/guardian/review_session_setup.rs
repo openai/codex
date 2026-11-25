@@ -197,7 +197,13 @@ impl PreparedGuardianContext {
         cancellation: CancellationToken,
     ) -> GuardianReviewSession {
         let session = Arc::clone(&thread.session);
-        if self.parent.enabled(Feature::GuardianRecordedItems) {
+        if self.parent.enabled(Feature::GuardianRecordedItems)
+            && session
+                .services
+                .thread_extension_data
+                .get::<crate::guardian_review::ShadowReviewSession>()
+                .is_none()
+        {
             session
                 .parent_observer_event_tx
                 .get_or_init(|| self.parent.get_tx_event());

@@ -40,6 +40,16 @@ pub fn reviewer_headers(config: &crate::config::Config) -> crate::CodexResponses
     }
 }
 
+/// Kept out of the authoritative reviewer slot so routing and prewarming stay unchanged.
+pub struct ShadowReviewer {
+    pub reviewer: std::sync::Arc<dyn AttachedReviewer>,
+    /// Stops this actor when it shuts down or the root leaves Auto Review.
+    pub cancellation: tokio_util::sync::CancellationToken,
+}
+
+/// Marks the private inference thread, which must never forward items to its parent.
+pub struct ShadowReviewSession;
+
 /// Safe to report with a review ID before a verdict has started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ReviewPreparationError {

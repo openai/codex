@@ -1132,6 +1132,9 @@
             "guardianv3": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
             },
+            "guardianv3_shadow": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -8518,6 +8521,9 @@
         },
         "guardianv3": {
           "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
+        },
+        "guardianv3_shadow": {
+          "type": "boolean"
         },
         "hooks": {
           "type": "boolean"

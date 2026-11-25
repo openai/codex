@@ -12,6 +12,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::guardian_review::PreserveReviewWrites;
 use codex_core::guardian_review::ReviewRetrieval;
+use codex_core::guardian_review::ShadowReviewer;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -21,6 +22,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_features::GuardianV3HousekeeperConfigToml;
 use codex_guardian_reviewer::ReviewerTasks;
@@ -34,6 +36,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_state::SqliteConfig;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::ActorReviewer;
 use crate::EvidenceCursor;
@@ -41,6 +44,9 @@ use crate::Housekeeper;
 use crate::LiveDelivery;
 use crate::local_board;
 use crate::local_board_options;
+
+#[path = "shadow.rs"]
+mod shadow;
 
 #[cfg(test)]
 #[path = "host_tests.rs"]
@@ -54,8 +60,9 @@ pub fn install(
 ) {
     let settings = config.guardian_v3.as_deref();
     let host = Arc::new(Host {
+        shadow: false,
         manager,
-        deliveries: Mutex::default(),
+        deliveries: Arc::default(),
         storage: if settings
             .and_then(|settings| settings.message_board_in_memory)
             .unwrap_or(false)
@@ -74,12 +81,47 @@ pub fn install(
                 .and_then(|settings| settings.reviewer.as_ref())
                 .and_then(|reviewer| reviewer.retrieval_instructions.as_deref()),
         ),
-        board_host: Box::new(board_host),
+        board_host: Arc::new(board_host),
     });
     registry.thread_lifecycle_contributor(host.clone());
     registry.turn_lifecycle_contributor(host);
 }
 
+/// Desktop supplies rollout overrides at thread start, after registration.
+pub fn install_shadow(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    manager: Weak<ThreadManager>,
+    board_host: impl Fn(ThreadId) -> Arc<dyn MessageBoardHost> + Send + Sync + 'static,
+) {
+    let host = Arc::new(Host {
+        shadow: true,
+        manager,
+        deliveries: Arc::default(),
+        storage: BoardStorage::Memory,
+        housekeeper: Arc::default(),
+        retrieval: crate::board_retrieval(/*instructions*/ None),
+        board_host: Arc::new(board_host),
+    });
+    registry.thread_lifecycle_contributor(host.clone());
+    registry.config_contributor(host.clone());
+    registry.turn_lifecycle_contributor(host);
+}
+
+impl Host {
+    fn enabled(&self, config: &Config) -> bool {
+        !self.shadow
+            || (config
+                .features
+                .enabled(codex_features::Feature::GuardianV3Shadow)
+                && config.features.enabled(codex_features::Feature::GuardianV2)
+                && routes_approval_policy_to_guardian(
+                    config.permissions.approval_policy.value(),
+                    config.approvals_reviewer,
+                ))
+    }
+}
+
+#[derive(Clone)]
 enum BoardStorage {
     File(SqliteConfig),
     Memory,
@@ -87,18 +129,26 @@ enum BoardStorage {
 
 // Shared by loaded actors, even before their first review.
 // Only the root can initialize the cursor, using its own history.
-pub(super) type TreeDelivery = OnceLock<Arc<LiveDelivery>>;
+#[derive(Default)]
+pub(super) struct TreeDelivery {
+    pub(super) delivery: OnceLock<Arc<LiveDelivery>>,
+    stop: CancellationToken,
+    actors: Mutex<Vec<Weak<ActorReviewer>>>,
+}
 
+#[derive(Clone)]
 struct Host {
+    shadow: bool,
     manager: Weak<ThreadManager>,
-    deliveries: Mutex<HashMap<ThreadId, Weak<TreeDelivery>>>,
+    deliveries: Arc<Mutex<HashMap<ThreadId, Weak<TreeDelivery>>>>,
     storage: BoardStorage,
     housekeeper: Arc<GuardianV3HousekeeperConfigToml>,
     retrieval: ReviewRetrieval,
-    board_host: Box<dyn Fn(ThreadId) -> Arc<dyn MessageBoardHost> + Send + Sync>,
+    board_host: Arc<dyn Fn(ThreadId) -> Arc<dyn MessageBoardHost> + Send + Sync>,
 }
 
 pub(super) struct RootWorker {
+    pub(super) shadow: bool,
     pub(super) reader: Arc<dyn AgentMessageBoard>,
     wake: mpsc::Sender<()>,
     lifetime: ReviewerTasks,
@@ -110,44 +160,58 @@ impl Host {
             .deliveries
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(tree) = deliveries.get(&root).and_then(Weak::upgrade) {
+        if let Some(tree) = deliveries.get(&root).and_then(Weak::upgrade)
+            && !tree.stop.is_cancelled()
+        {
             return tree;
         }
         deliveries.retain(|_, tree| tree.strong_count() > 0);
-        let tree = Arc::new(TreeDelivery::new());
+        let tree = Arc::new(TreeDelivery::default());
         deliveries.insert(root, Arc::downgrade(&tree));
         tree
+    }
+
+    fn reviewer(
+        &self,
+        identity: &shadow::Actor,
+        tree: &Arc<TreeDelivery>,
+        cancellation: CancellationToken,
+    ) -> Arc<ActorReviewer> {
+        Arc::new(ActorReviewer::new(
+            self.manager.clone(),
+            identity.root,
+            identity.actor,
+            identity.path.clone(),
+            self.retrieval.clone(),
+            Arc::clone(tree),
+            cancellation,
+        ))
     }
 
     async fn activate(
         &self,
         root: ThreadId,
         tree: &TreeDelivery,
-        input: &ThreadReadyInput<'_, Config>,
+        thread: &ExtensionData,
+        mode: codex_protocol::protocol::ThreadHistoryMode,
+        initialization: HistoryInitialization,
     ) -> anyhow::Result<()> {
-        // On resume the intake cursor starts at the tail. A new in-memory board
-        // cannot serve earlier evidence, so leave its attached reviewer unavailable.
-        if matches!(self.storage, BoardStorage::Memory) {
-            anyhow::ensure!(
-                matches!(
-                    input.history_initialization,
-                    HistoryInitialization::New | HistoryInitialization::Cleared
-                ),
-                "in-memory Guardian evidence requires a fresh root"
-            );
-        }
         let history = self
             .manager
             .upgrade()
             .context("Guardian host stopped")?
             .thread_store();
-        let cursor = EvidenceCursor::at_thread_ready(
-            history.as_ref(),
-            root,
-            input.history_mode,
-            input.history_initialization,
-        )
-        .await?;
+        if matches!(self.storage, BoardStorage::Memory) {
+            anyhow::ensure!(
+                matches!(
+                    initialization,
+                    HistoryInitialization::New | HistoryInitialization::Cleared
+                ),
+                "in-memory Guardian evidence requires a fresh root"
+            );
+        }
+        let cursor =
+            EvidenceCursor::at_thread_ready(history.as_ref(), root, mode, initialization).await?;
         let board_host = (self.board_host)(root);
         let board = match &self.storage {
             BoardStorage::File(sqlite) => {
@@ -165,11 +229,23 @@ impl Host {
                 .await?
             }
         };
+        // No awaits after this check. A concurrent stop must either cancel
+        // startup or find the published worker to drain.
+        let _publication = tree.actors.lock().unwrap_or_else(PoisonError::into_inner);
+        if tree.stop.is_cancelled() {
+            return Ok(());
+        }
         let reader: Arc<dyn AgentMessageBoard> = Arc::new(board.read_only_handle());
-        let lifetime = ReviewerTasks::default();
+        let lifetime = ReviewerTasks {
+            cancellation: tree.stop.child_token(),
+            ..Default::default()
+        };
         let (wake, mut wakes) = mpsc::channel(1);
         let initial_position = cursor.position();
-        let delivery = Arc::clone(tree.get_or_init(|| Arc::new(LiveDelivery::from_cursor(cursor))));
+        let delivery = Arc::clone(
+            tree.delivery
+                .get_or_init(|| Arc::new(LiveDelivery::from_cursor(cursor))),
+        );
         let saved = delivery.cursor();
         // A surviving child can keep a cursor behind the resumed root's history tail.
         if saved.position().thread_id == initial_position.thread_id
@@ -177,6 +253,7 @@ impl Host {
         {
             let _ = wake.try_send(());
         }
+        let shadow = self.shadow;
         let manager = self.manager.clone();
         let settings = Arc::clone(&self.housekeeper);
         let cancellation = lifetime.cancellation.clone();
@@ -187,7 +264,11 @@ impl Host {
                 while let Some(Some(())) = cancellation.run_until_cancelled(wakes.recv()).await {
                     let cursor = delivery.cursor();
                     let read = async {
-                        history.flush_thread(root).await?;
+                        // Shadow reads can catch up on the next wake without
+                        // contending with live appends for the history writer.
+                        if !shadow {
+                            history.flush_thread(root).await?;
+                        }
                         cursor.read_history(history.as_ref()).await
                     };
                     let Some(records) = cancellation.run_until_cancelled(read).await else {
@@ -252,7 +333,8 @@ impl Host {
                 tracing::warn!(%root, "Guardian housekeeping stopped");
             }
         });
-        input.thread_store.insert(RootWorker {
+        thread.insert(RootWorker {
+            shadow: self.shadow,
             wake,
             lifetime,
             reader,
@@ -266,12 +348,20 @@ impl ThreadLifecycleContributor<Config> for Host {
         &'a self,
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
-        // Let accepted instructions outlive an interrupted turn on this root.
+        if !self.enabled(input.config) {
+            return Box::pin(std::future::ready(()));
+        }
         if !input.config.ephemeral
             && !input.session_source.is_internal()
             && input.thread_store.level_id() == input.session_store.level_id()
         {
-            input.thread_store.insert(PreserveReviewWrites);
+            if self.shadow {
+                // Observe settings changes even before the root is ready.
+                input.thread_store.insert(shadow::Enrollment::default());
+            } else {
+                // Only authoritative GV3 needs evidence writes to survive interruption.
+                input.thread_store.insert(PreserveReviewWrites);
+            }
         }
         Box::pin(std::future::ready(()))
     }
@@ -281,7 +371,10 @@ impl ThreadLifecycleContributor<Config> for Host {
         input: ThreadReadyInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if input.session_source.is_internal() || input.config.ephemeral {
+            if input.session_source.is_internal()
+                || input.config.ephemeral
+                || !self.enabled(input.config)
+            {
                 return;
             }
             let (Ok(actor), Ok(root)) = (
@@ -298,23 +391,39 @@ impl ThreadLifecycleContributor<Config> for Host {
             else {
                 return;
             };
+            let identity = shadow::Actor { root, actor, path };
+            if self.shadow {
+                // Only the root supplies history. Children can inherit context and share its board.
+                if actor == root
+                    && (input.history_mode
+                        != codex_protocol::protocol::ThreadHistoryMode::Paginated
+                        || !matches!(input.history_initialization, HistoryInitialization::New))
+                {
+                    return;
+                }
+                input.thread_store.insert(identity);
+                self.start_shadow_if_needed(input.thread_store);
+                return;
+            }
             let tree = self.tree_delivery(root);
-            let actor_reviewer = Arc::new(ActorReviewer::new(
-                self.manager.clone(),
-                root,
-                actor,
-                path,
-                self.retrieval.clone(),
-                Arc::clone(&tree),
-            ));
-            input.thread_store.insert_arc(Arc::clone(&actor_reviewer));
-            let attached: Arc<dyn codex_core::guardian_review::AttachedReviewer> =
-                actor_reviewer.clone();
+            // The authoritative reviewer must stay attached even if intake fails.
+            let reviewer = self.reviewer(&identity, &tree, tree.stop.child_token());
+            let attached: Arc<dyn codex_core::guardian_review::AttachedReviewer> = reviewer.clone();
+            input.thread_store.insert_arc(Arc::clone(&reviewer));
             input.thread_store.insert(attached);
             if actor != root {
                 return;
             }
-            if let Err(error) = self.activate(root, &tree, &input).await {
+            if let Err(error) = self
+                .activate(
+                    root,
+                    &tree,
+                    input.thread_store,
+                    input.history_mode,
+                    input.history_initialization,
+                )
+                .await
+            {
                 tracing::warn!(%root, error = %error, "Guardian intake unavailable");
                 return;
             }
@@ -322,12 +431,18 @@ impl ThreadLifecycleContributor<Config> for Host {
                 input.config.permissions.approval_policy.value(),
                 input.config.approvals_reviewer,
             ) {
-                actor_reviewer.schedule_root_prewarm();
+                reviewer.schedule_root_prewarm();
             }
         })
     }
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            input.thread_store.remove::<shadow::Actor>();
+            if let Some(enrollment) = input.thread_store.remove::<shadow::Enrollment>() {
+                enrollment.stop(input.thread_store);
+                enrollment.drain().await;
+            }
+            input.thread_store.remove::<ShadowReviewer>();
             if let Some(actor) = input.thread_store.remove::<ActorReviewer>() {
                 actor.shutdown().await;
             }
@@ -341,6 +456,11 @@ impl ThreadLifecycleContributor<Config> for Host {
 }
 
 impl TurnLifecycleContributor for Host {
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        self.start_shadow_if_needed(input.thread_store);
+        Box::pin(std::future::ready(()))
+    }
+
     fn on_item_completed<'a>(
         &'a self,
         thread: &'a ExtensionData,

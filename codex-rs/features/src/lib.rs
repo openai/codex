@@ -493,6 +493,8 @@ pub enum Feature {
     GuardianV2DecisionsComparison,
     /// Enable Guardian V3 integrations.
     GuardianV3,
+    /// Observe Guardian V3 alongside the existing automatic reviewer.
+    GuardianV3Shadow,
     /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -2381,6 +2383,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianV3,
         key: "guardianv3",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianV3Shadow,
+        key: "guardianv3_shadow",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -21,6 +21,7 @@ mod housekeeper_sampler;
 mod housekeeper_transport;
 mod inbox;
 pub use host::install;
+pub use host::install_shadow;
 mod retrieval_tools;
 mod sampling;
 mod subscription_tools;
