@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
-use codex_core::path_utils::write_atomically;
+use codex_utils_path::write_atomically;
 use serde::Deserialize;
 use serde::Serialize;
 

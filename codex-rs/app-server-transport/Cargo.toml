@@ -25,7 +25,6 @@ axum = { workspace = true, default-features = false, features = [
 base64 = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-core = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
@@ -34,6 +33,8 @@ codex-runtime-agent-instance = { workspace = true }
 codex-state = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 codex-websocket-auth = { workspace = true }
 futures = { workspace = true }
@@ -42,7 +43,8 @@ httpdate = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+# Preserve large numbers in JSON-RPC payloads and daemon recovery snapshots.
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 sha2 = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = [
@@ -61,12 +63,20 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 libc = { workspace = true }
 signal-hook = { workspace = true }
 
+# Build OpenSSL from source for standalone musl builds.
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
 wiremock = { workspace = true }
 chrono = { workspace = true }
 codex-config = { workspace = true }
+codex-core = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
