@@ -51,7 +51,9 @@ use crate::insert_history::HistoryLineWrapPolicy;
 use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::terminal_capabilities::ScrollbackStrategy;
 use crate::terminal_capabilities::keyboard_modes;
+use crate::terminal_capabilities::scrollback_strategy;
 use crate::terminal_capabilities::tmux;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
@@ -61,7 +63,6 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use crate::tui::screen_size::ScreenSizePolicy;
-use crate::tui::scrollback::ScrollbackStrategy;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 
@@ -118,10 +119,6 @@ pub(crate) struct InitializedTerminal {
 
 pub(crate) use keyboard_modes::VscodeDetection;
 pub(crate) use keyboard_modes::detect_vscode_terminal;
-
-pub(crate) fn running_in_vscode_terminal() -> bool {
-    keyboard_modes::running_in_vscode_terminal()
-}
 
 pub(crate) fn reports_key_releases() -> bool {
     keyboard_modes::reports_key_releases()
@@ -813,10 +810,10 @@ impl Tui {
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
         // Cache this to avoid contention with the event reader.
-        codex_terminal_detection::stdout_color_level();
+        crate::terminal_capabilities::stdout_color_level();
         let _ = crate::terminal_palette::default_colors();
         let terminal_info = codex_terminal_detection::terminal_info();
-        let scrollback = ScrollbackStrategy::detect(&terminal_info);
+        let scrollback = scrollback_strategy(&terminal_info);
         let mut event_broker = EventBroker::new();
         event_broker.size_monitor = size_monitor::SizeMonitor::start(
             &terminal_info,

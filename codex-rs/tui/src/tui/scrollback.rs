@@ -5,8 +5,7 @@ use crate::insert_history::HistoryLineWrapPolicy;
 use crate::insert_history::InsertHistoryMode;
 use crate::insert_history::ResetScrollRegion;
 use crate::insert_history::SetScrollRegion;
-use codex_terminal_detection::TerminalInfo;
-use codex_terminal_detection::TerminalName;
+use crate::terminal_capabilities::ScrollbackStrategy;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Print;
@@ -16,36 +15,17 @@ use ratatui::layout::Size;
 use std::io;
 use std::io::Write;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ScrollbackStrategy {
-    Standard,
-    Zellij,
-    FullScreen,
-}
-
 impl ScrollbackStrategy {
-    pub(super) fn detect(terminal: &TerminalInfo) -> Self {
-        if terminal.is_zellij() {
-            Self::Zellij
-        } else if terminal.name == TerminalName::WindowsTerminal
-            || std::env::var_os("WT_SESSION").is_some()
-        {
-            Self::FullScreen
-        } else {
-            Self::Standard
-        }
-    }
-
     pub(super) fn history_insertion_mode(
         self,
         wrap_policy: HistoryLineWrapPolicy,
     ) -> InsertHistoryMode {
         match self {
             Self::FullScreen => InsertHistoryMode::FullScreen,
-            Self::Zellij if wrap_policy == HistoryLineWrapPolicy::Terminal => {
+            Self::ScrollRegionUp if wrap_policy == HistoryLineWrapPolicy::Terminal => {
                 InsertHistoryMode::FullScreen
             }
-            Self::Standard | Self::Zellij => InsertHistoryMode::Standard,
+            Self::Standard | Self::ScrollRegionUp => InsertHistoryMode::Standard,
         }
     }
 
@@ -96,7 +76,7 @@ impl ScrollbackStrategy {
                 }
                 Ok(())
             }
-            Self::Zellij => terminal
+            Self::ScrollRegionUp => terminal
                 .backend_mut()
                 .scroll_region_up(0..viewport_top, scroll_by),
         }

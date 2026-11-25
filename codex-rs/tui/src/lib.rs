@@ -207,7 +207,6 @@ mod pager_overlay;
 mod projectless;
 pub(crate) mod public_widgets;
 mod render;
-use terminal_capabilities::resize_reflow_cap;
 mod resume_permissions;
 mod resume_picker;
 mod screen_reader;

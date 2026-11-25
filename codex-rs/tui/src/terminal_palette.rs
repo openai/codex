@@ -1,6 +1,6 @@
 use crate::color::perceptual_distance;
-pub use codex_terminal_detection::StdoutColorLevel;
-pub use codex_terminal_detection::stdout_color_level;
+pub use crate::terminal_capabilities::StdoutColorLevel;
+pub use crate::terminal_capabilities::stdout_color_level;
 use ratatui::style::Color;
 
 #[allow(clippy::disallowed_methods)]
@@ -30,7 +30,7 @@ pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
         return StdoutColorLevel::TrueColor;
     }
 
-    codex_terminal_detection::terminal_color_level()
+    crate::terminal_capabilities::terminal_color_level()
 }
 
 fn best_color_for_color_level(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {

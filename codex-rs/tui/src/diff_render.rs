@@ -213,7 +213,7 @@ fn resolve_diff_backgrounds(
 /// mid-render (theme picker live preview).
 pub(crate) fn current_diff_render_style_context() -> DiffRenderStyleContext {
     let theme = diff_theme();
-    let color_level = match codex_terminal_detection::terminal_color_level() {
+    let color_level = match crate::terminal_capabilities::terminal_color_level() {
         StdoutColorLevel::TrueColor => DiffColorLevel::TrueColor,
         StdoutColorLevel::Ansi256 => DiffColorLevel::Ansi256,
         StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => DiffColorLevel::Ansi16,

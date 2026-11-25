@@ -7,7 +7,7 @@ use super::AppServerSession;
 use crate::history_cell::HistoryRenderMode;
 use crate::legacy_core::config::Config;
 use crate::local_settings::LocalSettings;
-use crate::resize_reflow_cap::resize_reflow_max_rows;
+use crate::terminal_capabilities::resize_reflow_max_rows;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
 use codex_app_server_protocol::ClientRequest;

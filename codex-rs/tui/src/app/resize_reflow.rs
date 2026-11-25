@@ -225,7 +225,7 @@ impl App {
             return;
         }
 
-        let max_rows = crate::resize_reflow_cap::resize_reflow_max_rows(
+        let max_rows = crate::terminal_capabilities::resize_reflow_max_rows(
             self.local_settings.terminal_resize_reflow(),
         );
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
@@ -272,7 +272,7 @@ impl App {
     }
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
-        crate::resize_reflow_cap::resize_reflow_max_rows(
+        crate::terminal_capabilities::resize_reflow_max_rows(
             self.local_settings.terminal_resize_reflow(),
         )
     }

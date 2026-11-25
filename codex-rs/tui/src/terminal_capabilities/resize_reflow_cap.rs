@@ -30,7 +30,7 @@ pub(crate) fn resize_reflow_max_rows(config: TerminalResizeReflowConfig) -> Opti
     resize_reflow_max_rows_for(
         config,
         &terminal_info(),
-        crate::tui::running_in_vscode_terminal(),
+        super::keyboard_modes::running_in_vscode_terminal(),
     )
 }
 
