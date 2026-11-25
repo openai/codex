@@ -6,7 +6,6 @@ use codex_app_server_protocol as app;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::EnvironmentConfig;
-use codex_core::EnvironmentNetworkPolicy;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
@@ -33,6 +32,7 @@ use codex_network_proxy::MitmHookConfig;
 use codex_network_proxy::MitmHookMatchConfig;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_network_proxy::environment_policy_from_config;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -2898,7 +2898,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: None,
-                network_policy: Some(EnvironmentNetworkPolicy::from_config(
+                network_policy: Some(environment_policy_from_config(
                     &proxy_config,
                     /*managed_allowed_domains_only*/ suffix != "REVIEWED",
                 )),
@@ -3124,7 +3124,7 @@ async fn escalated_owner_network_terminal_requires_stdin_approval(
         use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: None,
-        network_policy: Some(EnvironmentNetworkPolicy::from_config(
+        network_policy: Some(environment_policy_from_config(
             &proxy, /*managed_allowed_domains_only*/ true,
         )),
         selected_capability_roots: Vec::new(),

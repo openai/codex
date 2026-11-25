@@ -10,8 +10,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_exec_server::ExecParams;
-use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::environment_policy_from_config;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
@@ -291,7 +291,7 @@ mode = "full"
     );
     config.network_policy = Some(match controller {
         Some(spec) => spec.environment_policy(),
-        None => EnvironmentNetworkPolicy::from_config(
+        None => environment_policy_from_config(
             &NetworkProxyConfig {
                 enabled: true,
                 ..Default::default()
@@ -558,7 +558,7 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
         .await?;
     let selection = test.codex.environment_selections().await.pop().unwrap();
     let mut config = environment_config_for_selection(&test.config, &selection);
-    config.network_policy = Some(EnvironmentNetworkPolicy::from_config(
+    config.network_policy = Some(environment_policy_from_config(
         &NetworkProxyConfig {
             enabled: true,
             ..Default::default()

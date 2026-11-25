@@ -3632,7 +3632,7 @@ dependencies = [
 name = "codex-features"
 version = "0.0.0"
 dependencies = [
- "codex-network-proxy",
+ "codex-network-policy-types",
  "codex-protocol",
  "codex-utils-redacted-string",
  "pretty_assertions",
@@ -4577,6 +4577,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-network-policy-types"
+version = "0.0.0"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+]
+
+[[package]]
 name = "codex-network-proxy"
 version = "0.0.0"
 dependencies = [
@@ -4586,6 +4594,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-network-policy-types",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
@@ -4798,7 +4807,7 @@ dependencies = [
  "codex-execpolicy-rules",
  "codex-extension-items",
  "codex-http-client",
- "codex-network-proxy",
+ "codex-network-policy-types",
  "codex-utils-absolute-path",
  "codex-utils-cached-str",
  "codex-utils-image",

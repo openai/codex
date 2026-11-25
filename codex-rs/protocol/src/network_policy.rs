@@ -1,6 +1,6 @@
 use crate::approvals::NetworkApprovalProtocol;
-use codex_network_proxy::NetworkDecisionSource;
-use codex_network_proxy::NetworkPolicyDecision;
+use codex_network_policy_types::NetworkDecisionSource;
+use codex_network_policy_types::NetworkPolicyDecision;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
