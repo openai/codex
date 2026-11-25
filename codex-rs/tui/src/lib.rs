@@ -2112,6 +2112,30 @@ async fn run_ratatui_app(
         config.cwd.as_path(),
     );
 
+    let statsig = if matches!(app_server_target, AppServerTarget::Embedded) {
+        codex_statsig::StatsigRuntime::current()
+    } else if config.statsig_enabled()
+        && config
+            .config_layer_stack
+            .ensure_config_server_applied()
+            .is_ok()
+    {
+        let identity = if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+            // Remote workspace config skips local login requirements.
+            crate::legacy_core::config::StatsigHostIdentity::Installation
+        } else {
+            // Defer reloading credentials and policy after account changes in another process.
+            crate::legacy_core::config::StatsigHostIdentity::LocalAccount
+        };
+        let mut config = config.clone();
+        codex_app_server_client::EmbeddedNetworkPolicy::default().activate(&mut config);
+        config
+            .start_statsig(crate::legacy_core::config::StatsigSurface::Tui, identity)
+            .await
+    } else {
+        None
+    };
+
     // Count launches that reach final config resolution, regardless of screen policy.
     if config.analytics_enabled != Some(false)
         && config.otel.metrics_exporter != codex_config::types::OtelExporterKind::None
@@ -2417,6 +2441,7 @@ async fn run_ratatui_app(
     .await;
 
     terminal_restore_guard.restore_silently();
+    codex_statsig::StatsigRuntime::finish(statsig).await;
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead

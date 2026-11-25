@@ -323,6 +323,16 @@ impl ExecServerCommand {
             }
             remote_config.request_dispatch_mode = self.request_dispatch_mode;
             let remote_config = remote_config.with_telemetry(telemetry);
+            let statsig = if self.command.is_none() {
+                config
+                    .start_statsig(
+                        codex_core::statsig::StatsigSurface::RemoteExecutor,
+                        codex_core::statsig::HostIdentity::Installation,
+                    )
+                    .await
+            } else {
+                None
+            };
             let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
             #[cfg(target_os = "macos")]
             let runtime_paths = runtime_paths.with_allowed_symlinked_codex_home(
@@ -360,6 +370,7 @@ impl ExecServerCommand {
                 exec_server_telemetry::ShutdownBehavior::Graceful(shutdown_sender),
             )
             .await;
+            codex_core::statsig::StatsigRuntime::finish(statsig).await;
             if let Some(provider) = credential_provider {
                 provider.check_pipe_failure()?;
             }
@@ -378,6 +389,22 @@ impl ExecServerCommand {
                 config_result.ok()
             };
             let (_otel, telemetry) = exec_server_telemetry::init(config.as_ref());
+            let statsig = match &config {
+                Some(config)
+                    if config
+                        .config_layer_stack
+                        .ensure_config_server_applied()
+                        .is_ok() =>
+                {
+                    config
+                        .start_statsig(
+                            codex_core::statsig::StatsigSurface::ExecServer,
+                            codex_core::statsig::HostIdentity::LocalAccount,
+                        )
+                        .await
+                }
+                Some(_) | None => None,
+            };
             #[cfg(target_os = "macos")]
             let runtime_paths = runtime_paths.with_allowed_symlinked_codex_home(
                 config.as_ref().and_then(|config| {
@@ -406,7 +433,9 @@ impl ExecServerCommand {
                 ParentLifetime::Independent,
                 exec_server_telemetry::ShutdownBehavior::Immediate,
             );
-            run.await.map_err(anyhow::Error::from_boxed)
+            let result = run.await.map_err(anyhow::Error::from_boxed);
+            codex_core::statsig::StatsigRuntime::finish(statsig).await;
+            result
         }
     }
 

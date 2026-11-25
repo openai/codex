@@ -529,6 +529,20 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
     .await?;
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
+    let statsig = args
+        .config
+        .start_statsig(
+            match &args.session_source {
+                SessionSource::Cli => codex_core::statsig::StatsigSurface::Cli,
+                SessionSource::Exec => codex_core::statsig::StatsigSurface::Exec,
+                _ => codex_core::statsig::StatsigSurface::AppServer,
+            },
+            codex_core::statsig::HostIdentity::ServingAccount {
+                auth: Arc::clone(&auth_manager),
+                default_analytics_enabled: true,
+            },
+        )
+        .await;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
     let thread_permissions_reader = ThreadPermissionsReader::default();
@@ -931,6 +945,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         }
 
         analytics_events_flush_client.flush().await;
+        codex_core::statsig::StatsigRuntime::finish(statsig).await;
 
         if let Some(done_tx) = shutdown_ack {
             let _ = done_tx.send(());

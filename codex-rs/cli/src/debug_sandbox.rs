@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use anyhow::Context as _;
+use codex_app_server::in_process::EmbeddedNetworkPolicy;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
@@ -271,6 +272,7 @@ async fn run_command_under_sandbox(
 pub struct StartedSandboxChild {
     child: Child,
     _network_proxy: Option<codex_core::config::StartedNetworkProxy>,
+    statsig: Option<std::sync::Arc<codex_core::statsig::StatsigRuntime>>,
     #[cfg(target_os = "macos")]
     denial_logger: Option<DenialLogger>,
 }
@@ -296,6 +298,7 @@ impl StartedSandboxChild {
                 }
             }
         }
+        codex_core::statsig::StatsigRuntime::finish(self.statsig.take()).await;
         handle_exit_status(status);
     }
 }
@@ -347,7 +350,13 @@ async fn start_command_under_sandbox(
         }
         None => codex_linux_sandbox_exe,
     };
-    let config = load_debug_sandbox_config(
+    let includes_managed_requirements = sandbox_state.is_none()
+        && !config_options.loader_overrides.ignore_managed_requirements
+        && matches!(
+            config_options.managed_requirements_mode,
+            ManagedRequirementsMode::Include
+        );
+    let mut config = load_debug_sandbox_config(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
@@ -357,6 +366,23 @@ async fn start_command_under_sandbox(
     )
     .await?;
 
+    let statsig = if includes_managed_requirements
+        && config.statsig_enabled()
+        && config
+            .config_layer_stack
+            .ensure_config_server_applied()
+            .is_ok()
+    {
+        EmbeddedNetworkPolicy::default().activate(&mut config);
+        config
+            .start_statsig(
+                codex_core::statsig::StatsigSurface::Sandbox,
+                codex_core::statsig::HostIdentity::LocalAccount,
+            )
+            .await
+    } else {
+        None
+    };
     let cwd = &config.cwd;
     let env = create_env(
         &config.permissions.shell_environment_policy,
@@ -445,7 +471,7 @@ async fn start_command_under_sandbox(
                     .map(PathUri::to_abs_path)
                     .collect::<std::io::Result<Vec<_>>>()
                     .context("invalid Windows sandbox workspace roots")?;
-                run_command_under_windows_session(
+                let exit_code = run_command_under_windows_session(
                     &config,
                     &session_profile,
                     command,
@@ -454,6 +480,8 @@ async fn start_command_under_sandbox(
                     env,
                 )
                 .await;
+                codex_core::statsig::StatsigRuntime::finish(statsig).await;
+                std::process::exit(exit_code);
             }
             #[cfg(not(windows))]
             SandboxType::Windows => anyhow::bail!("Windows sandbox is only available on Windows"),
@@ -564,6 +592,7 @@ async fn start_command_under_sandbox(
     Ok(StartedSandboxChild {
         child,
         _network_proxy: network_proxy,
+        statsig,
         #[cfg(target_os = "macos")]
         denial_logger,
     })
@@ -577,7 +606,7 @@ async fn run_command_under_windows_session(
     cwd: AbsolutePathBuf,
     workspace_roots: Vec<AbsolutePathBuf>,
     env: std::collections::HashMap<String, String>,
-) -> ! {
+) -> i32 {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
@@ -594,7 +623,7 @@ async fn run_command_under_windows_session(
         Ok(paths) => paths,
         Err(err) => {
             eprintln!("windows sandbox failed: {err}");
-            std::process::exit(1);
+            return 1;
         }
     };
 
@@ -625,12 +654,11 @@ async fn run_command_under_windows_session(
         Ok(spawned) => spawned,
         Err(err) => {
             eprintln!("windows sandbox failed: {err}");
-            std::process::exit(1);
+            return 1;
         }
     };
 
-    let exit_code = codex_windows_sandbox::forward_sandbox_session_stdio(spawned).await;
-    std::process::exit(exit_code);
+    codex_windows_sandbox::forward_sandbox_session_stdio(spawned).await
 }
 
 async fn spawn_debug_sandbox_child(

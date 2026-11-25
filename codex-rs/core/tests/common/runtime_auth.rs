@@ -50,6 +50,34 @@ pub async fn run_harness_through_proxy_until(
     environment: &[(&str, Option<&str>)],
     observer_completion: impl Future<Output = Result<()>>,
 ) -> Result<()> {
+    with_harness_proxy(server, realtime_target, async |mut command| {
+        command
+            .args(["--exact", test_name, "--nocapture"])
+            .kill_on_drop(true);
+        for (key, value) in environment {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+        let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await??;
+        assert!(
+            output.status.success(),
+            "harness subprocess failed\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        observer_completion.await
+    })
+    .await
+}
+
+/// Supplies a test subprocess command with HTTPS routed to the mock server.
+pub async fn with_harness_proxy(
+    server: &MockServer,
+    realtime_target: Option<std::net::SocketAddr>,
+    run: impl AsyncFnOnce(Command) -> Result<()>,
+) -> Result<()> {
     // The production destination check stays intact. A test-only CA and CONNECT proxy route
     // the real host names to wiremock, only inside this isolated test subprocess.
     codex_utils_rustls_provider::ensure_rustls_crypto_provider();
@@ -63,6 +91,7 @@ pub async fn run_harness_through_proxy_until(
         "us.chatgpt-staging.com".into(),
         "auth.api.openai.org".into(),
         "observer.internal.api.openai.org".into(),
+        "ab.chatgpt.com".into(),
     ])?;
     let ca_dir = tempfile::tempdir()?;
     let ca_path = ca_dir.path().join("ca.pem");
@@ -101,6 +130,7 @@ pub async fn run_harness_through_proxy_until(
                                 | "CONNECT us.chatgpt-staging.com:443 HTTP/1.1"
                                 | "CONNECT auth.api.openai.org:443 HTTP/1.1"
                                 | "CONNECT observer.internal.api.openai.org:443 HTTP/1.1"
+                                | "CONNECT ab.chatgpt.com:443 HTTP/1.1"
                         )
                     ),
                     "unexpected proxy destination"
@@ -148,9 +178,8 @@ pub async fn run_harness_through_proxy_until(
         Ok::<_, anyhow::Error>(())
     });
     let mut command = Command::new(std::env::current_exe()?);
-    command
-        .args(["--exact", test_name, "--nocapture"])
-        .kill_on_drop(true);
+    // Materialize inherited variables so launchers that take an env map can use get_envs().
+    command.env_clear().envs(std::env::vars_os());
     for &key in codex_network_proxy::PROXY_ENV_KEYS {
         command.env_remove(key);
     }
@@ -159,21 +188,7 @@ pub async fn run_harness_through_proxy_until(
         .env("HTTPS_PROXY", proxy_url)
         .env("NO_PROXY", codex_network_proxy::DEFAULT_NO_PROXY_VALUE)
         .env("CODEX_CA_CERTIFICATE", ca_path);
-    for (key, value) in environment {
-        match value {
-            Some(value) => command.env(key, value),
-            None => command.env_remove(key),
-        };
-    }
-    let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await??;
-    assert!(
-        output.status.success(),
-        "harness subprocess failed\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let result = observer_completion.await;
+    let result = run(command).await;
     proxy_tasks.shutdown().await;
     result
 }

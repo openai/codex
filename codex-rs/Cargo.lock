@@ -5426,6 +5426,7 @@ dependencies = [
  "codex-shell-command",
  "codex-skills",
  "codex-state",
+ "codex-statsig",
  "codex-terminal-detection",
  "codex-uds",
  "codex-user-input",

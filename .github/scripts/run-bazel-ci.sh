@@ -352,7 +352,10 @@ bazel_run_args=(
   "${bazel_args[@]}"
 )
 if [[ "${bazel_args[0]}" == "test" ]]; then
-  bazel_run_args+=("--test_env=INSTA_UPDATE=no")
+  bazel_run_args+=(
+    "--test_env=INSTA_UPDATE=no"
+    "--@rules_rust//rust/settings:extra_rustc_env=CODEX_BUNDLED_STATSIG_CLIENT_KEY=client-launch-fixture"
+  )
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")

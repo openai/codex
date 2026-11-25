@@ -182,6 +182,8 @@ jobs:
           target: ${{ inputs.target }}
 
       - name: Build nextest archive
+        env:
+          CODEX_BUNDLED_STATSIG_CLIENT_KEY: client-launch-fixture
         shell: bash
         run: |
           set -euo pipefail
