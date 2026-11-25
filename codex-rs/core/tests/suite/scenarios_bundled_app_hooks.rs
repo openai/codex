@@ -34,22 +34,25 @@ async fn bundled_memory_hook_injects_context() -> Result<()> {
             },
         },
     })]))).await?;
+    let memory = ["The user prefers short, direct answers."; 1_000].join(" ");
+    let hook_output = memory.clone();
     Mock::given(method("POST"))
         .and(path("/api/codex/ps/mcp"))
         .and(body_partial_json(json!({ "method": "tools/call" })))
-        .respond_with(|request: &Request| {
+        .respond_with(move |request: &Request| {
             let request: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
             ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
                 "jsonrpc": "2.0", "id": request["id"],
                 "result": { "content": [{ "type": "text", "text": json!({
                     "hookSpecificOutput": {
-                        "hookEventName": "SessionStart", "additionalContext": "The user prefers concise answers.",
+                        "hookEventName": "SessionStart", "additionalContext": hook_output,
                     },
                 }).to_string() }] },
             }))
         })
         .with_priority(/*p*/ 1)
-        .mount(&server).await;
+        .mount(&server)
+        .await;
     let home = Arc::new(TempDir::new()?);
     let root = home
         .path()
@@ -61,7 +64,12 @@ async fn bundled_memory_hook_injects_context() -> Result<()> {
             "name": "codex-dream-memory",
             "hooks": { "hooks": { "SessionStart": [{
                 "matcher": "^(startup|compact)$",
-                "hooks": [{ "type": "mcp_tool", "server": "codex_apps", "tool": "codex_dream_memory.get_mec" }],
+                "hooks": [{
+                    "type": "mcp_tool",
+                    "server": "codex_apps",
+                    "tool": "codex_dream_memory.get_mec",
+                    "additionalContextLimit": 10_000,
+                }],
             }] } },
         }))?,
     )?;
@@ -118,11 +126,15 @@ async fn bundled_memory_hook_injects_context() -> Result<()> {
         assert_eq!(call["params"]["arguments"], json!({}));
         assert_eq!(call["params"]["name"], "codex_dream_memory.get_mec");
     }
+    let requests = responses.requests();
+    for request in [&requests[0], &requests[2]] {
+        assert!(request.message_input_texts("developer").contains(&memory));
+    }
     insta::assert_snapshot!(
         "bundled_memory_hook_context",
         context_snapshot::format_request_history_snapshot(
             "A bundled App-only hook injects memory at startup and after compaction without saved trust.",
-            &responses.requests(),
+            &requests,
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );

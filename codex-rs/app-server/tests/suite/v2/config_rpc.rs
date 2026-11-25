@@ -277,6 +277,7 @@ tool = "scan"
 input = { path = "${tool_input.file_path}", metadata = { enabled = true, retries = 2 } }
 timeout = 30
 statusMessage = "Scanning file"
+additionalContextLimit = 8000
 onFailure = "continue"
 "#,
     )?;
@@ -322,6 +323,7 @@ onFailure = "continue"
                 timeout_sec: Some(30),
                 status_message: Some("Scanning file".to_string()),
                 on_failure: Some(codex_app_server_protocol::ConfiguredHookFailurePolicy::Continue),
+                additional_context_limit: Some(8_000),
             },
         ]
     );

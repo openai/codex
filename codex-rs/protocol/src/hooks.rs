@@ -145,6 +145,8 @@ pub struct MatcherGroup {
     pub hooks: Vec<HookHandlerConfig>,
 }
 
+pub const MAX_MCP_HOOK_CONTEXT_TOKENS: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type")]
 pub enum HookHandlerConfig {
@@ -188,6 +190,19 @@ pub enum HookHandlerConfig {
         /// Defaults to continue; block applies the event's blocking behavior on failure.
         #[serde(default, rename = "onFailure", skip_serializing_if = "Option::is_none")]
         on_failure: Option<HookFailurePolicy>,
+        /// Approximate token threshold for spilling plaintext `additionalContext` to disk.
+        /// Defaults to 2,500. For MCP hooks, `0` and values above 10,000
+        /// trigger a warning and use 10,000. Command hooks can disable spilling
+        /// with `0` or set a higher threshold. The MCP ceiling mirrors the
+        /// current default tool-output budget and may change in the future.
+        /// Encrypted hook output has a separate byte limit.
+        #[serde(
+            default,
+            rename = "additionalContextLimit",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(range(min = 1, max = "MAX_MCP_HOOK_CONTEXT_TOKENS"))]
+        additional_context_limit: Option<usize>,
     },
     #[serde(rename = "prompt")]
     Prompt {},

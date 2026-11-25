@@ -908,6 +908,7 @@ async fn hooks_list_shows_discovered_plugin_mcp_tool_hook() -> Result<()> {
             "tool": "inspect",
             "input": {"path": "${tool_input.path}"},
             "timeout": 9,
+            "additionalContextLimit": 4096,
             "statusMessage": "checking security policy"
           }
         ]
@@ -952,7 +953,7 @@ async fn hooks_list_shows_discovered_plugin_mcp_tool_hook() -> Result<()> {
                 matcher: Some("Bash".to_string()),
                 timeout_sec: 9,
                 status_message: Some("checking security policy".to_string()),
-                additional_context_limit: None,
+                additional_context_limit: Some(4_096),
                 source_path,
                 source: HookSource::Plugin,
                 plugin_id: Some("demo@test".to_string()),

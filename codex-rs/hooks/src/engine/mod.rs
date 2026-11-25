@@ -393,6 +393,8 @@ impl ClaudeHooksEngine {
                     timeout_sec,
                     status_message,
                     on_failure,
+                    // Executor-scoped cleanup events cannot emit additionalContext.
+                    additional_context_limit: _,
                 } = handler
                 else {
                     unreachable!("allowlisted executor handler must be an MCP tool");

@@ -11,4 +11,13 @@ export type ConfiguredHookHandler = { "type": "command", command: string, comman
  * evaluated against the original context; a spilled preview also includes recovery
  * metadata.
  */
-additionalContextLimit: number | null, } | { "type": "mcp_tool", server: string, tool: string, input: { [key in string]?: JsonValue }, timeoutSec: bigint | null, statusMessage: string | null, onFailure: ConfiguredHookFailurePolicy | null, } | { "type": "prompt", } | { "type": "agent", };
+additionalContextLimit: number | null, } | { "type": "mcp_tool", server: string, tool: string, input: { [key in string]?: JsonValue }, timeoutSec: bigint | null, statusMessage: string | null, onFailure: ConfiguredHookFailurePolicy | null,
+/**
+ * Approximate token threshold for spilling plaintext `additionalContext` to disk.
+ * Defaults to 2,500. For MCP hooks, `0` and values above 10,000
+ * trigger a warning and use 10,000. Command hooks can disable spilling
+ * with `0` or set a higher threshold. The MCP ceiling mirrors the
+ * current default tool-output budget and may change in the future.
+ * Encrypted hook output has a separate byte limit.
+ */
+additionalContextLimit: number | null, } | { "type": "prompt", } | { "type": "agent", };

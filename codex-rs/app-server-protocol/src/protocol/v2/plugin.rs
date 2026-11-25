@@ -595,7 +595,7 @@ pub struct HookMetadata {
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     /// Configured `additionalContext` spill threshold.
-    /// `null` uses 2,500 tokens; `0` disables spilling.
+    /// `null` uses 2,500 approximate tokens. Only command hooks support `0` (no spill) or values above 10,000.
     pub additional_context_limit: Option<usize>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,

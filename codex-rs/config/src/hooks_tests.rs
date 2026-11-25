@@ -97,6 +97,7 @@ fn hooks_file_deserializes_mcp_tool_handler_with_json_inputs() {
             timeout_sec: Some(30),
             status_message: Some("Scanning file".to_string()),
             on_failure: None,
+            additional_context_limit: None,
         }]
     );
 }

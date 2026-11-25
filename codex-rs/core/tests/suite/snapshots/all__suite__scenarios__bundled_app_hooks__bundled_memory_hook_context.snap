@@ -1,7 +1,7 @@
 ---
 source: core/tests/suite/scenarios_bundled_app_hooks.rs
-assertion_line: 151
-expression: "context_snapshot::format_request_history_snapshot(\"A bundled App-only hook injects memory at startup and after compaction without saved trust.\",\n&responses.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+assertion_line: 132
+expression: "context_snapshot::format_request_history_snapshot(\"A bundled App-only hook injects memory at startup and after compaction without saved trust.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: A bundled App-only hook injects memory at startup and after compaction without saved trust.
 
@@ -19,7 +19,7 @@ Scenario: A bundled App-only hook injects memory at startup and after compaction
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/developer:
-    The user prefers concise answers.
+    The user prefers short, direct answers. The user prefers short, direct answers. The user prefers short, ...rect answers. The user prefers short, direct answers. [hash=3a4c8f7df967100f]
 04:message/user:
     Remember my preferences.
 
@@ -37,7 +37,7 @@ Scenario: A bundled App-only hook injects memory at startup and after compaction
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/developer:
-    The user prefers concise answers.
+    The user prefers short, direct answers. The user prefers short, direct answers. The user prefers short, ...rect answers. The user prefers short, direct answers. [hash=3a4c8f7df967100f]
 04:message/user:
     Remember my preferences.
 05:message/assistant:
@@ -64,6 +64,6 @@ Scenario: A bundled App-only hook injects memory at startup and after compaction
     <COMPACTION_SUMMARY>
     Done.
 05:message/developer:
-    The user prefers concise answers.
+    The user prefers short, direct answers. The user prefers short, direct answers. The user prefers short, ...rect answers. The user prefers short, direct answers. [hash=3a4c8f7df967100f]
 06:message/user:
     Continue after compaction.

@@ -416,6 +416,7 @@ fn required_managed_mcp_hooks_reject_empty_targets() {
                 timeout_sec: None,
                 status_message: None,
                 on_failure: None,
+                additional_context_limit: None,
             }],
         }],
         ..Default::default()
@@ -457,6 +458,7 @@ fn required_managed_session_end_mcp_hooks_reject_startup() {
                 timeout_sec: None,
                 status_message: None,
                 on_failure: None,
+                additional_context_limit: None,
             }],
         }],
         ..Default::default()
@@ -1898,6 +1900,7 @@ fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
             timeout_sec: None,
             status_message: None,
             on_failure: None,
+            additional_context_limit: None,
         },
         HookHandlerConfig::McpTool {
             server: "other_server".to_string(),
@@ -1906,6 +1909,7 @@ fn bundled_cleanup_trust_does_not_extend_to_other_handlers() {
             timeout_sec: None,
             status_message: None,
             on_failure: None,
+            additional_context_limit: None,
         },
         HookHandlerConfig::Command {
             command: "echo cleanup".to_string(),
@@ -1992,6 +1996,7 @@ fn local_hosted_app_cleanup_hooks_require_saved_trust() {
         timeout_sec: None,
         status_message: None,
         on_failure: None,
+        additional_context_limit: None,
     };
     let discovered = super::discovery::discover_handlers(
         /*config_layer_stack*/ None,
@@ -2442,6 +2447,7 @@ fn executor_stop_hook_fixture() -> (
                     timeout_sec: None,
                     status_message: None,
                     on_failure: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()

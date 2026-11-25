@@ -790,6 +790,15 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "onFailure")]
         #[ts(rename = "onFailure")]
         on_failure: Option<ConfiguredHookFailurePolicy>,
+        /// Approximate token threshold for spilling plaintext `additionalContext` to disk.
+        /// Defaults to 2,500. For MCP hooks, `0` and values above 10,000
+        /// trigger a warning and use 10,000. Command hooks can disable spilling
+        /// with `0` or set a higher threshold. The MCP ceiling mirrors the
+        /// current default tool-output budget and may change in the future.
+        /// Encrypted hook output has a separate byte limit.
+        #[serde(rename = "additionalContextLimit")]
+        #[ts(rename = "additionalContextLimit")]
+        additional_context_limit: Option<usize>,
     },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]

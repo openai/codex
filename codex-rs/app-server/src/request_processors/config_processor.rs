@@ -884,6 +884,7 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             timeout_sec,
             status_message,
             on_failure,
+            additional_context_limit,
         } => ConfiguredHookHandler::McpTool {
             server,
             tool,
@@ -891,6 +892,7 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             timeout_sec,
             status_message,
             on_failure: on_failure.map(map_hook_failure_policy_to_api),
+            additional_context_limit,
         },
         CoreHookHandlerConfig::Prompt {} => ConfiguredHookHandler::Prompt {},
         CoreHookHandlerConfig::Agent {} => ConfiguredHookHandler::Agent {},

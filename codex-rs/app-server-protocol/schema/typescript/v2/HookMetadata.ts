@@ -9,7 +9,7 @@ import type { HookTrustStatus } from "./HookTrustStatus";
 export type HookMetadata = { key: string, eventName: HookEventName, matcher: string | null, timeoutSec: bigint, statusMessage: string | null,
 /**
  * Configured `additionalContext` spill threshold.
- * `null` uses 2,500 tokens; `0` disables spilling.
+ * `null` uses 2,500 approximate tokens. Only command hooks support `0` (no spill) or values above 10,000.
  */
 additionalContextLimit: number | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null,
 /**
