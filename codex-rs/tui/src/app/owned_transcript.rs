@@ -328,8 +328,7 @@ impl App {
         }) {
             self.divider_drag = None;
         }
-        let highlight_divider =
-            self.pane_resize.is_some() || tui.link_hover.shape == tui::PointerShape::Resize;
+        let highlight_divider = self.pane_resize.is_some() || tui.link_hover.sidebar_divider;
         let pointer = tui
             .link_hover
             .mouse

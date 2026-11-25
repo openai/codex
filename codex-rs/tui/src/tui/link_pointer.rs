@@ -15,7 +15,7 @@ use ratatui::layout::Position;
 use super::Tui;
 use super::TuiEvent;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum PointerShape {
     #[default]
@@ -28,6 +28,7 @@ pub(crate) enum PointerShape {
 pub(crate) struct LinkHover {
     pub(crate) mouse: Option<MouseEvent>,
     pub(crate) shape: PointerShape,
+    pub(crate) sidebar_divider: bool,
 }
 
 impl LinkHover {

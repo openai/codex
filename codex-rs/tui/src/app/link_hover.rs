@@ -235,6 +235,8 @@ impl App {
     }
 
     pub(super) fn refresh_link_hover(&self, tui: &mut Tui) -> std::io::Result<()> {
+        let viewport = tui.terminal.last_known_screen_size.into();
+        let mut sidebar_divider = false;
         let shape = if tui
             .link_hover
             .mouse
@@ -249,8 +251,15 @@ impl App {
                     self.conversation_frame
                         .divider_area()
                         .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
-                        && self.divider_is_settled(tui, tui.terminal.last_known_screen_size.into())
+                        && self.divider_is_settled(tui, viewport)
                 }))
+        {
+            sidebar_divider = true;
+            PointerShape::Resize
+        } else if self.agents_overview.workspace.divider_drag_viewport == Some(viewport)
+            || self
+                .hover_pointer(tui, tui.link_hover.mouse)
+                .is_some_and(|mouse| self.workspace_divider_at(viewport, mouse))
         {
             PointerShape::Resize
         } else if self.chat_widget.no_modal_or_popup_active()
@@ -263,7 +272,8 @@ impl App {
         } else {
             PointerShape::Default
         };
-        if (shape == PointerShape::Resize) != (tui.link_hover.shape == PointerShape::Resize) {
+        if sidebar_divider != tui.link_hover.sidebar_divider {
+            tui.link_hover.sidebar_divider = sidebar_divider;
             tui.frame_requester().schedule_frame();
         }
         tui.link_hover.shape = shape;

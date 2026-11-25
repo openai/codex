@@ -1360,6 +1360,13 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
     use crossterm::event::MouseButton::Left;
     use crossterm::event::MouseEventKind::Down;
     use crossterm::event::MouseEventKind::Drag;
+    use crossterm::event::MouseEventKind::Moved;
+    let mut pointers = Vec::new();
+    for column in [divider.x, center.right(), center.right() + 1] {
+        crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, mouse(Moved, column)))
+            .await?;
+        pointers.push(tui.link_hover.shape);
+    }
     tui.screen_size_for_event(&TuiEvent::Resize(three_panes))?;
     crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, mouse(Down(Left), divider.x)))
         .await?;
@@ -1404,6 +1411,28 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
 
     app.open_agents_overview(&server);
     app.sidebar_mut().hide();
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    let resized = center.right() + 4;
+    for event in [
+        mouse(Down(Left), center.right()),
+        mouse(Drag(Left), resized),
+    ] {
+        crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+        pointers.push(tui.link_hover.shape);
+    }
+    insta::assert_snapshot!(format!("{pointers:?}"), @"[Resize, Resize, Default, Resize, Resize]");
+    let release = mouse(crossterm::event::MouseEventKind::Up(Left), resized);
+    crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, release)).await?;
+    crate::app::test_support::side_frame(&mut app, &mut tui, three_panes)?;
+    assert_eq!(
+        app.conversation_frame.command_center.unwrap().right(),
+        resized
+    );
+    assert_eq!(tui.link_hover.shape, crate::tui::PointerShape::Resize);
+    for event in [mouse(Down(Left), resized), TuiEvent::FocusLost] {
+        crate::boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+    }
+    assert_eq!(tui.link_hover.shape, crate::tui::PointerShape::Default);
     crate::boxed_future!(app.handle_tui_event(
         &mut tui,
         &mut server,

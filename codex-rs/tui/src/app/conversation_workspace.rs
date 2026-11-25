@@ -48,7 +48,7 @@ pub(super) struct Workspace {
     pub(super) motion: super::pane_motion::PaneMotion,
     pub(super) fraction: Option<f64>,
     width: Option<u16>,
-    divider_drag_viewport: Option<Rect>,
+    pub(super) divider_drag_viewport: Option<Rect>,
 }
 
 impl Workspace {
@@ -235,6 +235,19 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    pub(super) fn workspace_divider_at(&self, viewport: Rect, mouse: MouseEvent) -> bool {
+        self.agents_overview.workspace.is_open()
+            && !self.chat_widget.has_active_view()
+            && viewport.contains((mouse.column, mouse.row).into())
+            && self
+                .conversation_frame
+                .command_center
+                .is_some_and(|center| {
+                    mouse.column == center.right()
+                        && self.workspace_areas(viewport).0 == Some(center)
+                })
+    }
+
     pub(super) fn handle_workspace_mouse(&mut self, tui: &mut Tui, mouse: MouseEvent) -> bool {
         if !self.agents_overview.workspace.is_open()
             || self.overlay.is_some()
@@ -244,14 +257,8 @@ impl App {
             return false;
         }
         let viewport: Rect = tui.terminal.last_known_screen_size.into();
-        let (center, conversation) = self.workspace_areas(viewport);
-        if matches!(mouse.kind, MouseEventKind::Down(_)) {
-            self.agents_overview.workspace.divider_drag_viewport = None;
-        }
-        if let Some(center) = center
-            && conversation.is_some()
-            && mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
-            && mouse.column == center.right()
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.workspace_divider_at(viewport, mouse)
         {
             self.agents_overview.workspace.divider_drag_viewport = Some(viewport);
             return true;
@@ -279,6 +286,7 @@ impl App {
             return center_was_focused;
         }
 
+        let (center, conversation) = self.workspace_areas(viewport);
         let point = (mouse.column, mouse.row).into();
         let pressed = matches!(mouse.kind, MouseEventKind::Down(_));
         if center.is_some_and(|rect| rect.contains(point)) {
