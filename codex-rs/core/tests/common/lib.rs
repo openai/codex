@@ -10,13 +10,15 @@ use tempfile::TempDir;
 
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
-use codex_config::test_support::CloudConfigBundleFixture;
+pub use codex_config::loader::load_guardian_policy_snapshot;
+pub use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 pub use codex_core::test_support::TestCodexResponsesRequestKind;
 pub use codex_core::test_support::responses_metadata;
+pub use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;

@@ -499,6 +499,10 @@ async fn committed_posts_reach_current_subscribers_once_across_channel_retries()
 
 #[tokio::test]
 async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
+    use codex_core::ConfigRefreshOutcome;
+    use codex_core::InheritedSessionId;
+    use codex_core::config::Config;
+    use codex_core::config::LoaderOverrides;
     use codex_core::guardian_review::AttachedReviewer;
     use codex_core::guardian_review::ShadowReviewer;
     use codex_extension_api::ExtensionData;
@@ -507,15 +511,53 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     use codex_extension_api::ThreadStopInput;
     use codex_features::Feature;
     use codex_protocol::AgentPath;
-    use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use core_test_support::CloudConfigBundleFixture;
+    use core_test_support::LOCAL_FS;
+    use core_test_support::load_guardian_policy_snapshot;
     use futures::FutureExt;
+
+    type ReviewerChange = (ApprovalsReviewer, ApprovalsReviewer);
+    struct RecordReviewerChange;
+
+    impl codex_extension_api::ConfigContributor<Config> for RecordReviewerChange {
+        fn on_config_changed(
+            &self,
+            _session: &ExtensionData,
+            thread: &ExtensionData,
+            previous: &Config,
+            current: &Config,
+        ) {
+            thread.insert((previous.approvals_reviewer, current.approvals_reviewer));
+        }
+    }
 
     core_test_support::skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
+    let mut unavailable = ExtensionRegistryBuilder::default();
+    crate::install_shadow(&mut unavailable, std::sync::Weak::new(), |root| {
+        board_host(root)
+    });
+    let unavailable = unavailable.build();
+    // Drive startup below, but let the session publish policy changes to the real contributor.
+    let mut settings = ExtensionRegistryBuilder::default();
+    settings.config_contributor(Arc::clone(&unavailable.config_contributors()[0]));
+    settings.config_contributor(Arc::new(RecordReviewerChange));
     let test = test_codex()
+        .with_extensions(Arc::new(settings.build()))
+        .with_config(|config| {
+            config.features.enable(Feature::GuardianV2).unwrap();
+            config.features.enable(Feature::GuardianV3Shadow).unwrap();
+            config.requested_approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .permissions
+                .approval_policy
+                .set(AskForApproval::OnRequest)
+                .unwrap();
+        })
         .with_history_mode(ThreadHistoryMode::Paginated)
         .build_with_auto_env(&server)
         .await?;
@@ -531,12 +573,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     let registry = registry.build();
     let lifecycle = &registry.thread_lifecycle_contributors()[0];
     let mut config = test.config.clone();
-    config.features.enable(Feature::GuardianV2)?;
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::OnRequest)?;
+    config.features.disable(Feature::GuardianV3Shadow)?;
     let mode = test
         .codex
         .thread_settings_snapshot()
@@ -553,11 +590,6 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     };
     let turns = &registry.turn_lifecycle_contributors()[0];
     // Force the first lookup to fail, then retry with the live manager on a turn.
-    let mut unavailable = ExtensionRegistryBuilder::default();
-    crate::install_shadow(&mut unavailable, std::sync::Weak::new(), |root| {
-        board_host(root)
-    });
-    let unavailable = unavailable.build();
     for (enrolled, history, expected) in [
         (false, HistoryInitialization::New, false),
         (true, HistoryInitialization::ColdResume, false),
@@ -605,7 +637,12 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     }
     let old_worker = thread.get::<super::RootWorker>().context("first board")?;
     let old_reviewer = thread.get::<ShadowReviewer>().context("first reviewer")?;
-    let child = ExtensionData::new(ThreadId::new().to_string());
+    let mut options = test.start_thread_options().await;
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(root.into()));
+    let child = test.thread_manager.start_thread(options).await?.thread;
+    let child_store = child.thread_extension_data();
     let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root,
         depth: 1,
@@ -624,16 +661,41 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
             history_initialization: HistoryInitialization::WarmFork,
             history_mode: ThreadHistoryMode::Paginated,
             session_store: &session,
-            thread_store: &child,
+            thread_store: child_store,
         })
         .await;
-    let child_reviewer = child.get::<ShadowReviewer>().context("child reviewer")?;
-    assert!(child.get::<super::RootWorker>().is_none());
+    let child_reviewer = child_store
+        .get::<ShadowReviewer>()
+        .context("child reviewer")?;
+    assert!(child_store.get::<super::RootWorker>().is_none());
 
-    let mut disabled = config.clone();
-    disabled.approvals_reviewer = ApprovalsReviewer::User;
-    let settings = &registry.config_contributors()[0];
-    settings.on_config_changed(&session, thread, &config, &disabled);
+    let refresh = async |requirements: &str, expected: ApprovalsReviewer| -> anyhow::Result<()> {
+        let loader = CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        let policy = load_guardian_policy_snapshot(
+            LOCAL_FS.as_ref(),
+            test.codex_home_path(),
+            &LoaderOverrides::without_managed_config_for_tests(),
+            &loader,
+            test.codex.config().await.guardian_policy_revision + 1,
+        )
+        .await?;
+        for actor in [&child, &test.codex] {
+            let before = actor.thread_settings_snapshot().await.approvals_reviewer;
+            let outcome = actor.refresh_guardian_policy(&policy).await;
+            let after = actor.thread_settings_snapshot().await.approvals_reviewer;
+            assert_ne!(before, expected);
+            assert_eq!(outcome, ConfigRefreshOutcome::Published);
+            assert_eq!(after, expected);
+            let change = actor.thread_extension_data().remove::<ReviewerChange>();
+            assert_eq!(change.as_deref(), Some(&(before, after)));
+        }
+        Ok(())
+    };
+    refresh(
+        "allowed_approvals_reviewers = ['user']",
+        ApprovalsReviewer::User,
+    )
+    .await?;
     assert!(old_reviewer.cancellation.is_cancelled());
     assert!(child_reviewer.cancellation.is_cancelled());
     assert!(thread.get::<ShadowReviewer>().is_none());
@@ -645,25 +707,22 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     let enrollment = thread
         .get::<super::shadow::Enrollment>()
         .context("enrollment")?;
-    let set_reviewer = |reviewer| {
-        test.codex
-            .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(reviewer),
-                ..Default::default()
-            })
-    };
+    let disabled = test.codex.config().await;
+    let settings = &registry.config_contributors()[0];
     // A delayed Auto Review notification must not override the root's live settings.
-    set_reviewer(ApprovalsReviewer::User).await?;
     settings.on_config_changed(&session, thread, &disabled, &config);
     assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
     enrollment.drain().await;
     assert!(thread.get::<ShadowReviewer>().is_none());
     assert!(thread.get::<super::RootWorker>().is_none());
 
+    // Lift the restriction so the requested Auto Review setting takes effect again.
+    refresh(
+        "allowed_approvals_reviewers = ['user', 'auto_review']",
+        ApprovalsReviewer::AutoReview,
+    )
+    .await?;
     // Keep the root eligible so only cancellation can stop the queued restart.
-    set_reviewer(ApprovalsReviewer::AutoReview).await?;
-    settings.on_config_changed(&session, thread, &disabled, &config);
     assert_eq!(turns.on_turn_start(start()).now_or_never(), Some(()));
     settings.on_config_changed(&session, thread, &config, &disabled);
     enrollment.drain().await;
@@ -692,6 +751,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
             .join("message_board_guardian_1.sqlite")
             .exists()
     );
+    child.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
