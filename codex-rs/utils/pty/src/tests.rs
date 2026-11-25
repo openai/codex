@@ -1358,10 +1358,9 @@ async fn pty_attachments_preserve_shell_environment_and_signal_status() -> anyho
             unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFD) },
             flags
         );
-        let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
         let (bytes, status) =
-            collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 2_000).await;
-        assert_eq!(status, expected_status);
+            tokio::join!(collect_split_output(spawned.stdout_rx), spawned.exit_rx);
+        assert_eq!(status?, expected_status);
         output.push(bytes);
     }
     assert!(!output[0].is_empty());
