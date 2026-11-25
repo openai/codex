@@ -553,6 +553,25 @@ impl App {
                 return Err(AppRunControl::Continue);
             }
         };
+        let provider = &resumed.session.model_provider_id;
+        if !restored_blank_session
+            && app_server.thread_params_mode() == crate::ThreadParamsMode::Remote
+            && !codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None)
+                .contains_key(provider)
+        {
+            // The server may have changed credentials under the same ID since the last chat.
+            // Without a current definition, this chat can only use turn-derived quota.
+            resume_config.model_providers.remove(provider);
+            if let Ok(defaults) = crate::config_update::read_effective_config_with_optional_layers(
+                &app_server.request_handle(),
+                resumed.session.cwd.inferred_native_path_string(),
+                /*include_layers*/ false,
+            )
+            .await
+            {
+                super::new_session::overlay_model_providers(&mut resume_config, &defaults.config);
+            }
+        }
         Ok(PreparedResume {
             backend_id: app_server.backend_id(),
             config: resume_config,

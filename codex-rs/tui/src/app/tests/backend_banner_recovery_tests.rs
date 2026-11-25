@@ -26,7 +26,19 @@ fn response_with_banner() -> GetAccountRateLimitsResponse {
     })).unwrap()
 }
 
-async fn next_rate_limits_loaded(
+pub(super) fn mock_account_usage(used: u32) -> Mock {
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "account_id": "workspace-a", "user_id": "user-a", "plan_type": "plus",
+            "rate_limit": {"allowed": true, "limit_reached": false,
+                "primary_window": {"used_percent": used, "limit_window_seconds": 18000,
+                    "reset_after_seconds": 1800, "reset_at": 2000000000}},
+            "rate_limit_reset_credits": {"available_count": 1}
+        })))
+}
+
+pub(super) async fn next_rate_limits_loaded(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Result<AppEvent> {
     Ok(
@@ -135,15 +147,7 @@ async fn luna_reserve_periodic_refresh_adapts_without_an_experiment_banner() -> 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     for (used, seconds) in [(10, 60), (75, 30), (90, 15), (99, 5), (20, 60)] {
         backend.reset().await;
-        Mock::given(method("GET"))
-            .and(path("/api/codex/usage"))
-            .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
-                "account_id": "workspace-a", "user_id": "user-a", "plan_type": "plus",
-                "rate_limit": {"allowed": true, "limit_reached": false,
-                    "primary_window": {"used_percent": used, "limit_window_seconds": 18000,
-                        "reset_after_seconds": 1800, "reset_at": 2000000000}},
-                "rate_limit_reset_credits": {"available_count": 1}
-            })))
+        mock_account_usage(used)
             .expect(/*r*/ 1)
             .mount(&backend)
             .await;

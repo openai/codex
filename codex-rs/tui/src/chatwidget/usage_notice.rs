@@ -1,5 +1,5 @@
 //! Account quota state and composer notice, independent of one-time warning history.
-//! Rolling updates retain metadata; fresh account reads replace windows and confirm recovery.
+//! Sparse turns retain omitted windows. For independent providers they also confirm recovery.
 //! Details target half the composer gap; the shortest notice may use its full width.
 
 use super::ChatWidget;
@@ -22,6 +22,7 @@ pub(super) struct UsageNoticeState {
     secondary: Option<RateLimitWindow>,
     plan_type: Option<PlanType>,
     credits: Option<CreditsSnapshot>,
+    turn_only: bool,
     latest_read_id: u64,
     stale_through: Option<u64>,
     pub(super) applying_stale_read: bool,
@@ -72,10 +73,11 @@ impl UsageNoticeState {
         let notice_width = (usize::from(width) / 2)
             .max(compact.width())
             .min(usize::from(width)) as u16;
+        let hint = if self.turn_only { "" } else { " · /status" };
         let line = first_fitting_line(
             [
-                Line::from(format!("{summary}{reset} · /status")),
-                Line::from(format!("{summary} · /status")),
+                Line::from(format!("{summary}{reset}{hint}")),
+                Line::from(format!("{summary}{hint}")),
                 Line::from(summary),
                 compact,
             ],
@@ -94,7 +96,8 @@ impl UsageNoticeState {
             return false;
         }
         let previous = self.current();
-        let rolling = matches!(source, RateLimitSnapshotSource::RollingUpdate);
+        self.turn_only = matches!(source, RateLimitSnapshotSource::ProviderTurn);
+        let rolling = !matches!(source, RateLimitSnapshotSource::AccountUsage);
         if rolling {
             self.stale_through = Some(self.latest_read_id);
         }
@@ -117,7 +120,10 @@ impl UsageNoticeState {
                     .or(previous.window_duration_mins);
                 window.resets_at = window.resets_at.or(previous.resets_at);
                 let threshold = warning_threshold(self.plan_type, window.window_duration_mins);
-                if previous.used_percent >= threshold && window.used_percent < threshold {
+                if !self.turn_only
+                    && previous.used_percent >= threshold
+                    && window.used_percent < threshold
+                {
                     continue;
                 }
             }

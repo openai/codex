@@ -184,11 +184,10 @@ async fn accepted_rate_limit_read_updates_billing_after_its_status_card_is_gone(
     replacement.local_settings.tui.status_line = Some(vec!["estimated-thread-cost".into()]);
     app.replace_chat_widget(ChatWidget::new_with_app_event(replacement));
     let thread = ThreadId::new();
-    app.enqueue_primary_thread_session(
-        test_thread_session(thread, app.config.cwd.to_path_buf()),
-        Vec::new(),
-    )
-    .await?;
+    let mut session = test_thread_session(thread, app.config.cwd.to_path_buf());
+    session.model_provider_id = "openai".into();
+    app.enqueue_primary_thread_session(session, Vec::new())
+        .await?;
     app.drain_active_thread_events(&mut tui).await?;
     while events.try_recv().is_ok() {}
 

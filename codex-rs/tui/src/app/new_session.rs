@@ -39,6 +39,13 @@ pub(super) fn overlay_reasoning_summary(
     if !has_launch_setting(config, cli_kv_overrides, "model_reasoning_summary") {
         config.model_reasoning_summary = defaults.model_reasoning_summary;
     }
+    overlay_model_providers(config, defaults);
+}
+
+pub(super) fn overlay_model_providers(
+    config: &mut Config,
+    defaults: &codex_app_server_protocol::Config,
+) {
     if let Some(providers) = defaults
         .additional
         .get("model_providers")

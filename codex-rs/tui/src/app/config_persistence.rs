@@ -6,6 +6,7 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
+use futures::TryFutureExt;
 
 async fn build_config_on_runtime_worker(
     builder: ConfigBuilder,
@@ -127,11 +128,21 @@ impl App {
             .harness_overrides(overrides)
             .loader_overrides(self.loader_overrides.clone())
             .cloud_config_bundle(self.cloud_config_bundle.clone());
+        // Reloading client preferences must not replace the remote server's provider definitions.
+        let remote_providers = target
+            .uses_remote_workspace()
+            .then(|| base.model_providers.clone());
         build_config_on_runtime_worker(
             builder,
             base.application_network_policy.clone(),
             format!("Failed to rebuild config for cwd {cwd_display}"),
         )
+        .map_ok(move |mut config| {
+            if let Some(providers) = remote_providers {
+                config.model_providers = providers;
+            }
+            config
+        })
     }
 
     #[cfg(test)]

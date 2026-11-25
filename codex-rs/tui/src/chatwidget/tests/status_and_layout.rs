@@ -840,18 +840,10 @@ async fn rate_limit_warnings_emit_thresholds() {
     assert_eq!(
         warnings,
         vec![
-            String::from(
-                "Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown."
-            ),
-            String::from(
-                "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.",
-            ),
-            String::from(
-                "Heads up, you have less than 5% of your 5h limit left. Run /status for a breakdown."
-            ),
-            String::from(
-                "Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.",
-            ),
+            String::from("Heads up, you have less than 25% of your 5h limit left."),
+            String::from("Heads up, you have less than 25% of your weekly limit left.",),
+            String::from("Heads up, you have less than 5% of your 5h limit left."),
+            String::from("Heads up, you have less than 5% of your weekly limit left.",),
         ],
         "expected one warning per limit for the highest crossed threshold"
     );
@@ -918,7 +910,7 @@ async fn test_rate_limit_warnings_monthly() {
     assert_eq!(
         warnings,
         vec![String::from(
-            "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
+            "Heads up, you have less than 25% of your monthly limit left.",
         ),],
         "expected one warning per limit for the highest crossed threshold"
     );
@@ -947,12 +939,8 @@ async fn test_rate_limit_warnings_use_generic_fallback_labels() {
             /*primary_window_minutes*/ None,
         ),
         vec![
-            String::from(
-                "Heads up, you have less than 25% of your secondary usage limit left. Run /status for a breakdown.",
-            ),
-            String::from(
-                "Heads up, you have less than 25% of your usage limit left. Run /status for a breakdown.",
-            ),
+            String::from("Heads up, you have less than 25% of your secondary usage limit left.",),
+            String::from("Heads up, you have less than 25% of your usage limit left.",),
         ],
     );
 }
@@ -970,7 +958,7 @@ async fn test_rate_limit_warnings_use_secondary_fallback_for_unsupported_window(
             /*primary_window_minutes*/ None,
         ),
         vec![String::from(
-            "Heads up, you have less than 25% of your secondary usage limit left. Run /status for a breakdown.",
+            "Heads up, you have less than 25% of your secondary usage limit left.",
         )],
     );
 }
@@ -1428,6 +1416,39 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
     ));
+}
+
+#[tokio::test]
+async fn custom_provider_warns_from_turn_without_rate_limit_switch_prompt() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.model_provider_id = "custom".into();
+    chat.requires_openai_auth = false;
+    let mut usage = snapshot(/*percent*/ 96.0);
+    usage.primary.as_mut().unwrap().window_duration_mins = Some(10080);
+    chat.on_rolling_rate_limit_snapshot(usage.clone());
+
+    let warnings = drain_insert_history_transcript(&mut rx);
+    insta::assert_snapshot!(lines_to_single_string(&warnings.concat()), @r"
+    ⚠ Heads up, you have less than 5% of your weekly limit left.
+    ");
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    let notice = chat.usage_notice(/*width*/ 160).unwrap().to_string();
+    insta::assert_snapshot!(notice, @"⚠ weekly limit: only 4% left");
+
+    let mut sparse = snapshot(/*percent*/ 10.0);
+    sparse.secondary = sparse.primary.take();
+    chat.on_rolling_rate_limit_snapshot(sparse);
+    assert_eq!(
+        chat.usage_notice(/*width*/ 160).unwrap().to_string(),
+        notice
+    );
+
+    usage.primary.as_mut().unwrap().used_percent = 10;
+    chat.on_rolling_rate_limit_snapshot(usage);
+    assert!(chat.usage_notice(/*width*/ 160).is_none());
 }
 
 #[tokio::test]

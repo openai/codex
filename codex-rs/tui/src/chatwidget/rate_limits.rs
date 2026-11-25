@@ -5,6 +5,7 @@ pub(super) const WORKSPACE_NUDGE_VIEW_ID: &str = "workspace-usage-nudge";
 use crate::bottom_pane::ActionableBanner;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use uuid::Uuid;
 
 pub(super) struct PendingCreditsNudge {
@@ -65,7 +66,7 @@ impl RateLimitWarningState {
                     limit_label_for_window(secondary_window_minutes, /*is_secondary*/ true);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left."
                 ));
             }
         }
@@ -91,7 +92,7 @@ impl RateLimitWarningState {
                     limit_label_for_window(primary_window_minutes, /*is_secondary*/ false);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left."
                 ));
             }
         }
@@ -193,6 +194,7 @@ pub(super) fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -
 pub(super) enum RateLimitSnapshotSource {
     AccountUsage,
     RollingUpdate,
+    ProviderTurn,
 }
 
 fn has_usable_workspace_credits(credits: &CreditsSnapshot) -> bool {
@@ -289,7 +291,12 @@ impl ChatWidget {
             self.clear_backend_banner();
         }
         // Rolling app-server notifications are sparse. Preserve metadata learned from the full read.
-        self.on_rate_limit_snapshot_from(Some(snapshot), RateLimitSnapshotSource::RollingUpdate);
+        let source = if self.uses_account_quota() {
+            RateLimitSnapshotSource::RollingUpdate
+        } else {
+            RateLimitSnapshotSource::ProviderTurn
+        };
+        self.on_rate_limit_snapshot_from(Some(snapshot), source);
     }
 
     fn on_rate_limit_snapshot_from(
@@ -408,6 +415,7 @@ impl ChatWidget {
 
             if used_percent.is_some_and(|used| used >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
                 && should_warn_about_rate_limit_usage
+                && self.quota_provider_id() == OPENAI_PROVIDER_ID
                 && !self.rate_limit_switch_prompt_hidden()
                 && self.current_model() != NUDGE_MODEL_SLUG
                 && matches!(
@@ -436,7 +444,10 @@ impl ChatWidget {
             }
 
             if !warnings.is_empty() {
-                for warning in warnings {
+                for mut warning in warnings {
+                    if !matches!(source, RateLimitSnapshotSource::ProviderTurn) {
+                        warning.push_str(" Run /status for a breakdown.");
+                    }
                     self.add_to_history(history_cell::new_visible_warning_event(warning));
                 }
                 self.request_redraw();
@@ -457,9 +468,20 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn should_prefetch_rate_limits(&self) -> bool {
-        self.requires_openai_auth && self.has_chatgpt_account
+    pub(crate) fn uses_account_quota(&self) -> bool {
+        if self.thread_params_mode == crate::ThreadParamsMode::Cloud {
+            return self.requires_openai_auth;
+        }
+        // The server authenticated the quota read, but its default provider may differ
+        // from the one serving this thread.
+        self.config
+            .model_providers
+            .get(self.quota_provider_id())
+            .is_some_and(codex_model_provider::provider_uses_first_party_auth_path)
+    }
+
+    pub(crate) fn should_prefetch_rate_limits(&self) -> bool {
+        self.requires_openai_auth && self.has_chatgpt_account && self.uses_account_quota()
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {

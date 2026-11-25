@@ -2341,7 +2341,7 @@ impl App {
                 match result {
                 Ok(response) => {
                     let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
-                    let snapshots = if accepted
+                    let snapshots = if accepted && self.chat_widget.uses_account_quota()
                     {
                         self.chat_widget.apply_usage_notice_read(request_id);
                         self.chat_widget.update_backend_banner(&response);

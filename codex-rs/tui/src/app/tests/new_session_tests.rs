@@ -17,8 +17,8 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> {
-    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+async fn new_and_resumed_sessions_use_quota_for_the_active_provider() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     crate::chatwidget::tests::helpers::set_fast_mode_test_catalog_for_models(
         &mut app.chat_widget,
         "gpt-5.5",
@@ -47,7 +47,7 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
     std::fs::write(
         home.path().join("config.toml"),
         format!(
-            "model_provider = 'amazon-bedrock'\nmodel = 'gpt-5.5'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\nmodel_catalog_json = {catalog_path:?}\nfeatures.apps = true\n\n[model_providers.alt]\nname = 'Alt'\nwire_api = 'responses'\nrequires_openai_auth = true\n",
+            "model_provider = 'amazon-bedrock'\nmodel = 'gpt-5.5'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\nmodel_catalog_json = {catalog_path:?}\nfeatures.apps = true\n\n[model_providers.alt]\nname = 'Alt'\nwire_api = 'responses'\nrequires_openai_auth = true\n\n[model_providers.custom]\nname = 'Custom'\nrequires_openai_auth = false\n",
             backend.uri(),
         ),
     )?;
@@ -58,12 +58,25 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
         endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
     };
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    for provider in [
-        "amazon-bedrock",
-        "openai",
-        "alt",
-        "openai",
-        "amazon-bedrock",
+    super::backend_banner_recovery_tests::mock_account_usage(/*used*/ 91)
+        .expect(/*r*/ 5)
+        .mount(&backend)
+        .await;
+    for (provider, saved_providers) in [
+        ("amazon-bedrock", &[][..]),
+        ("openai", &[]),
+        ("alt", &[]),
+        (
+            "openai",
+            &[
+                ("custom", false),
+                ("alt", true),
+                ("alt", false),
+                ("openai", true),
+            ],
+        ),
+        ("amazon-bedrock", &[]),
+        ("custom", &[("openai", true)]),
     ] {
         if app.chat_widget.config_ref().model_provider_id == "alt" {
             // The task list uses the client default, which is also the next provider.
@@ -160,6 +173,44 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
                 chatgpt.then_some(codex_protocol::account::PlanType::Pro)
             )
         );
+        // Resume saved chats without changing the server default or its login.
+        for &(provider, shares_quota) in saved_providers {
+            if provider == "alt" && !shares_quota {
+                crate::config_update::write_config_batch(
+                    server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        "model_providers.alt.requires_openai_auth",
+                        false.into(),
+                    )],
+                )
+                .await?;
+            }
+            server_config.model_provider_id = provider.into();
+            let id =
+                create_history_rollout(&server_config, ThreadHistoryMode::Legacy, "Saved chat")?;
+            let resume = AppEvent::ResumeSessionByIdOrName(id.to_string());
+            Box::pin(app.handle_event(&mut tui, &mut server, resume)).await?;
+            app.drain_active_thread_events(&mut tui).await?;
+            assert_eq!(app.chat_widget.quota_provider_id(), provider);
+            assert_eq!(app.chat_widget.has_chatgpt_account(), chatgpt);
+            assert_eq!(
+                app.chat_widget.rate_limit_refresh_interval().is_some(),
+                chatgpt && shares_quota
+            );
+
+            // An explicit /usage read can complete even when automatic polling is off.
+            let origin = RateLimitRefreshOrigin::ResetPicker {
+                request_id: app.chat_widget.show_rate_limit_reset_loading_popup(),
+            };
+            app.refresh_rate_limits(&server, origin);
+            let read =
+                super::backend_banner_recovery_tests::next_rate_limits_loaded(&mut events).await?;
+            Box::pin(app.handle_event(&mut tui, &mut server, read)).await?;
+            assert_eq!(
+                app.chat_widget.usage_notice(/*width*/ 100).is_some(),
+                shares_quota
+            );
+        }
     }
     server.shutdown().await?;
     proxy.await??;
