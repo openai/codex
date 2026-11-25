@@ -1,5 +1,5 @@
 //! Acquires host execution capacity without blocking the submission dispatcher.
-//! Input stays with the registered task until admission succeeds, so abort owns cleanup.
+//! Input stays on the turn context until admission succeeds, so abort owns cleanup.
 
 use std::sync::Arc;
 
@@ -66,7 +66,7 @@ pub(super) async fn admit(
         .filter(|task| Arc::ptr_eq(&task.turn_context, context))
         .filter(|_| !cancellation.is_cancelled())
         .ok_or_else(|| CodexErr::new(CodexErrorDetails::TurnAborted))?;
-    let input = task.pending_initial_input.take().ok_or_else(|| {
+    let input = context.take_initial_input().ok_or_else(|| {
         CodexErr::Fatal("initial input missing from the task awaiting host admission".into())
     })?;
     task._agent_execution_guard = Some(guard);
@@ -89,10 +89,9 @@ impl Session {
         self: &Arc<Self>,
         context: &Arc<TurnContext>,
         turn_state: &Mutex<TurnState>,
-        input: Option<Vec<TurnInput>>,
         abort_reason: Option<&TurnAbortReason>,
     ) -> Result<()> {
-        let Some(input) = input else {
+        let Some(input) = context.take_initial_input() else {
             return Ok(());
         };
         let pending_input = self

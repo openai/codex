@@ -412,15 +412,17 @@ impl Session {
         self.bind_realtime_handoffs_to_turn(&input, &turn_context.sub_id)
             .await;
         let host_admission = self.host_turn_admission();
-        let (agent_execution_guard, task_input, pending_initial_input) = match &host_admission {
-            Some(_) => (None, Vec::new(), Some(input)),
+        let (agent_execution_guard, task_input) = match &host_admission {
+            Some(_) => {
+                turn_context.park_initial_input(input);
+                (None, Vec::new())
+            }
             None => (
                 self.services.agent_control.admit_turn(
                     turn_context.multi_agent_version,
                     &turn_context.session_source,
                 ),
                 input,
-                None,
             ),
         };
         // Native admission is synchronous, including unrestricted turns that have no guard.
@@ -546,7 +548,6 @@ impl Session {
             turn_context: Arc::clone(&turn_context),
             _agent_execution_guard: agent_execution_guard,
             outcome_handoff,
-            pending_initial_input,
             _diagnostics_guard: ACTIVE_TURNS.track(),
             _timer: timer,
         };
@@ -818,11 +819,12 @@ impl Session {
             let task = active_turn.task.take()?;
             task.handle.detach();
             active_turn.finishing = Some(finishing);
+            let initial_input = turn_context.take_initial_input();
             (
                 Arc::clone(&active_turn.turn_state),
-                (task._agent_execution_guard.is_none() && task.pending_initial_input.is_some())
+                (task._agent_execution_guard.is_none() && initial_input.is_some())
                     .then_some(task.task),
-                task.pending_initial_input,
+                initial_input,
                 task.outcome_handoff,
                 sampling_interrupted,
             )
@@ -1241,12 +1243,7 @@ impl Session {
         }
 
         if let Err(error) = self
-            .record_pending_initial_input(
-                &task.turn_context,
-                turn_state,
-                task.pending_initial_input,
-                Some(&reason),
-            )
+            .record_pending_initial_input(&task.turn_context, turn_state, Some(&reason))
             .await
         {
             self.send_event(

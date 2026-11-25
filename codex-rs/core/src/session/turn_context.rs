@@ -368,6 +368,10 @@ pub(crate) struct NewTurnContextOptions {
     pub(crate) goal_daybreak: Option<crate::GoalDaybreakSnapshot>,
 }
 
+/// Unrecorded input shared with cleanup, even after the active task is detached.
+#[derive(Clone)]
+struct PendingInitialInput(Vec<TurnInput>);
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub struct TurnContext {
@@ -453,6 +457,17 @@ enum TurnContextBuildMode {
 }
 
 impl TurnContext {
+    pub(crate) fn park_initial_input(&self, input: Vec<TurnInput>) {
+        let previous = self.extension_data.insert(PendingInitialInput(input));
+        debug_assert!(previous.is_none());
+    }
+
+    pub(crate) fn take_initial_input(&self) -> Option<Vec<TurnInput>> {
+        self.extension_data
+            .remove::<PendingInitialInput>()
+            .map(|input| Arc::unwrap_or_clone(input).0)
+    }
+
     /// Returns the resolved causal root for this admitted turn.
     pub(crate) fn root_turn_id(&self) -> String {
         self.turn_metadata_state

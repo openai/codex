@@ -89,7 +89,6 @@ pub(super) async fn suspend_turn_and_shutdown(
         .record_pending_initial_input(
             &task.turn_context,
             &turn.turn_state,
-            task.pending_initial_input,
             /*abort_reason*/ None,
         )
         .await;

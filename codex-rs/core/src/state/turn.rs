@@ -23,7 +23,6 @@ use super::TurnTokenUsage;
 use crate::agent::types::AgentExecutionGuard;
 use crate::session::PendingUserInput;
 use crate::session::SamplingInterrupt;
-use crate::session::TurnInput;
 use crate::session::TurnInputQueue;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -100,8 +99,6 @@ pub(crate) struct RunningTask {
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
     /// Follows the task into whichever finalizer claims its terminal event.
     pub(crate) outcome_handoff: Option<TaskTrackerToken>,
-    /// Unrecorded input retained during host admission or preparation that can wait on the roster.
-    pub(crate) pending_initial_input: Option<Vec<TurnInput>>,
     pub(crate) _diagnostics_guard: GaugeGuard,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,

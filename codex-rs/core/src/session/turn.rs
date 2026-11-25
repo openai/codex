@@ -169,15 +169,16 @@ pub(crate) struct McpStartupRequirements {
     required_plugins: HashSet<String>,
 }
 
-/// Keep the initial input recoverable while startup can block on a host roster read.
+/// Keep the initial input recoverable while a startup step can block.
 async fn preserve_initial_input_during<T>(
     sess: &Session,
     turn_context: &Arc<TurnContext>,
     input: &mut Vec<TurnInput>,
+    can_block: bool,
     prepare: impl Future<Output = T>,
 ) -> CodexResult<T> {
     // A context-only submission still needs Some([]) so suspension records its context.
-    if sess.host_roster_reader(turn_context).is_none()
+    if !can_block
         || (input.is_empty()
             && turn_context
                 .extension_data
@@ -187,25 +188,25 @@ async fn preserve_initial_input_during<T>(
         return Ok(prepare.await);
     }
 
-    let exchange_input = async |replacement| {
-        let mut active = sess.active_turn.lock().await;
-        let task = active
-            .as_mut()
-            .and_then(|turn| turn.task.as_mut())
+    // Suspension can detach the task before we acquire the lock. Park the input
+    // first: cleanup reads this same context after joining the task.
+    turn_context.park_initial_input(std::mem::take(input));
+    let lock_active_turn = async || {
+        let active = sess.active_turn.lock().await;
+        active
+            .as_ref()
+            .and_then(|turn| turn.task.as_ref())
             .filter(|task| Arc::ptr_eq(&task.turn_context, turn_context))
             .ok_or_else(|| CodexErr::new(CodexErrorDetails::TurnAborted))?;
-        Ok::<_, CodexErr>(std::mem::replace(
-            &mut task.pending_initial_input,
-            replacement,
-        ))
+        Ok::<_, CodexErr>(active)
     };
 
-    let previous = exchange_input(Some(std::mem::take(input))).await?;
-    debug_assert!(previous.is_none());
+    drop(lock_active_turn().await?);
     let result = prepare.await;
-    // If suspension took the task, its cleanup owns the input.
-    *input = exchange_input(/* replacement */ None)
-        .await?
+    // Reclaim under the same lock as suspension. Only the winner records the input.
+    let _active = lock_active_turn().await?;
+    *input = turn_context
+        .take_initial_input()
         .ok_or_else(|| CodexErr::Fatal("initial input missing after turn preparation".into()))?;
     Ok(result)
 }
@@ -265,6 +266,7 @@ pub(crate) async fn run_turn(
 
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let reads_host_roster = sess.host_roster_reader(&turn_context).is_some();
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -274,6 +276,7 @@ pub(crate) async fn run_turn(
             &sess,
             &turn_context,
             &mut input,
+            reads_host_roster,
             run_pre_sampling_compact(
                 &sess,
                 &turn_context,
@@ -380,6 +383,7 @@ pub(crate) async fn run_turn(
         &sess,
         &turn_context,
         &mut input,
+        reads_host_roster,
         sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
     )
     .await??;
