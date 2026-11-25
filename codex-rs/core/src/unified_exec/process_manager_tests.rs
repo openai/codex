@@ -474,7 +474,7 @@ async fn late_network_denial_grace_observes_cancellation_after_exit() -> anyhow:
     use crate::tools::network_approval::build_blocked_request_observer;
     use codex_network_proxy::BlockedRequest;
     use codex_network_proxy::BlockedRequestArgs;
-    use codex_network_proxy::EnvironmentNetworkPolicy;
+    use codex_network_proxy::environment_policy_from_config;
     use codex_tools::ToolName;
 
     let (session, mut turn) = crate::session::tests::make_session_and_context().await;
@@ -498,7 +498,7 @@ async fn late_network_denial_grace_observes_cancellation_after_exit() -> anyhow:
         codex_protocol::models::PermissionProfileSnapshot::legacy(
             codex_protocol::models::PermissionProfile::workspace_write(),
         );
-    remote.config_mut().network_policy = Some(EnvironmentNetworkPolicy::from_config(
+    remote.config_mut().network_policy = Some(environment_policy_from_config(
         &codex_network_proxy::NetworkProxyConfig {
             enabled: true,
             ..Default::default()

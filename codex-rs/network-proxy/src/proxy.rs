@@ -1103,7 +1103,7 @@ impl NetworkProxy {
             }
         }
         if let Some(policy) = environment_policy {
-            policy.apply_to(&mut config);
+            crate::apply_environment_policy(policy, &mut config);
         }
         config.allow_local_binding = Some(local_binding_policy.resolve(&config));
         anyhow::ensure!(
@@ -2138,7 +2138,7 @@ mod tests {
             "remote",
             "execution-1",
             "token-1".to_string(),
-            Some(crate::EnvironmentNetworkPolicy::from_config(
+            Some(crate::environment_policy_from_config(
                 &owner_config,
                 /*managed_allowed_domains_only*/ false,
             )),
@@ -2195,7 +2195,7 @@ mod tests {
             "owner-environment",
             "execution-3",
             "token-3".to_string(),
-            Some(crate::EnvironmentNetworkPolicy::from_config(
+            Some(crate::environment_policy_from_config(
                 &owner_config,
                 /*managed_allowed_domains_only*/ true,
             )),
@@ -2716,7 +2716,7 @@ mod tests {
             "remote-env",
             "execution-2",
             "token-2".to_string(),
-            Some(crate::EnvironmentNetworkPolicy::from_config(
+            Some(crate::environment_policy_from_config(
                 &owner_config,
                 /*managed_allowed_domains_only*/ false,
             )),

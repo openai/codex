@@ -2,7 +2,6 @@ mod configured;
 mod destination;
 mod environment;
 mod matching;
-mod provider_config;
 mod providers;
 mod registry;
 mod replacement;
@@ -26,6 +25,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use url::Url;
 
+pub use codex_network_policy_types::CredentialAuthMethod;
+pub use codex_network_policy_types::CredentialProviderConfig;
 pub use environment::CredentialBrokerContext;
 pub use environment::CredentialBrokerEnvironment;
 pub use environment::brokered_credential_binding_env_keys;
@@ -37,8 +38,15 @@ pub use environment::credential_broker_provider_context_env_keys;
 pub use environment::credential_broker_provider_sources_allowed;
 pub use environment::is_credential_broker_provider_env_key;
 pub(crate) use environment::marked_credential_dummy_env_keys;
-pub use provider_config::CredentialAuthMethod;
-pub use provider_config::CredentialProviderConfig;
+
+/// Validate a complete provider definition using the broker's compilation rules.
+pub fn validate_credential_provider(
+    id: &str,
+    config: &CredentialProviderConfig,
+) -> anyhow::Result<()> {
+    configured::ConfiguredCredentialProvider::compile(id, config)?;
+    Ok(())
+}
 
 pub const CREDENTIAL_BROKER_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE";
 pub(crate) const BROKERED_CREDENTIALS_ENV_KEY: &str = "CODEX_NETWORK_PROXY_BROKERED_CREDENTIALS";

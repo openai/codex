@@ -15,6 +15,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::merge_toml_values;
 use codex_core::config::edit::ConfigEdit;
 use codex_network_proxy::CredentialProviderConfig;
+use codex_network_proxy::validate_credential_provider;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use toml::Value as TomlValue;
@@ -215,7 +216,7 @@ impl CredentialProviderEdits {
                     else {
                         continue;
                     };
-                    if old.validate(id).is_ok() {
+                    if validate_credential_provider(id, &old).is_ok() {
                         to_validate.insert(id.clone(), current.clone());
                     }
                 }
@@ -255,7 +256,7 @@ impl CredentialProviderEdits {
         }
         for (id, definition) in to_validate {
             let provider: CredentialProviderConfig = definition.try_into()?;
-            provider.validate(&id)?;
+            validate_credential_provider(&id, &provider)?;
         }
         Ok(())
     }
