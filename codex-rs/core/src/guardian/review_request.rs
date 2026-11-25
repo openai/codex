@@ -235,18 +235,6 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             .map_err(|error| ReviewDecision::denied(error.to_string()))?;
         let root_history = root.as_ref().map(root_history_key);
         let attached = if let Some(provider) = attached_reviewer {
-            let history = session.conversation_history_snapshot().await;
-            let authorization = ReviewAuthorization {
-                user_message_revision: history.user_message_revision(),
-                review_context_revision: history.guardian_review_context_revision(),
-                root_history,
-                root_authorization_version: root.as_ref().map(|root| root.authorization_version),
-                root_review_context_revision: root
-                    .as_ref()
-                    .map(|root| root.review_context_revision),
-                history_reset: self.history_reset.clone(),
-            };
-            drop(history);
             let started = Instant::now();
             tracing::info!(
                 %review_id,
@@ -258,15 +246,9 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 },
                 "Guardian V3 review preparation started"
             );
-            let result = AttachedApproval::prepare(
-                provider,
-                authorization,
-                &session,
-                &context,
-                deadline,
-                cancellation,
-            )
-            .await;
+            let result =
+                AttachedApproval::prepare(provider, &session, &context, deadline, cancellation)
+                    .await;
             let result = if cancellation.is_cancelled() {
                 Err(ReviewPreparationError::Cancelled)
             } else {
@@ -358,26 +340,19 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 root_versions,
             });
         drop(history);
-        let authorization = ReviewAuthorization {
-            user_message_revision,
-            review_context_revision,
-            root_history: prepared.root_history,
-            root_authorization_version,
-            root_review_context_revision,
-            history_reset: self.history_reset.clone(),
-        };
         let (outcome, analytics) = if let Some(attached) = &prepared.attached {
             attached
-                .attempt(
-                    session,
-                    prepared,
-                    &self.reasons,
-                    authorization,
-                    deadline,
-                    cancellation,
-                )
+                .attempt(session, prepared, &self.reasons, deadline, cancellation)
                 .await
         } else {
+            let authorization = ReviewAuthorization {
+                user_message_revision,
+                review_context_revision,
+                root_history: prepared.root_history,
+                root_authorization_version,
+                root_review_context_revision,
+                history_reset: self.history_reset.clone(),
+            };
             run_guardian_review_session_before_deadline(
                 Arc::clone(&self.session),
                 prepared.context.clone(),

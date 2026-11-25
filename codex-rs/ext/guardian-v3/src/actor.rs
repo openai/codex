@@ -265,7 +265,7 @@ impl ActorReviewer {
 }
 
 /// The first attempt uses the request-time position. Every later attempt flushes and
-/// captures again after core has sampled its new authorization revision.
+/// captures again before draining newly delivered evidence.
 struct BoundActorReview {
     actor: Arc<ActorReviewer>,
     initial: Mutex<Option<oneshot::Receiver<RequestCutoff>>>,

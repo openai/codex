@@ -146,7 +146,7 @@ pub enum ReviewPreparationError {
 }
 
 /// Reserve the actor's reviewer after routing and delivery have covered this attempt.
-/// A retry must cover authorization changes since the previous attempt.
+/// Each attempt admits evidence available to that reviewer.
 pub trait ReviewerPreparation: Send + Sync {
     fn prepare<'a>(
         &'a self,
@@ -158,7 +158,7 @@ pub trait ReviewerPreparation: Send + Sync {
     >;
 }
 
-/// Holds the model session until the host finishes validating the original authority.
+/// Holds the model session until the host accepts or discards its verdict.
 /// Dropping an interrupted reservation discards its partially admitted conversation.
 pub trait PreparedAssessment: Send + Sync {
     fn runtime(&self) -> &GuardianReviewSession;

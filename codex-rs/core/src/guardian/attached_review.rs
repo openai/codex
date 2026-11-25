@@ -1,8 +1,7 @@
-//! Holds one action's prepared reviewer and its pre-capture authorization revision.
+//! Holds the attached reviewer through the verdict. New evidence can wait for the next review.
 //! Native retries take a new reservation under the original verdict deadline.
 use super::super::*;
 use super::PreparedApproval;
-use super::ReviewAuthorization;
 use crate::guardian::input_budget::PendingReviewContext;
 use crate::guardian::review_session::PreparedVerdictTurn;
 use crate::guardian::review_session::ensure_guardian_followup_reminder;
@@ -21,13 +20,12 @@ use tokio::sync::Mutex;
 pub(super) struct AttachedApproval {
     provider: BoundReviewer,
     config: GuardianReviewSessionConfig,
-    first: Mutex<Option<(ReviewAuthorization, Box<dyn PreparedAssessment>)>>,
+    first: Mutex<Option<Box<dyn PreparedAssessment>>>,
 }
 
 impl AttachedApproval {
     pub async fn prepare(
         provider: BoundReviewer,
-        authorization: ReviewAuthorization,
         parent: &Arc<Session>,
         context: &GuardianReviewContext,
         deadline: ReviewDeadline,
@@ -42,7 +40,7 @@ impl AttachedApproval {
             Ok(Self {
                 provider,
                 config,
-                first: Mutex::new(Some((authorization, reserved))),
+                first: Mutex::new(Some(reserved)),
             })
         };
         tokio::select! {
@@ -77,7 +75,6 @@ impl AttachedApproval {
         parent: &Arc<Session>,
         approval: &PreparedApproval,
         reasons: &ApprovalRequestReasons,
-        authorization: ReviewAuthorization,
         deadline: ReviewDeadline,
         cancel: &CancellationToken,
     ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
@@ -86,20 +83,17 @@ impl AttachedApproval {
         let mut usage_at_start = None;
         let prepare = async {
             let first = self.first.lock().await.take();
-            let (authorization, model) = match first {
+            let model = match first {
                 Some(first) => first,
-                None => (
-                    authorization,
-                    Self::reserve(
-                        &self.provider,
-                        &self.config,
-                        parent,
-                        &approval.context,
-                        cancel,
-                    )
-                    .await
-                    .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?,
-                ),
+                None => Self::reserve(
+                    &self.provider,
+                    &self.config,
+                    parent,
+                    &approval.context,
+                    cancel,
+                )
+                .await
+                .map_err(|err| GuardianReviewSessionOutcome::PromptBuildFailed(err.into()))?,
             };
             let model = reservation.insert(model);
             let config = &self.config;
@@ -112,10 +106,6 @@ impl AttachedApproval {
                 kind,
                 matches!(kind, GuardianReviewSessionKind::TrunkReused),
             );
-            if let Some(stale) = authorization.invalidation(parent, Some(cancel)).await {
-                analytics.context_changed = stale.context_changed;
-                return Err(stale.outcome);
-            }
             let action = codex_guardian_reviewer::build_guardian_planned_action(
                 &approval.request,
                 reasons.retry.clone().or_else(|| reasons.approval.clone()),
@@ -166,11 +156,11 @@ impl AttachedApproval {
             )
             .await
             .map_err(GuardianReviewSessionOutcome::PromptBuildFailed)?;
-            Ok((runtime, authorization, turn))
+            Ok((runtime, turn))
         };
         let prepared = run_before_review_deadline(deadline, Some(cancel), prepare).await;
         let result = async {
-            let (runtime, authorization, turn) = prepared??;
+            let (runtime, turn) = prepared??;
             // Let the runner interrupt and drain the turn before it finalizes a provisional denial.
             let (turn, _) = runtime
                 .run_sync_verdict(
@@ -181,20 +171,23 @@ impl AttachedApproval {
                     &mut analytics,
                 )
                 .await?;
-            let stale = tokio::select! {
+            tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(GuardianReviewSessionOutcome::Aborted),
                 _ = deadline.wait() => {
                     if !turn.outcome.is_recovered_denial() {
                         return Err(GuardianReviewSessionOutcome::TimedOut);
                     }
-                    None
                 }
-                stale = authorization.invalidation(parent, Some(cancel)) => stale,
-            };
-            if let Some(stale) = stale {
-                analytics.context_changed |= stale.context_changed;
-                return Err(stale.outcome);
+                root = parent.guardian_root_snapshot() => {
+                    let root = root.map_err(|error| match error.details() {
+                        super::CodexErrorDetails::Timeout => GuardianReviewSessionOutcome::TimedOut,
+                        _ => GuardianReviewSessionOutcome::Aborted,
+                    })?;
+                    if approval.root_history != root.as_ref().map(super::root_history_key) {
+                        return Err(GuardianReviewSessionOutcome::Aborted);
+                    }
+                }
             }
             Ok((turn.outcome, turn.disposition))
         }

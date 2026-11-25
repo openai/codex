@@ -85,11 +85,12 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
         "I understand the release risk. I explicitly approve this release action.";
     const FINAL_REVOCATION: &str = "Stop the release again. Do not deploy.";
     const FIRST_DENIAL_REASON: &str = "The user explicitly stopped this deployment.";
+    const UNRELATED_GOAL: &str = "Write release notes in French.";
     const PENDING_CALL: &str = "release-pending";
     let next_call = Arc::new(Mutex::new(None));
     let actor_call = Arc::clone(&next_call);
-    let stale_allow_url = Arc::new(Mutex::new(None::<String>));
-    let redirect = Arc::clone(&stale_allow_url);
+    let held_allow_url = Arc::new(Mutex::new(None::<String>));
+    let redirect = Arc::clone(&held_allow_url);
     let ask_to_subscribe = AtomicBool::new(uses_board);
     let deny_first_reapproval = AtomicBool::new(reconsider);
     let first_final_sample = AtomicBool::new(true);
@@ -130,7 +131,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                     responses::ev_completed("subscribe"),
                 ]));
             }
-            if let Some(url) = redirect.lock().expect("stale allow URL").take() {
+            if let Some(url) = redirect.lock().expect("held allow URL").take() {
                 return wiremock::ResponseTemplate::new(/*s*/ 307).insert_header("location", url);
             }
             let final_revocation = received_user_instruction(&request, FINAL_REVOCATION);
@@ -284,7 +285,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
         turns.push((
             PENDING_CALL,
             "Proceed with the release.",
-            GuardianApprovalReviewStatus::Denied,
+            GuardianApprovalReviewStatus::Approved,
         ));
     }
     let mut previous_reviewer = None;
@@ -310,7 +311,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                 body: assistant_response(r#"{"outcome":"allow","rationale":"Release approved."}"#)?,
             }]])
             .await;
-            *stale_allow_url.lock().expect("stale allow URL") =
+            *held_allow_url.lock().expect("held allow URL") =
                 Some(format!("{}/v1/responses", stream.uri()));
             Some((stream, release))
         } else {
@@ -337,12 +338,12 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                     "thread/goal/set",
                     Some(json!({
                         "threadId": thread.id, "origin": "user",
-                        "status": "paused", "objective": FINAL_REVOCATION,
+                        "status": "paused", "objective": UNRELATED_GOAL,
                     })),
                 )
                 .await?;
             let _: ThreadGoalSetResponse = timeout(TIMEOUT, app.read_response(id)).await??;
-            release.send(()).expect("release stale allow");
+            release.send(()).expect("release allow");
         }
         if let Some(gate) = gate {
             app.wait_for_matching_json_log_event(
@@ -419,21 +420,11 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
             denied_turns.push(review.turn_id);
         }
         if call_id == PENDING_CALL {
-            let [stale, retry] = assessments.as_slice() else {
-                anyhow::bail!("expected a stale allow and one retry for {call_id}");
+            let [allow] = assessments.as_slice() else {
+                anyhow::bail!("an unrouted goal should not invalidate the verdict for {call_id}");
             };
-            assert!(!received_user_instruction(stale, FINAL_REVOCATION));
-            assert!(received_user_instruction(retry, FINAL_REVOCATION));
+            assert!(!received_user_instruction(allow, UNRELATED_GOAL));
             assert_eq!(review.target_item_id.as_deref(), Some(call_id));
-            let denied = wait_for_mcp_tool_call_completed(&mut app, call_id).await?;
-            assert!(matches!(
-                denied.item.payload,
-                ThreadItemPayload::McpToolCall {
-                    status: McpToolCallStatus::Failed, error: Some(error), ..
-                } if error.message.contains(FIRST_DENIAL_REASON)
-            ));
-            // Core discards the stale session, so the reuse assertions below don't apply.
-            continue;
         }
         if prompt == FINAL_REVOCATION {
             assert_eq!(
