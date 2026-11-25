@@ -36,7 +36,6 @@ chrono = { version = "0.4.42", default-features = false, features = [
 codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
-codex-otel = { workspace = true }
 dunce = "1.0"
 glob = { workspace = true }
 ignore = { workspace = true }
@@ -63,6 +62,9 @@ version = "0.8"
 
 [dependencies.dirs-next]
 version = "2.0"
+
+[target.'cfg(windows)'.dependencies]
+codex-otel = { workspace = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 features = [
