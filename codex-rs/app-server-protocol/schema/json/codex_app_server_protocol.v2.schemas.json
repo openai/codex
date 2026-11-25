@@ -394,6 +394,21 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
+    "AccountVoiceOption": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "voice": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "voice"
+      ],
+      "type": "object"
+    },
     "ActivePermissionProfile": {
       "properties": {
         "extends": {

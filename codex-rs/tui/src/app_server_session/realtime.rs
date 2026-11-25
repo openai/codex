@@ -52,7 +52,6 @@ impl AppServerSession {
                         call_id,
                     }),
                     version: Some(RealtimeConversationVersion::V3),
-                    voice: None,
                 },
             })
             .await

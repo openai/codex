@@ -153,7 +153,7 @@ impl App {
         let Some(key) = self.route_key_chord_event(tui, key) else {
             return;
         };
-        if self.handle_voice_toggle_key(tui, key) {
+        if self.handle_voice_toggle_key(tui, key).await {
             return;
         }
         if self

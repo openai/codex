@@ -1,7 +1,6 @@
 use super::CONTEXT_APPEND_MAX_BYTES;
 use super::context_append_chunks;
 use super::session_json;
-use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use pretty_assertions::assert_eq;
@@ -26,7 +25,6 @@ fn session_json_omits_initial_items_when_empty() {
         Some("gpt-live".to_string()),
         "instructions".to_string(),
         Vec::new(),
-        RealtimeVoice::Marin,
         /*delegation_ack_filler*/ None,
     );
 
@@ -35,11 +33,6 @@ fn session_json_omits_initial_items_when_empty() {
         json!({
             "model": "gpt-live",
             "instructions": "instructions",
-            "audio": {
-                "output": {
-                    "voice": "marin",
-                },
-            },
             "delegation": {
                 "type": "client",
             },
@@ -66,7 +59,6 @@ fn session_json_encodes_role_bearing_initial_items() {
                 role: ConversationTextRole::Assistant,
             },
         ],
-        RealtimeVoice::Marin,
         /*delegation_ack_filler*/ None,
     );
 

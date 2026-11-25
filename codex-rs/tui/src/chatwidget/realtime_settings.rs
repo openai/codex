@@ -3,9 +3,8 @@
 use super::*;
 use crate::bottom_pane::MultiSelectItem;
 use crate::bottom_pane::MultiSelectPicker;
+use codex_app_server_protocol::AccountVoiceSettingsReadResponse;
 use codex_config::config_toml::MicrophoneChannels;
-use codex_protocol::protocol::RealtimeVoice;
-use codex_protocol::protocol::RealtimeVoicesList;
 use codex_realtime_webrtc::AudioDevice;
 use codex_realtime_webrtc::AudioDeviceKind;
 
@@ -53,19 +52,17 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_realtime_voices(
-        &mut self,
-        current: Option<RealtimeVoice>,
-        voices: RealtimeVoicesList,
-    ) {
-        let mut items: Vec<SelectionItem> = voices
-            .v3
+    pub(crate) fn open_realtime_voices(&mut self, settings: AccountVoiceSettingsReadResponse) {
+        let mut items: Vec<SelectionItem> = settings
+            .voices
             .into_iter()
             .map(|voice| SelectionItem {
-                name: voice.wire_name().to_string(),
-                is_current: Some(voice) == current,
+                name: voice.name.clone(),
+                is_current: voice.voice == settings.selected,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::PersistRealtimeVoiceSelection { voice });
+                    tx.send(AppEvent::PersistRealtimeVoiceSelection {
+                        voice: voice.clone(),
+                    });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -74,7 +71,7 @@ impl ChatWidget {
         items.push(back_item(|| AppEvent::OpenRealtimeSettings));
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select voice".to_string()),
-            subtitle: Some("Applies to your next voice conversation.".to_string()),
+            subtitle: Some("Applies to your next voice conversation.".into()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenRealtimeSettings))),
@@ -266,21 +263,6 @@ impl ChatWidget {
         })
         .build();
         self.bottom_pane.show_view(Box::new(picker));
-    }
-
-    pub(crate) fn set_realtime_voice(&mut self, voice: Option<RealtimeVoice>) {
-        self.config.realtime.voice = voice;
-    }
-
-    pub(crate) fn on_realtime_voice_saved(&mut self, voice: RealtimeVoice) {
-        self.set_realtime_voice(Some(voice));
-        self.add_info_message(
-            format!(
-                "Voice set to {}. Applies to your next voice conversation.",
-                voice.wire_name()
-            ),
-            /*hint*/ None,
-        );
     }
 }
 

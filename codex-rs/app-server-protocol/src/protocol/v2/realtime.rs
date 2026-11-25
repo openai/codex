@@ -5,7 +5,6 @@ use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::realtime::BemItemPresentation as CoreBemItemPresentation;
 use codex_protocol::realtime::RealtimeHandoffMode as CoreRealtimeHandoffMode;
@@ -351,8 +350,7 @@ pub struct ThreadRealtimeStartParams {
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
-    /// Selects text or audio output for the realtime session. Transport and voice stay
-    /// independent so clients can choose how they connect separately from what the model emits.
+    /// Selects text or audio output for the realtime session.
     pub output_modality: RealtimeOutputModality,
     /// Set to false to start without Codex's startup context. Omitted or null includes it.
     #[ts(optional = nullable)]
@@ -387,8 +385,6 @@ pub struct ThreadRealtimeStartParams {
     /// Overrides the configured realtime protocol version for this session only.
     #[ts(optional = nullable)]
     pub version: Option<RealtimeConversationVersion>,
-    #[ts(optional = nullable)]
-    pub voice: Option<RealtimeVoice>,
 }
 
 /// EXPERIMENTAL - role-bearing text item included when a realtime V3 session starts.

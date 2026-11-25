@@ -101,7 +101,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_path_uri::LegacyAppPathString;
@@ -14098,30 +14097,21 @@ experimental_realtime_ws_model = "realtime-test-model"
 }
 
 #[tokio::test]
-async fn realtime_config_partial_table_uses_realtime_defaults() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[realtime]
-voice = "marin"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
+async fn realtime_config_with_legacy_voice_uses_realtime_defaults() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[realtime]\nvoice = \"marin\"",
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await?;
 
-    assert_eq!(
-        config.realtime,
-        RealtimeConfig {
-            voice: Some(RealtimeVoice::Marin),
-            ..RealtimeConfig::default()
-        }
-    );
+    assert_eq!(config.realtime, RealtimeConfig::default());
     Ok(())
 }
 
@@ -14133,7 +14123,6 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 version = "v2"
 type = "transcription"
 transport = "webrtc"
-voice = "cedar"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -14144,7 +14133,7 @@ voice = "cedar"
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
-            voice: Some(RealtimeVoice::Cedar),
+            ..RealtimeToml::default()
         })
     );
 
@@ -14162,7 +14151,6 @@ voice = "cedar"
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
-            voice: Some(RealtimeVoice::Cedar),
         }
     );
     Ok(())

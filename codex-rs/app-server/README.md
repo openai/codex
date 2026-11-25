@@ -692,6 +692,8 @@ return `null`. The ID belongs to the same account snapshot as the rest of the
 response. Clients should also accept an absent field from older app servers.
 PAT sessions continue to return no bearer token from `getAuthStatus`.
 
+The experimental `account/voiceSettings/read` method returns the selected ChatGPT voice and the available voice IDs and display names. Pass an ID as `{ "voice": "juniper" }` to `account/voiceSettings/write` to save it. Both methods use the connected app-server's ChatGPT account, including when the client connects to a remote host.
+
 # Selected workspace routing
 
 `account/securitySetup/read` returns an optional backend-owned security reminder for the saved ChatGPT login. A returned notice includes its account and user IDs; clients must discard it after an account change and validate its copy and action URL before rendering. Ineligible, unavailable, and timed-out reads return `notice: null`. Older app-servers may not support this optional read.

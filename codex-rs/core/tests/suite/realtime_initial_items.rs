@@ -230,6 +230,5 @@ fn start_params(version: RealtimeConversationVersion) -> ConversationStartParams
         voice_session_id: None,
         transport: None,
         version: Some(version),
-        voice: None,
     }
 }

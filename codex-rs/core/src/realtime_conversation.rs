@@ -63,8 +63,6 @@ use codex_protocol::protocol::RealtimeExistingCallAuth;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
-use codex_protocol::protocol::RealtimeVoice;
-use codex_protocol::protocol::RealtimeVoicesList;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -1739,12 +1737,6 @@ struct PreparedRealtimeConversationStart {
     auth_context: codex_model_provider::ProviderAuthContext,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum ConfiguredRealtimeVoice {
-    Use,
-    Ignore,
-}
-
 async fn prepare_realtime_start(
     sess: &Arc<Session>,
     params: ConversationStartParams,
@@ -1833,7 +1825,6 @@ async fn prepare_realtime_start(
                 || params.prompt.is_some()
                 || !params.initial_items.is_empty()
                 || params.model.is_some()
-                || params.voice.is_some()
                 || params.delegation_ack_filler.is_some()
             {
                 return Err(CodexErr::InvalidRequest(
@@ -1844,15 +1835,7 @@ async fn prepare_realtime_start(
         }
         ConversationStartTransport::Websocket => {}
     }
-    let configured_voice = match (&transport, params.version) {
-        (ConversationStartTransport::ExistingCall { .. }, _)
-        | (ConversationStartTransport::Webrtc { .. }, None) => ConfiguredRealtimeVoice::Ignore,
-        (ConversationStartTransport::Webrtc { .. } | ConversationStartTransport::Websocket, _) => {
-            ConfiguredRealtimeVoice::Use
-        }
-    };
-    let session_config =
-        build_realtime_session_config(sess, &params, version, configured_voice).await?;
+    let session_config = build_realtime_session_config(sess, &params, version).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
     let event_parser = session_config.event_parser;
     let originator = sess.originator().await;
@@ -1971,7 +1954,6 @@ pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     params: &ConversationStartParams,
     version: RealtimeWsVersion,
-    configured_voice: ConfiguredRealtimeVoice,
 ) -> CodexResult<RealtimeSessionConfig> {
     for (name, instructions) in [
         (
@@ -2066,14 +2048,6 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
-    let config_voice = match configured_voice {
-        ConfiguredRealtimeVoice::Use => config.realtime.voice,
-        ConfiguredRealtimeVoice::Ignore => None,
-    };
-    let voice = params.voice.unwrap_or(config_voice);
-    if let Some(voice) = voice {
-        validate_realtime_voice(version, voice)?;
-    }
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         initial_items: params.initial_items.clone(),
@@ -2092,7 +2066,6 @@ pub(crate) async fn build_realtime_session_config(
         event_parser,
         session_mode,
         output_modality: params.output_modality,
-        voice,
     })
 }
 
@@ -2114,33 +2087,6 @@ fn realtime_backend_item(text: String, prefix: Option<&str>) -> String {
         None => text,
     };
     truncate_realtime_text_to_token_budget(&text, REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET)
-}
-
-fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
-    let voices = RealtimeVoicesList::builtin();
-    let allowed = match version {
-        RealtimeWsVersion::V1 => &voices.v1,
-        RealtimeWsVersion::V2 => &voices.v2,
-        RealtimeWsVersion::V3 => &voices.v3,
-    };
-    if allowed.contains(&voice) {
-        return Ok(());
-    }
-
-    let version = match version {
-        RealtimeWsVersion::V1 => "v1",
-        RealtimeWsVersion::V2 => "v2",
-        RealtimeWsVersion::V3 => "v3",
-    };
-    let allowed = allowed
-        .iter()
-        .map(|voice| voice.wire_name())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(CodexErr::InvalidRequest(format!(
-        "realtime voice `{}` is not supported for {version}; supported voices: {allowed}",
-        voice.wire_name()
-    )))
 }
 
 async fn handle_start_inner(

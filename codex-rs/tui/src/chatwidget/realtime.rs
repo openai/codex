@@ -477,13 +477,6 @@ impl ChatWidget {
 
     pub(crate) fn accept_realtime_call(&mut self, answer: crate::app_command::RealtimeSdp) {
         self.realtime_conversation.startup_abort = None;
-        self.on_realtime_conversation_sdp(answer.into());
-    }
-
-    pub(crate) fn on_realtime_conversation_sdp(&mut self, answer_sdp: String) {
-        if self.realtime_conversation.phase != RealtimeConversationPhase::Starting {
-            return;
-        }
         let Some(handle) = self.realtime_conversation.handle.clone() else {
             return;
         };
@@ -493,7 +486,7 @@ impl ChatWidget {
         let attempt_id = self.realtime_conversation.attempt_id;
         let app_event_tx = self.app_event_tx.clone();
         std::thread::spawn(move || {
-            let result = handle.apply_answer_sdp(answer_sdp);
+            let result = handle.apply_answer_sdp(answer.into());
             app_event_tx.send(AppEvent::RealtimeWebrtcConnected {
                 thread_id,
                 attempt_id,

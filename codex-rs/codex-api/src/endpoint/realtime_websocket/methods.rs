@@ -17,7 +17,6 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
-use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -438,7 +437,6 @@ impl RealtimeWebsocketWriter {
         initial_items: Vec<ConversationTextParams>,
         session_mode: RealtimeSessionMode,
         output_modality: RealtimeOutputModality,
-        voice: RealtimeVoice,
         delegation_ack_filler: Option<bool>,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
@@ -448,7 +446,6 @@ impl RealtimeWebsocketWriter {
             initial_items,
             session_mode,
             output_modality,
-            voice,
             delegation_ack_filler,
         );
         self.send_json(&message).await
@@ -1154,7 +1151,6 @@ impl RealtimeWebsocketClient {
             RealtimeSessionInitialization::ExistingCall => false,
         };
         if initialize_session {
-            let voice = config.voice_or_default();
             debug!(
                 session_id = config.session_id.as_deref().unwrap_or("<none>"),
                 "realtime websocket sending session.update"
@@ -1166,7 +1162,6 @@ impl RealtimeWebsocketClient {
                     config.initial_items,
                     config.session_mode,
                     config.output_modality,
-                    voice,
                     config.delegation_ack_filler,
                 )
                 .await?;
@@ -1383,7 +1378,6 @@ mod tests {
     use codex_protocol::protocol::RealtimeResponseDone;
     use codex_protocol::protocol::RealtimeTranscriptDelta;
     use codex_protocol::protocol::RealtimeTranscriptDone;
-    use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
@@ -2431,7 +2425,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("breeze".to_string())
+                Value::String("cove".to_string())
             );
 
             ws.send(Message::Text(
@@ -2591,7 +2585,6 @@ mod tests {
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
                     output_modality: RealtimeOutputModality::Audio,
-                    voice: Some(RealtimeVoice::Breeze),
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -2784,7 +2777,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("cedar".to_string())
+                Value::String("marin".to_string())
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["type"],
@@ -2917,7 +2910,6 @@ mod tests {
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
                     output_modality: RealtimeOutputModality::Audio,
-                    voice: Some(RealtimeVoice::Cedar),
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -3044,7 +3036,6 @@ mod tests {
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
                     output_modality: RealtimeOutputModality::Audio,
-                    voice: Some(RealtimeVoice::Marin),
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -3150,7 +3141,6 @@ mod tests {
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
                     output_modality: RealtimeOutputModality::Audio,
-                    voice: Some(RealtimeVoice::Cove),
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -3242,7 +3232,6 @@ mod tests {
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
                     output_modality: RealtimeOutputModality::Audio,
-                    voice: Some(RealtimeVoice::Cove),
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

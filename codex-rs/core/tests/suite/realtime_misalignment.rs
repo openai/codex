@@ -110,7 +110,6 @@ async fn misalignment_retires_late_voice_handoff_before_it_starts_a_turn() -> Re
             voice_session_id: None,
             transport: None,
             version: None,
-            voice: None,
         }))
         .await?;
 

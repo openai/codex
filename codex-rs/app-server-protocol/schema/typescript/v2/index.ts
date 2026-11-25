@@ -13,6 +13,7 @@ export type { AccountTokenUsageDailyBucket } from "./AccountTokenUsageDailyBucke
 export type { AccountTokenUsageSummary } from "./AccountTokenUsageSummary";
 export type { AccountUpdateReason } from "./AccountUpdateReason";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
+export type { AccountVoiceOption } from "./AccountVoiceOption";
 export type { ActivePermissionProfile } from "./ActivePermissionProfile";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
 export type { AddCreditsNudgeEmailStatus } from "./AddCreditsNudgeEmailStatus";

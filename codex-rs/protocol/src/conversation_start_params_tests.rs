@@ -32,7 +32,6 @@ fn realtime_start_debug_redacts_text_and_transport() {
         voice_session_id: Some(secret.to_owned()),
         transport: None,
         version: Some(RealtimeConversationVersion::V3),
-        voice: None,
     };
     for transport in [
         ConversationStartTransport::ExistingCall {

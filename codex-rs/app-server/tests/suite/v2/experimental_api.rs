@@ -154,7 +154,6 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             voice_session_id: None,
             transport: None,
             version: None,
-            voice: None,
         })
         .await?;
     let error = timeout(
@@ -302,7 +301,6 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
                 sdp: "v=offer\r\n".to_string(),
             }),
             version: None,
-            voice: None,
         })
         .await?;
     let error = timeout(

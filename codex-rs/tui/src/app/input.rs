@@ -405,13 +405,18 @@ impl App {
             && self.keymap.chat.toggle_voice.is_pressed(key)
     }
 
-    pub(super) fn handle_voice_toggle_key(&mut self, tui: &mut tui::Tui, key: KeyEvent) -> bool {
+    pub(super) async fn handle_voice_toggle_key(
+        &mut self,
+        tui: &mut tui::Tui,
+        key: KeyEvent,
+    ) -> bool {
         if !self.voice_toggle_pressed(key) {
             return false;
         }
         self.cancel_transcript_browsing(tui);
         if !self.chat_widget.handle_startup_submission_key(key) {
-            self.control_voice(crate::app_event::VoiceControl::Toggle);
+            self.control_voice(crate::app_event::VoiceControl::Toggle)
+                .await;
         }
         true
     }

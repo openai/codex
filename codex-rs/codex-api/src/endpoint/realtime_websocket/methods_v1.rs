@@ -48,10 +48,7 @@ pub(super) fn conversation_handoff_append_message(
     }
 }
 
-pub(super) fn session_update_session(
-    instructions: String,
-    voice: RealtimeVoice,
-) -> SessionUpdateSession {
+pub(super) fn session_update_session(instructions: String) -> SessionUpdateSession {
     SessionUpdateSession {
         id: None,
         r#type: SessionType::Quicksilver,
@@ -70,7 +67,7 @@ pub(super) fn session_update_session(
             },
             output: Some(SessionAudioOutput {
                 format: None,
-                voice,
+                voice: RealtimeVoice::Cove,
             }),
         },
         tools: None,

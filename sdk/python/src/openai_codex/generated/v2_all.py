@@ -100,6 +100,14 @@ class AccountUpdateReason(Enum):
     unknown = "unknown"
 
 
+class AccountVoiceOption(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    name: str
+    voice: str
+
+
 class ActivePermissionProfile(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

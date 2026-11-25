@@ -76,7 +76,6 @@ pub(super) fn session_update_session(
     instructions: String,
     session_mode: RealtimeSessionMode,
     output_modality: RealtimeOutputModality,
-    voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     match session_mode {
         RealtimeSessionMode::Conversational => SessionUpdateSession {
@@ -109,7 +108,7 @@ pub(super) fn session_update_session(
                         r#type: AudioFormatType::AudioPcm,
                         rate: REALTIME_AUDIO_SAMPLE_RATE,
                     }),
-                    voice,
+                    voice: RealtimeVoice::Marin,
                 }),
             },
             tools: Some(vec![

@@ -1048,7 +1048,6 @@ fn params(session: &str, url: &str) -> ConversationStartParams {
             sideband_base_url: Some(url.to_owned()),
         }),
         version: Some(RealtimeConversationVersion::V3),
-        voice: None,
     }
 }
 

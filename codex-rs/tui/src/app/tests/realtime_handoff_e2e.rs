@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -50,7 +51,16 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     ])
     .await;
     Mock::given(method("POST"))
-        .and(path("/v1/live"))
+        .and(path("/backend-api/codex/realtime/calls"))
+        .and(header("authorization", "Bearer local-voice-token"))
+        .and(|request: &wiremock::Request| {
+            request.body_json::<serde_json::Value>().is_ok_and(|body| {
+                let session = &body["session"];
+                session["delegation"]["type"] == "client"
+                    && session.get("model").is_none()
+                    && session.pointer("/audio/output/voice").is_none()
+            })
+        })
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("Location", "/v1/live/rtc_tui_handoff")
@@ -91,11 +101,12 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     let codex_home = tempfile::tempdir()?;
     MockResponsesConfig::new(&model_server.uri())
         .with_root_config(&format!(
-            "experimental_realtime_ws_base_url = {:?}\nexperimental_realtime_webrtc_call_base_url = {:?}",
+            "experimental_realtime_ws_base_url = {:?}",
             realtime_server.uri(),
-            format!("{}/v1", model_server.uri()),
         ))
-        .with_extra_config("[realtime]\nversion = \"v3\"\ntype = \"conversational\"")
+        .with_extra_config(
+            "[realtime]\nversion = \"v3\"\ntype = \"conversational\"\nvoice = \"cedar\"",
+        )
         .write(codex_home.path())?;
     codex_login::login_with_api_key(
         codex_home.path(),
@@ -107,37 +118,43 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
     app.config.model = Some("mock-model".to_string());
-    app.config.model_provider_id = "mock_provider".to_string();
-    app.config.model_provider = ModelProviderInfo {
-        name: "Mock provider for test".to_string(),
-        base_url: Some(format!("{}/v1", model_server.uri())),
-        request_max_retries: Some(0),
-        stream_max_retries: Some(0),
-        ..ModelProviderInfo::default()
-    };
+    app.config.model_provider_id = codex_model_provider_info::OPENAI_PROVIDER_ID.to_string();
+    app.config.model_provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", model_server.uri())));
     app.config.experimental_realtime_ws_base_url = Some(realtime_server.uri().to_string());
-    app.config.experimental_realtime_webrtc_call_base_url =
-        Some(format!("{}/v1", model_server.uri()));
 
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let started = app_server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while app_events.try_recv().is_ok() {}
+    for event in [
+        AppEvent::OpenRealtimeSettings,
+        AppEvent::VoiceControl {
+            thread_id: Some(thread_id),
+            control: crate::app_event::VoiceControl::Toggle,
+        },
+    ] {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+        assert_eq!(
+            next_history_message(&mut app_events),
+            "■ Sign in with ChatGPT to use voice chat."
+        );
+    }
+    assert!(!app.chat_widget.has_active_view());
+    assert!(!app.chat_widget.realtime_conversation_is_running());
+
+    super::realtime_requests::use_local_voice_account(&mut app.config, &model_server.uri());
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, thread_id);
     while ops.try_recv().is_ok() {}
-    let mut tui = crate::tui::test_support::make_test_tui()?;
     let thread = app_server
         .thread_read(thread_id, /*include_turns*/ false)
         .await?;
     let call = app
         .realtime_call_client
-        .create(
-            &app.config,
-            &thread,
-            "v=offer\r\n".to_string(),
-            /*voice*/ None,
-        )
+        .create(&app.config, &thread, "v=offer\r\n".to_string())
         .await?;
     assert_eq!(String::from(call.answer_sdp), "v=answer\r\n");
     app_server

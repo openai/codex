@@ -346,10 +346,10 @@ impl App {
             AppEvent::ChooseNewSessionCheckout { name }
             | AppEvent::NewSession { name }
             | AppEvent::NewSessionInCurrentWorktree { name } => {
-                self.start_fresh_session(
+                crate::boxed_future!(self.start_fresh_session(
                     tui, app_server, FreshSessionStart::NewConversation,
                     /*initial_user_message*/ None, name,
-                )
+                ))
                 .await;
                 if self.chat_widget.has_misalignment_policy_violation() {
                     self.chat_widget.show_misalignment_policy_precaution();
@@ -373,13 +373,13 @@ impl App {
                         "Read {name} and let’s continue where we left off.\n\nSaved conversation: {}",
                         path.display(),
                     );
-                    self.start_fresh_session(
+                    crate::boxed_future!(self.start_fresh_session(
                         tui,
                         app_server,
                         FreshSessionStart::PreserveCurrentView(None),
                         /*initial_user_message*/ None,
                         /*new_thread_name*/ None,
-                    )
+                    ))
                     .await;
                     if self
                         .chat_widget
@@ -677,13 +677,13 @@ impl App {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session(
+                crate::boxed_future!(self.start_fresh_session(
                     tui,
                     app_server,
                     FreshSessionStart::PreserveCurrentView(Some(ThreadStartSource::Clear)),
                     /*initial_user_message*/ None,
                     name,
-                )
+                ))
                 .await;
             }
             AppEvent::RawOutputModeChanged { enabled } => {
@@ -2653,7 +2653,7 @@ impl App {
             }
             AppEvent::VoiceControl { thread_id, control } => {
                 if thread_id == self.chat_widget.thread_id() || self.voice_owner_thread_id().is_some() {
-                    self.control_voice(control);
+                    crate::boxed_future!(self.control_voice(control)).await;
                 }
             }
             AppEvent::RealtimeSessionLockStopped { thread_id } => {
@@ -3208,9 +3208,35 @@ impl App {
                 }
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
-            AppEvent::OpenRealtimeSettings => self.chat_widget.open_realtime_settings(),
+            AppEvent::OpenRealtimeSettings => {
+                if crate::boxed_future!(self.ensure_voice_account()).await {
+                    self.chat_widget.open_realtime_settings();
+                }
+            }
             AppEvent::OpenRealtimeSoundDevices => self.chat_widget.open_realtime_sound_devices(),
-            AppEvent::OpenRealtimeVoices => self.open_realtime_voices(app_server).await,
+            AppEvent::OpenRealtimeVoices | AppEvent::PersistRealtimeVoiceSelection { .. }
+                if self.voice_settings_pending =>
+            {
+                self.chat_widget.add_info_message(
+                    "Voice settings request in progress.".to_owned(),
+                    /*hint*/ None,
+                );
+            }
+            AppEvent::OpenRealtimeVoices => self.load_realtime_voices(app_server),
+            AppEvent::RealtimeVoicesLoaded { origin, result } => {
+                self.voice_settings_pending = false;
+                if origin == self.active_thread_id {
+                    match result {
+                        Ok(settings) => {
+                            self.chat_widget.open_realtime_voices(settings);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "failed to read voice settings");
+                            self.chat_widget.add_error_message("Failed to read voice settings".to_owned());
+                        }
+                    }
+                }
+            }
             AppEvent::OpenRealtimeDevicePicker { kind } => self.list_realtime_devices(kind),
             AppEvent::OpenRealtimeInputChannels { device } => self.chat_widget.open_realtime_input_channels(device),
             AppEvent::RealtimeDevicesListed { origin, kind, result } => {
@@ -3228,7 +3254,22 @@ impl App {
                 self.persist_realtime_input_channel(channel).await;
             }
             AppEvent::PersistRealtimeVoiceSelection { voice } => {
-                self.persist_realtime_voice(app_server, voice).await;
+                self.persist_realtime_voice(app_server, voice);
+            }
+            AppEvent::RealtimeVoiceSaved { origin, result } => {
+                self.voice_settings_pending = false;
+                if origin == self.active_thread_id {
+                    match result {
+                        Ok(name) => self.chat_widget.add_info_message(
+                            format!("Voice set to {name}."),
+                            /*hint*/ None,
+                        ),
+                        Err(error) => {
+                            tracing::warn!(%error, "failed to save voice");
+                            self.chat_widget.add_error_message("Failed to save voice".to_owned());
+                        }
+                    }
+                }
             }
             AppEvent::ToggleCloudServiceTier { thread_id, tier } => {
                 if self.active_thread_id == Some(thread_id)

@@ -75,7 +75,6 @@ fn observer_params(sideband_base_url: Option<String>) -> ConversationStartParams
             sideband_base_url,
         }),
         version: Some(RealtimeConversationVersion::V3),
-        voice: None,
     }
 }
 
@@ -455,7 +454,6 @@ async fn existing_call_uses_selected_endpoint_and_runtime_auth(
                 },
             }),
             version: Some(RealtimeConversationVersion::V3),
-            voice: None,
         }))
         .await?;
 

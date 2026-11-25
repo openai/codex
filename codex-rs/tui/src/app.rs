@@ -568,6 +568,7 @@ pub(crate) struct App {
     statusline_metrics: crate::statusline_metrics::StatuslineMetrics,
     provider_writes: HashMap<crate::backend_id::BackendId, crate::model_catalog::ProviderWrite>,
     feature_write_lock: Arc<tokio::sync::Mutex<()>>,
+    voice_settings_pending: bool,
     config_notification_test_generation: u64,
     config_notification_test_pending: Option<u64>,
     model_catalog: Arc<ModelCatalog>,
@@ -1336,7 +1337,7 @@ impl App {
             }
         }
         if let TuiEvent::Key(key_event) = &event
-            && self.handle_voice_toggle_key(tui, *key_event)
+            && self.handle_voice_toggle_key(tui, *key_event).await
         {
             return Ok(AppRunControl::Continue);
         }
@@ -1348,7 +1349,8 @@ impl App {
             && self.keymap.chat.toggle_voice_mute.is_pressed(*key_event)
         {
             if !self.chat_widget.handle_startup_submission_key(*key_event) {
-                self.control_voice(crate::app_event::VoiceControl::Mute);
+                self.control_voice(crate::app_event::VoiceControl::Mute)
+                    .await;
             }
             return Ok(AppRunControl::Continue);
         }

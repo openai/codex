@@ -155,7 +155,6 @@ async fn webrtc_sideband_honors_configured_system_proxy() -> Result<()> {
                 sdp: "v=offer\r\n".to_string(),
             }),
             version: Some(RealtimeConversationVersion::V3),
-            voice: None,
         }))
         .await?;
 

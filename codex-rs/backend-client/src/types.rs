@@ -90,6 +90,18 @@ pub struct CodexUserSettingsResponse {
     pub commit_attribution_enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VoiceSettings {
+    pub selected: String,
+    pub voices: Vec<VoiceOption>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct VoiceOption {
+    pub voice: String,
+    pub name: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct CodexWorkspaceMessage {
     pub message_id: String,

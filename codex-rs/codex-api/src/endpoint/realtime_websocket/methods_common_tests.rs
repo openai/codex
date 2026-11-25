@@ -5,7 +5,6 @@ use super::standalone_handoff_message;
 use crate::endpoint::realtime_websocket::protocol::RealtimeContextAppendChannel;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
-use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::RealtimeWireAdapter;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -21,7 +20,6 @@ fn frameless_session_update_encodes_explicit_delegation_ack_filler() {
             Vec::new(),
             RealtimeSessionMode::Conversational,
             RealtimeOutputModality::Audio,
-            RealtimeVoice::Marin,
             Some(delegation_ack_filler),
         );
 
@@ -31,11 +29,6 @@ fn frameless_session_update_encodes_explicit_delegation_ack_filler() {
                 "type": "session.update",
                 "session": {
                     "instructions": "instructions",
-                    "audio": {
-                        "output": {
-                            "voice": "marin",
-                        },
-                    },
                     "delegation": {
                         "type": "client",
                         "ack_filler": delegation_ack_filler,

@@ -15,7 +15,6 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
-use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::RealtimeWireAdapter;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
@@ -117,37 +116,31 @@ pub(super) fn session_update_message(
     initial_items: Vec<ConversationTextParams>,
     session_mode: RealtimeSessionMode,
     output_modality: RealtimeOutputModality,
-    voice: RealtimeVoice,
     delegation_ack_filler: Option<bool>,
 ) -> RealtimeOutboundMessage {
     let session_mode = normalized_session_mode(wire_adapter, session_mode);
     match wire_adapter {
         RealtimeWireAdapter::V1 => RealtimeOutboundMessage::SessionUpdate {
-            session: v1_session_update_session(instructions, voice),
+            session: v1_session_update_session(instructions),
         },
-        RealtimeWireAdapter::FramelessBidi => frameless_session_update_message(
-            instructions,
-            initial_items,
-            voice,
-            delegation_ack_filler,
-        ),
+        RealtimeWireAdapter::FramelessBidi => {
+            frameless_session_update_message(instructions, initial_items, delegation_ack_filler)
+        }
         RealtimeWireAdapter::RealtimeV2 => RealtimeOutboundMessage::SessionUpdate {
-            session: v2_session_update_session(instructions, session_mode, output_modality, voice),
+            session: v2_session_update_session(instructions, session_mode, output_modality),
         },
     }
 }
 
 pub fn session_update_session_json(config: RealtimeSessionConfig) -> JsonResult<Value> {
-    let voice = config.voice_or_default();
     match config.event_parser {
         RealtimeWireAdapter::V1 | RealtimeWireAdapter::RealtimeV2 => {
             let mut session = match config.event_parser {
-                RealtimeWireAdapter::V1 => v1_session_update_session(config.instructions, voice),
+                RealtimeWireAdapter::V1 => v1_session_update_session(config.instructions),
                 RealtimeWireAdapter::RealtimeV2 => v2_session_update_session(
                     config.instructions,
                     config.session_mode,
                     config.output_modality,
-                    voice,
                 ),
                 RealtimeWireAdapter::FramelessBidi => unreachable!(),
             };
@@ -159,7 +152,6 @@ pub fn session_update_session_json(config: RealtimeSessionConfig) -> JsonResult<
             config.model,
             config.instructions,
             config.initial_items,
-            voice,
             config.delegation_ack_filler,
         )),
     }

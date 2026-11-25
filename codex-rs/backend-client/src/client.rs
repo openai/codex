@@ -15,6 +15,8 @@ use codex_features::RuntimeAuthMode;
 use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::HttpError;
+use codex_http_client::HttpResponse;
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
@@ -557,6 +559,41 @@ impl Client {
 
     pub async fn get_rate_limits_many(&self) -> Result<Vec<RateLimitSnapshot>> {
         Ok(self.get_rate_limits_with_reset_credits().await?.rate_limits)
+    }
+
+    pub async fn get_voice_settings(&self) -> Result<crate::VoiceSettings> {
+        let response = self
+            .voice_settings_request(Method::GET, "settings/voices", &[("voice_mode", "wingman")])
+            .await?;
+        Ok(response.json().await.map_err(HttpError::without_url)?)
+    }
+
+    pub async fn set_voice(&self, voice: &str) -> Result<()> {
+        self.voice_settings_request(
+            Method::PATCH,
+            "settings/account_user_setting",
+            &[("feature", "voice_name"), ("value", voice)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn voice_settings_request(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<HttpResponse> {
+        let url = format!("{}/{path}", self.base_url);
+        let request = self
+            .request(method, &url)
+            .headers(self.headers().await?)
+            .query(query);
+        self.auth.validate_destination(&self.base_url, &url)?;
+        let response = request.send().await.map_err(HttpError::without_url)?;
+        let status = response.status();
+        anyhow::ensure!(status.is_success(), "HTTP {status}");
+        Ok(response)
     }
 
     pub async fn get_accounts_check(

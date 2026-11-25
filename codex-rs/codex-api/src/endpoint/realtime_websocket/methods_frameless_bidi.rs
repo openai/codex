@@ -2,7 +2,6 @@ use crate::endpoint::realtime_websocket::protocol::FramelessContentType;
 use crate::endpoint::realtime_websocket::protocol::FramelessInputTextContent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeContextAppendChannel;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
-use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use serde_json::Value;
@@ -35,7 +34,6 @@ pub(super) fn session_context_append_message(
 pub(super) fn session_update_message(
     instructions: String,
     initial_items: Vec<ConversationTextParams>,
-    voice: RealtimeVoice,
     delegation_ack_filler: Option<bool>,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::FramelessSessionUpdate {
@@ -43,7 +41,6 @@ pub(super) fn session_update_message(
             /*model*/ None,
             instructions,
             initial_items,
-            voice,
             delegation_ack_filler,
         ),
     }
@@ -53,19 +50,11 @@ pub(super) fn session_json(
     model: Option<String>,
     instructions: String,
     initial_items: Vec<ConversationTextParams>,
-    voice: RealtimeVoice,
     delegation_ack_filler: Option<bool>,
 ) -> Value {
     let mut session = json!({
         "instructions": instructions,
-        "audio": {
-            "output": {
-                "voice": voice,
-            },
-        },
-        "delegation": {
-            "type": "client",
-        },
+        "delegation": { "type": "client" },
     });
     if let Some(model) = model {
         session["model"] = Value::String(model);

@@ -596,7 +596,6 @@ async fn host_drain_closes_realtime_after_handoff_error() -> anyhow::Result<()> 
             voice_session_id: None,
             transport: None,
             version: None,
-            voice: None,
         }))
         .await?;
     for expected in [

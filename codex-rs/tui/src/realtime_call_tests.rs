@@ -7,6 +7,8 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
+use app_test_support::write_chatgpt_auth;
 use base64::Engine;
 use codex_app_server_protocol::Thread;
 use codex_config::LoaderOverrides;
@@ -38,13 +40,14 @@ const KEY_A: &str = "test-realtime-key-a";
 const KEY_B: &str = "test-realtime-key-b";
 
 fn sign_in(config: &Config, key: &str) -> Result<()> {
-    login_with_api_key(
+    write_chatgpt_auth(
         config.codex_home.as_path(),
-        key,
+        ChatGptAuthFixture::new(key)
+            .account_id(key)
+            .chatgpt_account_id(key)
+            .chatgpt_user_id(key),
         config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-    )?;
-    Ok(())
+    )
 }
 
 async fn create_call(client: &Client, config: &Config) -> Result<()> {
@@ -56,12 +59,7 @@ async fn create_call(client: &Client, config: &Config) -> Result<()> {
         "cwd": config.cwd, "cliVersion": "test", "source": "cli", "turns": [],
     }))?;
     let call = client
-        .create(
-            config,
-            &thread,
-            "offer-sdp".to_string(),
-            /*voice*/ None,
-        )
+        .create(config, &thread, "offer-sdp".to_string())
         .await
         .map_err(|error| anyhow::anyhow!("{error:#}"))?;
     assert_eq!(
@@ -94,7 +92,7 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
             config.application_network_policy = policy.clone();
             sign_in(&config, KEY_A)?;
             assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
-            let destination = "https://api.openai.com/v1/live".parse()?;
+            let destination = "https://chatgpt.com/backend-api/codex/realtime/calls".parse()?;
             let account_a_permit = policy.acquire(&destination)?;
             let client = Client::default();
             create_call(&client, &config).await?;
@@ -118,7 +116,7 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
             config.experimental_realtime_webrtc_call_base_url = Some(format!("{server}/v1"));
             create_call(&client, &config).await?;
 
-            config.forced_login_method = Some(ForcedLoginMethod::Chatgpt);
+            config.forced_login_method = Some(ForcedLoginMethod::Api);
             assert!(create_call(&client, &config).await.is_err());
         }
         return Ok(());
@@ -133,21 +131,20 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "runtime_agent_instance_id": runtime, "agent_host_id": "host-tui",
-                "actor": {"kind": "platform", "user_id": "user-tui",
-                          "organization_id": "org-tui", "project_id": "proj-tui"},
+                "actor": {"kind": "chatgpt", "user_id": key, "account_id": key},
             })))
             .expect(2)
             .mount(&server)
             .await;
     }
     Mock::given(method("POST"))
-        .and(path("/v1/live"))
+        .and(path("/backend-api/codex/realtime/calls"))
         .respond_with(|request: &wiremock::Request| {
             if !request.headers.contains_key("authorization") {
                 return ResponseTemplate::new(401);
             }
             ResponseTemplate::new(201)
-                .insert_header("location", "/v1/live/rtc_tui")
+                .insert_header("location", "/realtime/calls/rtc_tui")
                 .set_body_string("answer-sdp")
         })
         .mount(&server)
@@ -170,7 +167,7 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
         .context("captured requests")?;
     let calls = requests
         .iter()
-        .filter(|request| request.url.path() == "/v1/live")
+        .filter(|request| request.url.path() == "/backend-api/codex/realtime/calls")
         .collect::<Vec<_>>();
     for request in &calls {
         if !request.headers.contains_key("authorization") {
@@ -187,7 +184,7 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
         for (index, request) in calls.iter().enumerate() {
             let key = if index < 3 { KEY_A } else { KEY_B };
             let authorization = request.headers["authorization"].to_str()?;
-            if matches!(index, 0 | 4 | 5) {
+            if matches!(index, 0 | 4) {
                 assert_eq!(authorization, format!("Bearer {key}"));
                 assert!(!request.headers.contains_key("x-openai-agent-assertion"));
                 continue;
@@ -227,7 +224,7 @@ async fn local_calls_share_runtime_and_follow_auth_changes() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_calls_use_provider_credentials_when_login_storage_fails() -> Result<()> {
+async fn local_calls_require_chatgpt_even_with_provider_credentials() -> Result<()> {
     skip_if_no_network!(Ok(()));
     if std::env::var(PROBE_SERVER).is_ok() {
         let home = tempfile::tempdir()?;
@@ -241,18 +238,25 @@ async fn local_calls_use_provider_credentials_when_login_storage_fails() -> Resu
         config
             .features
             .set_enabled(Feature::RuntimeAgentInstances, /*enabled*/ false)?;
-        sign_in(&config, KEY_A)?;
         let client = Client::default();
+        login_with_api_key(
+            config.codex_home.as_path(),
+            KEY_A,
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+        )?;
+        assert!(create_call(&client, &config).await.is_err());
+        sign_in(&config, KEY_A)?;
         create_call(&client, &config).await?;
         std::fs::write(home.path().join("auth.json"), "malformed credentials")?;
 
         let original_provider = config.model_provider.clone();
         config.model_provider.experimental_bearer_token = Some(KEY_B.into());
-        create_call(&client, &config).await?;
+        assert!(create_call(&client, &config).await.is_err());
 
         config.model_provider = original_provider.clone();
         config.model_provider.env_key = Some("TUI_TEST_PROVIDER_KEY".to_string());
-        create_call(&client, &config).await?;
+        assert!(create_call(&client, &config).await.is_err());
 
         config.model_provider = original_provider.clone();
         config.model_provider.requires_openai_auth = false;
@@ -268,7 +272,7 @@ async fn local_calls_use_provider_credentials_when_login_storage_fails() -> Resu
             refresh_interval_ms: 300_000,
             cwd: config.cwd.clone(),
         });
-        create_call(&client, &config).await?;
+        assert!(create_call(&client, &config).await.is_err());
 
         config.model_provider = original_provider;
         assert!(create_call(&client, &config).await.is_err());
@@ -276,16 +280,16 @@ async fn local_calls_use_provider_credentials_when_login_storage_fails() -> Resu
     }
 
     let server = MockServer::start().await;
-    for (key, calls) in [(KEY_A, 1), (KEY_B, 3)] {
+    for (key, calls) in [(KEY_A, 1), (KEY_B, 0)] {
         Mock::given(method("POST"))
-            .and(path("/v1/live"))
+            .and(path("/backend-api/codex/realtime/calls"))
             .and(wiremock::matchers::header(
                 "authorization",
                 format!("Bearer {key}"),
             ))
             .respond_with(
                 ResponseTemplate::new(201)
-                    .insert_header("location", "/v1/live/rtc_tui")
+                    .insert_header("location", "/realtime/calls/rtc_tui")
                     .set_body_string("answer-sdp"),
             )
             .expect(calls)
@@ -294,7 +298,7 @@ async fn local_calls_use_provider_credentials_when_login_storage_fails() -> Resu
     }
     run_harness_through_proxy_with_env(
         &server,
-        "realtime_call::tests::local_calls_use_provider_credentials_when_login_storage_fails",
+        "realtime_call::tests::local_calls_require_chatgpt_even_with_provider_credentials",
         /*realtime_target*/ None,
         &[
             ("CODEX_API_KEY", None),

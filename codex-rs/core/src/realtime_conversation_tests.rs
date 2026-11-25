@@ -65,7 +65,6 @@ fn websocket_start_params() -> ConversationStartParams {
         voice_session_id: None,
         transport: None,
         version: Some(RealtimeConversationVersion::V1),
-        voice: None,
     }
 }
 

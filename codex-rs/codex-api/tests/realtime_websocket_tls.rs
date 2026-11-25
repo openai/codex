@@ -17,7 +17,6 @@ use codex_api::RealtimeWebsocketClient;
 use codex_api::RetryConfig;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
-use codex_protocol::protocol::RealtimeVoice;
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
 
@@ -145,7 +144,6 @@ async fn check_connection(address: String) {
                 event_parser: RealtimeEventParser::V1,
                 session_mode: RealtimeSessionMode::Conversational,
                 output_modality: RealtimeOutputModality::Audio,
-                voice: Some(RealtimeVoice::Cove),
             },
             HeaderMap::new(),
             HeaderMap::new(),

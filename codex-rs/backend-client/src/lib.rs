@@ -48,6 +48,8 @@ pub use types::TokenUsageProfile;
 pub use types::TokenUsageProfileDailyBucket;
 pub use types::TokenUsageProfileStats;
 pub use types::TurnAttemptsSiblingTurnsResponse;
+pub use types::VoiceOption;
+pub use types::VoiceSettings;
 
 pub use client::plan_history::PlanLimitBreakdown;
 pub use client::plan_history::PlanLimitDimension;

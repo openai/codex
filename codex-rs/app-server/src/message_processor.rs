@@ -2071,6 +2071,12 @@ impl MessageProcessor {
             ClientRequest::GetAccountTokenUsage { params, .. } => {
                 self.account_processor.get_account_token_usage(params).await
             }
+            ClientRequest::AccountVoiceSettingsRead { .. } => {
+                self.account_processor.read_voice_settings().await
+            }
+            ClientRequest::AccountVoiceSettingsWrite { params, .. } => {
+                self.account_processor.write_voice_settings(params).await
+            }
             ClientRequest::GetWorkspaceMessages { .. } => {
                 self.account_processor.get_workspace_messages().await
             }

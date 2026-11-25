@@ -224,8 +224,6 @@ pub struct ConversationStartParams {
     pub transport: Option<ConversationStartTransport>,
     /// Overrides the configured realtime protocol version for this session only.
     pub version: Option<RealtimeConversationVersion>,
-    /// None inherits the thread setting; Some(None) selects the provider default.
-    pub voice: Option<Option<RealtimeVoice>>,
 }
 
 /// Authentication selected by the embedding host for an existing call.
@@ -335,48 +333,6 @@ pub enum RealtimeVoice {
     Vale,
     Verse,
     Viola,
-}
-
-impl RealtimeVoice {
-    pub fn wire_name(self) -> &'static str {
-        match self {
-            Self::Alloy => "alloy",
-            Self::Arbor => "arbor",
-            Self::Ash => "ash",
-            Self::Aube => "aube",
-            Self::Ballad => "ballad",
-            Self::Breeze => "breeze",
-            Self::Bubbie => "bubbie",
-            Self::Cedar => "cedar",
-            Self::Coral => "coral",
-            Self::Cove => "cove",
-            Self::Echo => "echo",
-            Self::Ember => "ember",
-            Self::Haetsal => "haetsal",
-            Self::Hanul => "hanul",
-            Self::Himari => "himari",
-            Self::Juniper => "juniper",
-            Self::Leher => "leher",
-            Self::Maple => "maple",
-            Self::Marin => "marin",
-            Self::Miko => "miko",
-            Self::Neer => "neer",
-            Self::Porto => "porto",
-            Self::Rindo => "rindo",
-            Self::Rio => "rio",
-            Self::Rivage => "rivage",
-            Self::Sage => "sage",
-            Self::Selva => "selva",
-            Self::Shimmer => "shimmer",
-            Self::Sol => "sol",
-            Self::Sonna => "sonna",
-            Self::Spruce => "spruce",
-            Self::Tinta => "tinta",
-            Self::Vale => "vale",
-            Self::Verse => "verse",
-            Self::Viola => "viola",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
