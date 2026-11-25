@@ -10,17 +10,13 @@ use core_test_support::responses::ev_exec_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 #[cfg(unix)]
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -49,7 +45,6 @@ use codex_protocol::user_input::UserInput;
 use codex_sandboxing::linux::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use core_test_support::PathBufExt;
 use core_test_support::TestTargetOs;
 use core_test_support::assert_regex_match;
 use core_test_support::is_wine_exec_test_environment;
@@ -2209,6 +2204,8 @@ async fn apply_patch_turn_diff_emits_portable_paths_for_remote_cwd() -> Result<(
     skip_if_no_remote_env!(Ok(()));
 
     let harness = apply_patch_harness().await?;
+    // Pin repository discovery inside the fixture even when an ancestor has a .git marker.
+    harness.create_dir_all(".git").await?;
     let test = harness.test();
     let codex = test.codex.clone();
 
@@ -2274,28 +2271,18 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     let mut builder = test_codex();
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let file_name = "shared-turn-diff.txt";
-    let shared_cwd = PathBuf::from(format!(
-        "/tmp/codex-remote-turn-diff-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-    ))
-    .abs();
-    let shared_cwd_uri = PathUri::from_host_native_path(&shared_cwd)?;
-    let _ = fs::remove_dir_all(shared_cwd.as_path());
-    test.fs()
-        .remove(
-            &shared_cwd_uri,
-            RemoveOptions {
-                recursive: true,
-                force: true,
-                follow_symlinks: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
-    fs::create_dir_all(shared_cwd.as_path())?;
+    // The executor already owns its cwd and removes it on unwinding. Give the local
+    // side a TempDir owner for the same pathname on its own filesystem.
+    let shared_cwd = test.executor_environment().cwd().clone();
+    let local_cwd = tempfile::Builder::new()
+        .prefix(shared_cwd.file_name().expect("executor cwd needs a name"))
+        .rand_bytes(0)
+        .tempdir_in(shared_cwd.parent().expect("executor cwd needs a parent"))?;
+    let shared_cwd_uri = PathUri::from_abs_path(&shared_cwd);
+    fs::create_dir(local_cwd.path().join(".git"))?;
     test.fs()
         .create_directory(
-            &shared_cwd_uri,
+            &shared_cwd_uri.join(".git")?,
             CreateDirectoryOptions {
                 recursive: true,
                 follow_symlinks: true,
@@ -2415,19 +2402,6 @@ index 0000000000000000000000000000000000000000..9c998f7b995a7327177b38a90d138517
 +remote
 "#
     );
-
-    let _ = fs::remove_dir_all(shared_cwd.as_path());
-    test.fs()
-        .remove(
-            &shared_cwd_uri,
-            RemoveOptions {
-                recursive: true,
-                force: true,
-                follow_symlinks: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
 
     Ok(())
 }
