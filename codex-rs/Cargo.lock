@@ -5762,14 +5762,10 @@ dependencies = [
 name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [
- "codex-exec-server",
  "codex-exec-server-protocol",
  "codex-utils-absolute-path",
- "codex-utils-path-uri",
- "serde",
  "serde_json",
  "tempfile",
- "tokio",
 ]
 
 [[package]]

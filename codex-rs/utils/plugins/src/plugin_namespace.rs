@@ -1,11 +1,6 @@
-//! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
+//! Locate local plugin manifests and recognize Agent Plugins schemas.
 
-use codex_exec_server::EnvironmentAccess;
-use codex_exec_server::EnvironmentAccessExt;
-use codex_exec_server::GetMetadataOptions;
-use codex_exec_server::ReadFileOptions;
 use codex_exec_server_protocol::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
-use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -79,133 +74,16 @@ pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
     None
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPluginManifestName {
-    #[serde(default)]
-    name: String,
-}
-
-/// Returns the plugin manifest `name` defined directly below `plugin_root`.
-pub async fn plugin_namespace_for_root_uri(
-    fs: &dyn EnvironmentAccess,
-    plugin_root: &PathUri,
-) -> Option<String> {
-    let mut manifest_path = None;
-    for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
-        let candidate = plugin_root.join(relative_path).ok()?;
-        match fs
-            .get_metadata(&candidate, GetMetadataOptions::default())
-            .await
-        {
-            Ok(metadata) if metadata.is_file => {
-                manifest_path = Some(candidate);
-                break;
-            }
-            Ok(_) | Err(_) => {}
-        }
-    }
-    let contents = fs
-        .read_file_text(&manifest_path?, ReadFileOptions::default())
-        .await
-        .ok()?;
-    let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;
-    Some(
-        plugin_root
-            .basename()
-            .filter(|_| raw_name.trim().is_empty())
-            .unwrap_or(raw_name),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::AGENT_PLUGIN_MANIFEST_RELATIVE_PATH;
     use super::AGENT_PLUGIN_SCHEMA_URI;
     use super::find_plugin_manifest_path;
-    use super::plugin_namespace_for_root_uri;
-    use codex_exec_server::FileSystemEnvironmentAccessor;
-    use codex_exec_server::LOCAL_FS;
-    use codex_utils_absolute_path::test_support::PathBufExt;
-    use codex_utils_path_uri::PathUri;
     use std::fs;
     use tempfile::tempdir;
 
     const ALTERNATE_PLUGIN_CLA_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
     const ALTERNATE_PLUGIN_CUR_MANIFEST_RELATIVE_PATH: &str = ".cursor-plugin/plugin.json";
-
-    #[tokio::test]
-    async fn uses_manifest_name() {
-        let tmp = tempdir().expect("tempdir");
-        let plugin_root = tmp.path().join("plugins/sample");
-        let skill_path = plugin_root.join("skills/search/SKILL.md");
-
-        fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
-        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("mkdir manifest");
-        fs::write(
-            plugin_root.join(".codex-plugin/plugin.json"),
-            r#"{"name":"sample"}"#,
-        )
-        .expect("write manifest");
-        fs::write(&skill_path, "---\ndescription: search\n---\n").expect("write skill");
-
-        assert_eq!(
-            plugin_namespace_for_root_uri(
-                &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
-                &PathUri::from_abs_path(&plugin_root.abs()),
-            )
-            .await,
-            Some("sample".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn uses_name_from_alternate_discoverable_manifest_path() {
-        let tmp = tempdir().expect("tempdir");
-        let plugin_root = tmp.path().join("plugins/sample");
-        let skill_path = plugin_root.join("skills/search/SKILL.md");
-        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_CLA_MANIFEST_RELATIVE_PATH);
-
-        fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
-        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
-            .expect("mkdir manifest");
-        fs::write(&manifest_path, r#"{"name":"sample"}"#).expect("write manifest");
-        fs::write(&skill_path, "---\ndescription: search\n---\n").expect("write skill");
-
-        assert_eq!(
-            plugin_namespace_for_root_uri(
-                &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
-                &PathUri::from_abs_path(&plugin_root.abs()),
-            )
-            .await,
-            Some("sample".to_string())
-        );
-        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(manifest_path));
-    }
-
-    #[tokio::test]
-    async fn uses_name_from_cur_plugin_manifest_path() {
-        let tmp = tempdir().expect("tempdir");
-        let plugin_root = tmp.path().join("plugins/sample");
-        let skill_path = plugin_root.join("skills/search/SKILL.md");
-        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_CUR_MANIFEST_RELATIVE_PATH);
-
-        fs::create_dir_all(skill_path.parent().expect("parent")).expect("mkdir");
-        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
-            .expect("mkdir manifest");
-        fs::write(&manifest_path, r#"{"name":"sample"}"#).expect("write manifest");
-        fs::write(&skill_path, "---\ndescription: search\n---\n").expect("write skill");
-
-        assert_eq!(
-            plugin_namespace_for_root_uri(
-                &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
-                &PathUri::from_abs_path(&plugin_root.abs()),
-            )
-            .await,
-            Some("sample".to_string())
-        );
-        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(manifest_path));
-    }
 
     #[test]
     fn recognizes_schema_declared_root_plugin_manifest() {
@@ -349,8 +227,8 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("plugins/sample");
         let codex_path = plugin_root.join(".codex-plugin/plugin.json");
-        let claude_path = plugin_root.join(".claude-plugin/plugin.json");
-        let cursor_path = plugin_root.join(".cursor-plugin/plugin.json");
+        let claude_path = plugin_root.join(ALTERNATE_PLUGIN_CLA_MANIFEST_RELATIVE_PATH);
+        let cursor_path = plugin_root.join(ALTERNATE_PLUGIN_CUR_MANIFEST_RELATIVE_PATH);
         for path in [&codex_path, &claude_path, &cursor_path] {
             fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
             fs::write(path, r#"{"name":"sample"}"#).expect("write manifest");
@@ -361,6 +239,11 @@ mod tests {
             Some(codex_path.clone())
         );
         fs::remove_file(codex_path).expect("remove Codex manifest");
-        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(claude_path));
+        assert_eq!(
+            find_plugin_manifest_path(&plugin_root),
+            Some(claude_path.clone())
+        );
+        fs::remove_file(claude_path).expect("remove Claude manifest");
+        assert_eq!(find_plugin_manifest_path(&plugin_root), Some(cursor_path));
     }
 }

@@ -63,6 +63,23 @@ async fn namespaces_for(
 }
 
 #[tokio::test]
+async fn uses_manifest_name_from_each_discoverable_path() {
+    for directory in [".codex-plugin", ".claude-plugin", ".cursor-plugin"] {
+        let root = TempDir::new().expect("root temp dir");
+        let manifest_dir = root.path().join(directory);
+        fs::create_dir(&manifest_dir).expect("create manifest directory");
+        fs::write(manifest_dir.join("plugin.json"), r#"{"name":"sample"}"#)
+            .expect("write manifest");
+        let skill = write_skill(root.path(), "skills/search");
+
+        let namespaces =
+            namespaces_for(root.path(), &[skill], HashSet::new(), HashSet::new()).await;
+
+        assert_eq!(namespaces, vec!["sample:skill"], "{directory}");
+    }
+}
+
+#[tokio::test]
 async fn nested_plugin_namespaces_do_not_apply_to_plain_siblings() {
     let root = TempDir::new().expect("root temp dir");
     let nested_plugin = root.path().join("nested-plugin");
