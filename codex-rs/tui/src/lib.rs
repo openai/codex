@@ -2121,6 +2121,11 @@ async fn run_ratatui_app(
             /*inc*/ 1,
             &[("enabled", &config.tui_fullscreen_transcript.to_string())],
         );
+        let _ = metrics.counter(
+            "codex.tui.collapse_turn_details",
+            /*inc*/ 1,
+            &[("enabled", &config.tui_collapse_turn_details.to_string())],
+        );
     }
 
     // Cloud configuration and session selection can change screen policy after first paint.

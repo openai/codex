@@ -5555,8 +5555,8 @@
           "type": "boolean"
         },
         "collapse_turn_details": {
-          "default": false,
-          "description": "Summarize tool calls and collapse completed turns in the full-screen transcript. Defaults to `false`.",
+          "default": true,
+          "description": "Summarize tool calls and collapse completed turns in the full-screen transcript. Defaults to `true`.",
           "type": "boolean"
         },
         "copy_on_select": {

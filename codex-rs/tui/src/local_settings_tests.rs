@@ -131,6 +131,7 @@ show_tooltips = false
 show_server_version_notice = false
 auto_recap = false
 fullscreen_transcript = true
+collapse_turn_details = false
 mouse_scroll_speed = 0.5
 copy_on_select = "never"
 copy_on_select_clear_selection = true
@@ -193,6 +194,7 @@ fast_default_opt_out = true
         assert_eq!(config.startup_warnings, Vec::<String>::new());
         assert_eq!(config.tui_mouse_scroll_speed, Some(1.5));
         assert!(config.tui_fullscreen_transcript);
+        assert_eq!(config.tui_collapse_turn_details, config_text.is_empty());
         let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
             home.path(),
             Some(&project_cwd),

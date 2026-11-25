@@ -190,7 +190,6 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
                 ));
             }
 
-            app.local_settings.tui.collapse_turn_details = true;
             for id in 1..=6 {
                 app.transcript_cells
                     .push(Arc::new(crate::history_cell::new_web_search_call(

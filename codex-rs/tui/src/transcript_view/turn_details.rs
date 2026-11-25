@@ -255,7 +255,8 @@ impl TurnDetails {
             {
                 self.pending.push((start + index, tool.clone()));
             }
-            if calls.is_empty() {
+            // Keep the patch's inline diff disclosure available for approval.
+            if calls.is_empty() || any.is::<crate::history_cell::PatchHistoryCell>() {
                 group.finish(rows, cells);
             } else {
                 if let Some(exec) = any.downcast_ref::<crate::exec_cell::ExecCell>()

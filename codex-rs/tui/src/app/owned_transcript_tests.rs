@@ -1802,6 +1802,7 @@ mod browsing;
 #[tokio::test]
 async fn find_refreshes_live_details_before_searching_the_first_query() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
+    app.local_settings.tui.collapse_turn_details = false;
     crate::chatwidget::tests::helpers::set_active_cell(
         &mut app.chat_widget,
         Box::new(crate::exec_cell::new_active_exec_command(
@@ -2401,7 +2402,6 @@ async fn clickable_transcript_foreground_follows_mouse_motion() -> Result<()> {
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
     let size = tui.terminal.size()?;
-    app.local_settings.tui.collapse_turn_details = true;
     app.transcript_cells = vec![
         user_cell("See https://prompt.example/ for context."),
         Arc::new(history_cell::AgentMarkdownCell::new(
