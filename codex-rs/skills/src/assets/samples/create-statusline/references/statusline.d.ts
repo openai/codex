@@ -14,6 +14,10 @@ export type ApprovalPolicy = "untrusted" | "on-request" | "granular" | "never";
 
 export type ApprovalReviewer = "user" | "auto-review";
 
+export type BadgeColor = "secondary" | "info" | "success" | "warning" | "danger";
+
+export type BadgeProps = { color?: BadgeColor, };
+
 /**
  * A box defaults to a column when direction is omitted.
  * Horizontal boxes group adjacent strings even without justify. Use separate elements for a gap.
@@ -39,7 +43,7 @@ export type DirectedBox = { "direction": "row" } & RowProps | { "direction": "co
 
 export type DisplayMode = "standard" | "raw";
 
-export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "spacer", children?: [], } | { "type": "box", props: BoxProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
+export type Element = { "type": "text", props?: TextProps, children: Array<Element | null>, } | { "type": "link", props: LinkProps, children: Array<Element | null>, } | { "type": "row", props: RowProps, children: Array<Element | null>, } | { "type": "spacer", children?: [], } | { "type": "badge", props?: BadgeProps, children: [string], } | { "type": "box", props: BoxProps, children: Array<Element | null>, } | { "type": "col", props: ColProps, children: Array<Element | null>, } | { "type": "bold", children: Array<Element | null>, } | { "type": "italic", children: Array<Element | null>, } | { "type": "underline", children: Array<Element | null>, } | { "type": "code", children: Array<Element | null>, } | string;
 
 export type FileSystem = { "type": "restricted" } | { "type": "unrestricted" };
 
@@ -124,6 +128,7 @@ export type LinkElement = Extract<Element, { type: "link" }>;
 export type RowElement = Extract<Element, { type: "row" }>;
 export type ColElement = Extract<Element, { type: "col" }>;
 export type BoxElement = Extract<Element, { type: "box" }>;
+export type BadgeElement = Extract<Element, { type: "badge" }>;
 export type SpacerElement = Extract<Element, { type: "spacer" }>;
 export type CodeElement = Extract<Element, { type: "code" }>;
 type BoxColumnProps = ColProps & { [K in Exclude<keyof RowProps, keyof ColProps>]?: never };

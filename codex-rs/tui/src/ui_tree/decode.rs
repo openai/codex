@@ -22,16 +22,21 @@ impl std::str::FromStr for UiTree {
         let mut nodes = 0;
         let mut text_bytes = 0;
         while let Some((node, depth)) = pending.pop() {
-            if depth > 16 {
+            // A badge stores its string child directly in the node.
+            let label = usize::from(matches!(node, UiNode::Badge { .. }));
+            if depth + label > 16 {
                 return Err(Self::Err::custom("UI tree exceeds maximum depth 16"));
             }
-            nodes += 1;
+            nodes += 1 + label;
             if nodes > 256 {
                 return Err(Self::Err::custom("UI tree exceeds 256 non-null nodes"));
             }
             match node {
                 UiNode::Spacer { .. } => {}
-                UiNode::String(text) => {
+                UiNode::String(text)
+                | UiNode::Badge {
+                    children: [text], ..
+                } => {
                     text_bytes += text.len();
                     if text_bytes > MAX_TEXT_BYTES {
                         return Err(Self::Err::custom("UI tree exceeds 16 KiB of text"));

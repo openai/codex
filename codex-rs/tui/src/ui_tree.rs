@@ -53,6 +53,13 @@ pub(crate) enum UiNode {
         #[cfg_attr(test, ts(as = "Option<[(); 0]>", optional))]
         children: [(); 0],
     },
+    /// A compact, single-line state label.
+    Badge {
+        #[serde(default, skip_serializing_if = "is_default")]
+        #[cfg_attr(test, ts(as = "Option<BadgeProps>", optional))]
+        props: BadgeProps,
+        children: [String; 1],
+    },
     Box {
         props: BoxProps,
         children: Vec<Option<UiNode>>,
@@ -76,6 +83,31 @@ pub(crate) enum UiNode {
     },
     #[serde(untagged)]
     String(String),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
+pub(crate) struct BadgeProps {
+    #[serde(
+        default,
+        deserialize_with = "decode::token",
+        skip_serializing_if = "is_default"
+    )]
+    #[cfg_attr(test, ts(as = "Option<BadgeColor>", optional))]
+    color: BadgeColor,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export_to = "statusline.d.ts"))]
+enum BadgeColor {
+    #[default]
+    Secondary,
+    Info,
+    Success,
+    Warning,
+    Danger,
 }
 
 /// A box defaults to a column when direction is omitted.

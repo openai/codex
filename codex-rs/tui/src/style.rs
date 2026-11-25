@@ -178,14 +178,14 @@ pub(crate) fn hover_foreground(foreground: Color, background: Color) -> Option<C
     })
 }
 
-fn background_rgb(background: Option<Color>) -> Option<(u8, u8, u8)> {
+pub(crate) fn background_rgb(background: Option<Color>) -> Option<(u8, u8, u8)> {
     match background {
         None | Some(Color::Reset) => default_bg(),
         Some(color) => explicit_rgb(color),
     }
 }
 
-fn explicit_rgb(color: Color) -> Option<(u8, u8, u8)> {
+pub(crate) fn explicit_rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
         Color::Rgb(r, g, b) => Some((r, g, b)),
         Color::Indexed(index) if index >= 16 => {

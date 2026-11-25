@@ -98,12 +98,22 @@ impl<'a> Fragment<'a> {
         }
     }
 
-    fn prefix(self, limit: usize) -> Self {
+    fn has_content(self) -> bool {
+        self.width() > 0
+            && !matches!(
+                self,
+                Self::Padding(..) | Self::Gap(..) | Self::Background(..)
+            )
+    }
+
+    fn prefix(self, limit: usize, cut: text::Cut) -> Self {
         if self.width() <= limit {
             return self;
         }
         match self {
-            Self::Text(chunks, _) => Self::Text(chunks, self.visit(limit, |_, _, _, _| {})),
+            Self::Text(chunks, _) => {
+                Self::Text(chunks, visit_chunks(chunks, limit, cut, |_, _, _, _| {}))
+            }
             Self::Padding(_, paint) => Self::Padding(limit, paint),
             Self::Gap(_, paint) => Self::Gap(limit, paint),
             Self::Background(_, paint) => Self::Background(limit, paint),
@@ -111,7 +121,12 @@ impl<'a> Fragment<'a> {
         }
     }
 
-    fn visit(self, limit: usize, mut draw: impl FnMut(usize, &str, usize, &'a Paint)) -> usize {
+    fn visit(
+        self,
+        limit: usize,
+        cut: text::Cut,
+        mut draw: impl FnMut(usize, &str, usize, &'a Paint),
+    ) -> usize {
         match self {
             Self::Ellipsis(paint) => {
                 if limit > 0 {
@@ -121,7 +136,7 @@ impl<'a> Fragment<'a> {
                     0
                 }
             }
-            Self::Text(chunks, width) => visit_chunks(chunks, limit.min(width), draw),
+            Self::Text(chunks, width) => visit_chunks(chunks, limit.min(width), cut, draw),
             Self::BlankLine => 0,
             Self::Padding(width, paint)
             | Self::Gap(width, paint)
@@ -144,6 +159,7 @@ type Visit<'a, 'b> = dyn FnMut(usize, Fragment<'a>) + 'b;
 #[derive(Default)]
 struct Row<'a> {
     ends_in_marker: bool,
+    content_before_edge: bool,
     width: usize,
     edge: Option<(usize, Fragment<'a>)>,
     last_paint: Option<&'a Paint>,
@@ -217,14 +233,21 @@ fn layout(root: Option<&PreparedNode>, bounds: Size, mut draw: Option<&mut Draw<
             if fragment.width() > 0 {
                 row.ends_in_marker = matches!(fragment, Fragment::Ellipsis(_));
             }
+            if row.width < width {
+                row.content_before_edge |= fragment.has_content();
+            }
             if start < width {
                 if row.width >= width {
                     row.edge = Some((start, fragment));
                 } else if let Some(draw) = draw.as_deref_mut() {
-                    fragment.visit(usize::MAX, |offset, text, cells, paint| {
-                        draw(y, start + offset, text, cells, paint);
-                        row.last_paint = Some(paint);
-                    });
+                    fragment.visit(
+                        usize::MAX,
+                        text::Cut::Viewport,
+                        |offset, text, cells, paint| {
+                            draw(y, start + offset, text, cells, paint);
+                            row.last_paint = Some(paint);
+                        },
+                    );
                 }
             }
         },
@@ -242,8 +265,15 @@ fn layout(root: Option<&PreparedNode>, bounds: Size, mut draw: Option<&mut Draw<
             && (clipped || draw.is_some())
         {
             let limit = width - usize::from(clipped) - start;
+            let cut = if clipped {
+                text::Cut::LineClamp {
+                    prior_content: row.content_before_edge,
+                }
+            } else {
+                text::Cut::Viewport
+            };
             end = start
-                + edge.visit(limit, |offset, text, cells, paint| {
+                + edge.visit(limit, cut, |offset, text, cells, paint| {
                     if let Some(draw) = draw.as_deref_mut() {
                         draw(y, start + offset, text, cells, paint);
                     }
@@ -306,8 +336,10 @@ fn layout_visible<'a>(
     }
     if let Some(marker) = marker.filter(|_| clipped && width.cells > 0) {
         let mut remaining = width.cells - 1;
+        let mut prior_content = false;
         for fragment in tail {
-            let prefix = fragment.prefix(remaining);
+            let prefix = fragment.prefix(remaining, text::Cut::LineClamp { prior_content });
+            prior_content |= prefix.has_content();
             visit(height - 1, prefix);
             remaining -= prefix.width();
             if prefix.width() < fragment.width() {

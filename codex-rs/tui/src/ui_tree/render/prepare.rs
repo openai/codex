@@ -271,6 +271,13 @@ impl PreparedNode {
                 });
                 return;
             }
+            UiNode::Badge {
+                props,
+                children: [label],
+            } => {
+                inline.push_badge(label, props.color, paint);
+                return;
+            }
             UiNode::Code { children } => {
                 paint.inline_code = true;
                 paint.preserve_whitespace = true;

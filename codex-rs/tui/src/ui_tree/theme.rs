@@ -5,8 +5,11 @@ use ratatui::style::Style;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::BadgeColor;
 use crate::bottom_pane::StatusLineAccent;
 use crate::render::highlight;
+use crate::style;
+use crate::style::StatusTone;
 use crate::terminal_palette;
 use crate::terminal_palette::StdoutColorLevel;
 use std::cell::OnceCell;
@@ -20,6 +23,7 @@ pub(super) struct RenderTheme<'a> {
     highlighter: OnceCell<Highlighter<'a>>,
     inline_code: OnceCell<(TerminalColor, TerminalColor)>,
     resolved: HashMap<Color, TerminalColor>,
+    badges: HashMap<(BadgeColor, Option<TerminalColor>), Style>,
 }
 
 impl<'a> RenderTheme<'a> {
@@ -29,6 +33,7 @@ impl<'a> RenderTheme<'a> {
             highlighter: OnceCell::new(),
             inline_code: OnceCell::new(),
             resolved: HashMap::new(),
+            badges: HashMap::new(),
         }
     }
 
@@ -75,6 +80,85 @@ impl<'a> RenderTheme<'a> {
             return style.fg(TerminalColor::Reset).bg(TerminalColor::Reset);
         }
         style.fg(fg).bg(bg)
+    }
+
+    fn semantic_foreground(&mut self, role: BadgeColor) -> TerminalColor {
+        // TextMate also matches parent scopes, e.g. markup.inserted for markup.inserted.diff.
+        let scopes: &[&str] = match role {
+            BadgeColor::Secondary => &["codex.secondary"],
+            BadgeColor::Info => &["codex.info", "token.info-token"],
+            BadgeColor::Success => &["codex.success", "markup.inserted.diff"],
+            BadgeColor::Warning => &["codex.warning", "token.warn-token", "markup.changed.diff"],
+            BadgeColor::Danger => &["codex.danger", "token.error-token", "markup.deleted.diff"],
+        };
+        let fg = terminal_color(
+            highlight::foreground_color_for_scopes(self.highlighter(), scopes),
+            TerminalColor::Reset,
+        );
+        if fg != TerminalColor::Reset {
+            return fg;
+        }
+        match role {
+            BadgeColor::Secondary => match self.resolve(Color::Primary) {
+                TerminalColor::Reset => style::secondary_text_style().fg.unwrap_or_default(),
+                fg => fg,
+            },
+            BadgeColor::Info => match self.resolve(Color::Accent) {
+                TerminalColor::Reset => style::accent_color(),
+                fg => fg,
+            },
+            BadgeColor::Success => style::status_style(StatusTone::Success)
+                .fg
+                .unwrap_or_default(),
+            BadgeColor::Warning => style::status_style(StatusTone::Attention)
+                .fg
+                .unwrap_or_default(),
+            BadgeColor::Danger => style::status_style(StatusTone::Failure)
+                .fg
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(super) fn badge_style(&mut self, role: BadgeColor, parent: Option<TerminalColor>) -> Style {
+        let key = (role, parent);
+        if let Some(&style) = self.badges.get(&key) {
+            return style;
+        }
+        let style = self.resolve_badge_style(role, parent);
+        self.badges.insert(key, style);
+        style
+    }
+
+    fn resolve_badge_style(&mut self, role: BadgeColor, parent: Option<TerminalColor>) -> Style {
+        let base = Style::default()
+            .fg(TerminalColor::Reset)
+            .bg(TerminalColor::Reset)
+            .remove_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::UNDERLINED);
+        let level = terminal_palette::effective_stdout_color_level();
+        if matches!(level, StdoutColorLevel::Unknown) {
+            return base;
+        }
+
+        let fg = self.semantic_foreground(role);
+        // Pair ANSI foregrounds with the terminal background they were chosen for.
+        let Some(tint) = style::explicit_rgb(fg) else {
+            return base.fg(fg);
+        };
+        // A named ANSI parent has no known RGB. Compositing onto a known surface
+        // lets the contrast check use the exact fill the terminal will paint.
+        let Some(surface) = style::background_rgb(parent)
+            .or_else(terminal_palette::default_bg)
+            .or_else(|| style::explicit_rgb(self.resolve(Color::Surface)))
+        else {
+            return base;
+        };
+        const BADGE_TINT_ALPHA: f32 = 0.15;
+        let bg = terminal_palette::best_color_for_level(
+            crate::color::blend(tint, surface, BADGE_TINT_ALPHA),
+            level,
+        );
+        let fg = style::readable_color_on(fg, Some(bg));
+        base.fg(fg).bg(bg)
     }
 
     // Plain text and literal colors need no TextMate scope matching.

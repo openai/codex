@@ -2,6 +2,7 @@ import type {
   CodeElement,
   ColElement,
   BoxElement,
+  BadgeElement,
   SpacerElement,
   Color,
   RowElement,
@@ -54,6 +55,11 @@ const spacer: SpacerElement = { type: "spacer" };
 const emptySpacer: SpacerElement = { ...spacer, children: [] };
 // @ts-expect-error A spacer has no contents.
 const invalidSpacer: SpacerElement = { ...spacer, children: ["x"] };
+
+const badge: BadgeElement = { type: "badge", children: ["queued"] };
+const passing: BadgeElement = { ...badge, props: { color: "success" }, children: ["passing"] };
+// @ts-expect-error Badges accept semantic colors.
+const invalidBadge: BadgeElement = { ...badge, props: { color: "red" } };
 
 const stacked: BoxElement = { type: "box", props: { gap: 1 }, children: [summary, indented] };
 const horizontal: BoxElement = { ...stacked, props: { gap: 0, direction: "row", justify: "end" } };

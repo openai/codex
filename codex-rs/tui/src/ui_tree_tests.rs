@@ -1719,3 +1719,221 @@ fn spacer_keeps_ordinary_gaps_on_authored_blank_lines() {
     node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
     assert_eq!(buf[(4, 1)].bg, ratatui::style::Color::Red);
 }
+
+#[test]
+fn badge_is_one_sanitized_inline_box() {
+    let badge = json!({"type":"badge","children":[" \u{1b}[31mok\u{1b}[0m \t \n"]});
+    let node = tree(json!({"type":"text","children":["A",badge,"B"]}));
+    insta::assert_snapshot!(painted_rows(&node,Size::new(6,3)).join("\n"), @"A ok B");
+    assert_eq!(painted_rows(&node, Size::new(4, 3)), ["A", " ok", "B"]);
+    let node = tree(
+        json!({"type":"code","children":["a",{"type":"badge","children":["  a\t \nb  "]},"c"]}),
+    );
+    assert_eq!(painted_rows(&node, Size::new(7, 1)), ["a a b c"]);
+    let node = tree(
+        json!({"type":"row","props":{"gap":0},"children":[{"type":"badge","children":[""]},"X"]}),
+    );
+    assert_eq!(painted_rows(&node, Size::new(3, 1)), ["  X"]);
+}
+
+#[test]
+fn badge_labels_count_toward_tree_limits() {
+    let badge = |children: Value| json!({"type":"badge","children":children});
+    for children in [
+        json!([]),
+        json!(["a", "b"]),
+        json!([null]),
+        json!(["a".repeat(MAX_TEXT_BYTES + 1)]),
+    ] {
+        assert!(parse(badge(children)).is_err());
+    }
+    let mut node = badge(json!(["ok"]));
+    for _ in 0..15 {
+        node = json!({"type":"bold","children":[node]});
+    }
+    assert!(parse(node.clone()).is_ok());
+    assert!(parse(json!({"type":"bold","children":[node]})).is_err());
+    let badges = vec![badge(json!(["ok"])); 128];
+    assert!(parse(json!({"type":"text","children":badges})).is_err());
+}
+
+#[test]
+fn semantic_badge_paints_its_gutters_and_keeps_the_surrounding_style() {
+    let palette = crate::terminal_probe::DefaultColors {
+        fg: (255, 255, 255),
+        bg: (0, 0, 0),
+    };
+    crate::terminal_palette::with_test_default_colors(palette, || {
+        let mut styles = Vec::new();
+        for color in ["secondary", "info", "success", "warning", "danger"] {
+            let node = tree(
+                json!({"type":"bold","children":["A",{"type":"badge","props":{"color":color},"children":["ok"]},"B"]}),
+            );
+            let area = Rect::new(0, 0, 6, 1);
+            let mut buf = Buffer::empty(area);
+            node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+            let style = buf[(2, 0)].style();
+            for x in 1..5 {
+                assert_eq!(buf[(x, 0)].style(), style);
+            }
+            assert_eq!(buf[(0, 0)].style(), buf[(5, 0)].style());
+            assert_ne!(style.fg, style.bg);
+            assert!(!styles.contains(&style));
+            styles.push(style);
+        }
+    });
+}
+
+#[test]
+fn linked_and_plain_badges_share_colors_but_keep_distinct_underlines() {
+    use ratatui::style::Modifier;
+
+    let badge = json!({"type":"badge","children":["ok"]});
+    let link = json!({"type":"link","props":{"href":"https://example.com"},"children":[badge]});
+    for (children, linked, plain) in [(json!([link, badge]), 1, 5), (json!([badge, link]), 5, 1)] {
+        let node = tree(json!({"type":"text","children":children}));
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buf = Buffer::empty(area);
+        node.render(area, &Theme::default(), &mut buf, /*plain_style*/ None);
+        let linked = &buf[(linked, 0)];
+        let plain = &buf[(plain, 0)];
+        assert_eq!((linked.fg, linked.bg), (plain.fg, plain.bg));
+        assert!(linked.modifier.contains(Modifier::UNDERLINED));
+        assert!(!plain.modifier.contains(Modifier::UNDERLINED));
+    }
+}
+
+#[test]
+fn badge_uses_a_measurable_surface_for_its_fill() {
+    use ratatui::style::Color as TermColor;
+
+    let mut theme = Theme::default();
+    theme.settings.foreground = Some("#cdd6f4".parse().unwrap());
+    theme.settings.background = Some("#1e1e2e".parse().unwrap());
+    let colors = |theme: &Theme, background: Option<&str>, role: &str| {
+        let badge = json!({"type":"badge","props":{"color":role},"children":["X"]});
+        let node = match background {
+            Some(bg) => {
+                tree(json!({"type":"row","props":{"gap":0,"background":bg},"children":[badge]}))
+            }
+            None => tree(badge),
+        };
+        let area = Rect::new(0, 0, 3, 1);
+        let mut buf = Buffer::empty(area);
+        node.render(area, theme, &mut buf, /*plain_style*/ None);
+        let cell = &buf[(1, 0)];
+        (cell.fg, cell.bg)
+    };
+    let palette = crate::terminal_probe::DefaultColors {
+        fg: (255, 255, 255),
+        bg: (16, 16, 16),
+    };
+    for (palette, surface) in [(Some(palette), "#101010"), (None, "#1e1e2e")] {
+        crate::terminal_palette::with_test_default_colors(palette, || {
+            let secondary = |bg| colors(&theme, bg, "secondary");
+            assert_eq!(secondary(Some("white")), secondary(Some(surface)));
+            assert_eq!(secondary(None), secondary(Some(surface)));
+            assert_ne!(secondary(Some("white")), secondary(Some("#c0c0c0")));
+            assert_eq!(
+                colors(&theme, Some("#008000"), "success"),
+                (TermColor::Green, TermColor::Reset)
+            );
+        });
+    }
+    theme.settings.background = None;
+    crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+        assert_eq!(
+            colors(&theme, Some("white"), "secondary"),
+            (TermColor::Reset, TermColor::Reset)
+        );
+    });
+}
+
+#[test]
+fn badge_text_and_fill_follow_theme_changes_on_the_painted_surface() {
+    use crate::terminal_palette::rgb_color;
+    use syntect::highlighting::StyleModifier;
+    use syntect::highlighting::ThemeItem;
+
+    let palette = crate::terminal_probe::DefaultColors {
+        fg: (0, 0, 0),
+        bg: (255, 255, 255),
+    };
+    crate::terminal_palette::with_test_default_colors(palette, || {
+        for (role, scope) in [
+            ("secondary", None),
+            ("info", Some("codex.accent")),
+            ("success", Some("markup.inserted.diff")),
+            ("warning", Some("markup.changed.diff")),
+            ("danger", Some("markup.deleted")),
+        ] {
+            let node = tree(
+                json!({"type":"row","props":{"gap":0,"background":"#101010"},"children":[
+                    {"type":"badge","props":{"color":role},"children":["X"]}
+                ]}),
+            );
+            let mut theme = Theme::default();
+            let name = format!("codex.{role}");
+            // Paint with a conventional scope, then override it on the same prepared tree.
+            for (scope, value) in [(scope, "#ffcc88"), (Some(name.as_str()), "#88ccff")] {
+                let color: syntect::highlighting::Color = value.parse().unwrap();
+                if let Some(scope) = scope {
+                    theme.scopes.push(ThemeItem {
+                        scope: scope.parse().unwrap(),
+                        style: StyleModifier {
+                            foreground: Some(color),
+                            ..Default::default()
+                        },
+                    });
+                } else {
+                    theme.settings.foreground = Some(color);
+                }
+                let area = Rect::new(0, 0, 3, 1);
+                let mut buf = Buffer::empty(area);
+                node.render(area, &theme, &mut buf, /*plain_style*/ None);
+                let rgb = (color.r, color.g, color.b);
+                let fill = crate::color::blend(rgb, (16, 16, 16), /*alpha*/ 0.15);
+                let cell = &buf[(1, 0)];
+                assert_eq!(
+                    (cell.fg, cell.bg),
+                    (rgb_color(rgb), rgb_color(fill)),
+                    "{role}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn clamped_text_reserves_room_for_a_whole_trailing_badge() {
+    let node = tree(
+        json!({"type":"text","props":{"maxLines":1},"children":["A",{"type":"badge","children":["ok"]},"B"]}),
+    );
+    assert_eq!(painted_rows(&node, Size::new(5, 1)), ["A…"]);
+    assert_eq!(painted_rows(&node, Size::new(6, 1)), ["A ok B"]);
+    let node = tree(json!({"type":"badge","children":["A\rB"]}));
+    assert_eq!(painted_rows(&node, Size::new(8, 1)), [" A B"]);
+}
+
+#[test]
+fn clipped_badge_accounts_for_previous_row_children() {
+    let badge = json!({"type":"badge","children":["ok"]});
+    let row = json!({"type":"row","props":{"gap":0},"children":["A",badge]});
+    let centered = json!({"type":"row","props":{"gap":0,"justify":"center"},"children":[badge]});
+    for (line, width, expected) in [(row, 5, "A…"), (centered, 6, "  ok …")] {
+        let col = json!({"type":"col","props":{"gap":0},"children":[line,"B"]});
+        let footer = tree(col.clone());
+        let clamped = tree(json!({"type":"text","props":{"maxLines":1},"children":[col]}));
+        assert_eq!(painted_rows(&footer, Size::new(width, 1)), [expected]);
+        assert_eq!(painted_rows(&clamped, Size::new(width, 2)), [expected]);
+    }
+}
+
+#[test]
+fn clipping_only_the_badge_gutter_keeps_the_whole_label() {
+    let badge = json!({"type":"badge","children":["界"]});
+    assert_eq!(painted_rows(&tree(badge.clone()), Size::new(3, 1)), [" 界"]);
+    let row = tree(json!({"type":"row","props":{"gap":0},"children":["A",badge]}));
+    assert_eq!(painted_rows(&row, Size::new(4, 1)), ["A 界"]);
+    assert_eq!(painted_rows(&row, Size::new(3, 1)), ["A…"]);
+}
