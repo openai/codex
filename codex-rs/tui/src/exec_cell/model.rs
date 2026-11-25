@@ -18,7 +18,7 @@ use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Either;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     /// The finalized, interleaved stderr and stdout that replaces any streamed preview.
@@ -83,7 +83,7 @@ impl CommandOutput {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExecCall {
     pub(crate) call_id: String,
     pub(crate) command: Vec<String>,
@@ -95,7 +95,7 @@ pub(crate) struct ExecCall {
     pub(crate) interaction_input: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExecCell {
     pub(crate) group: ActivityGroup<ExecCall>,
     animations_enabled: bool,
@@ -187,7 +187,8 @@ impl ExecCell {
 
     pub(crate) fn mark_failed(&mut self) {
         for call in self.group.calls.iter_mut() {
-            if call.duration.is_none() {
+            // Unified exec processes survive turn interruption and report their own exit.
+            if call.duration.is_none() && call.source != ExecCommandSource::UnifiedExecStartup {
                 let elapsed = call
                     .start_time
                     .map(|st| st.elapsed())

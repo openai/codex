@@ -227,7 +227,7 @@ impl HistoryCell for ExecCell {
             // User-shell previews already retain wrapped commands and up to fifty output rows.
             // Reuse its actual truncation decision instead of comparing differently styled text.
             return self
-                .command_display_lines_with_hidden_details(width)
+                .command_display(width, "Running")
                 .hidden_details
                 .then_some(ActivityDisclosure::Generic);
         }
@@ -280,8 +280,18 @@ impl HistoryCell for ExecCell {
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
         } else {
-            self.command_display_lines(width)
+            self.command_display(width, "Running").lines
         }
+    }
+
+    fn scrollback_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<HyperlinkLine> {
+        if mode == HistoryRenderMode::Rich
+            && !self.is_exploring_cell()
+            && self.group.calls[0].source == ExecCommandSource::UnifiedExecStartup
+        {
+            return self.command_display(width, "Started").lines;
+        }
+        self.display_hyperlink_lines_for_mode(width, mode)
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -496,11 +506,7 @@ impl ExecCell {
         out
     }
 
-    fn command_display_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        self.command_display_lines_with_hidden_details(width).lines
-    }
-
-    fn command_display_lines_with_hidden_details(&self, width: u16) -> CommandDisplay {
+    fn command_display(&self, width: u16, running_title: &'static str) -> CommandDisplay {
         let [call] = &self.group.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
@@ -517,7 +523,7 @@ impl ExecCell {
         let title = if is_interaction {
             ""
         } else if self.is_active() {
-            "Running"
+            running_title
         } else if call.is_user_shell_command() {
             "You ran"
         } else {

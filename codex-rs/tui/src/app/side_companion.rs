@@ -252,15 +252,11 @@ impl SideCompanion {
                 duration_ms,
                 ..
             } => {
-                let Some(cell) = self.display.active.as_mut().and_then(|active| {
-                    active
-                        .as_any_mut()
-                        .downcast_mut::<crate::exec_cell::ExecCell>()
-                }) else {
+                if *status == codex_app_server_protocol::CommandExecutionStatus::InProgress {
                     return false;
-                };
-                if *status == codex_app_server_protocol::CommandExecutionStatus::InProgress
-                    || !cell.complete_call(
+                }
+                let complete = |cell: &mut crate::exec_cell::ExecCell| {
+                    cell.complete_call(
                         id,
                         crate::exec_cell::CommandOutput::from_execution(
                             status.clone(),
@@ -270,9 +266,28 @@ impl SideCompanion {
                         ),
                         Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
                     )
-                {
-                    return false;
-                }
+                };
+                let active = self.display.active.as_mut().and_then(|active| {
+                    active
+                        .as_any_mut()
+                        .downcast_mut::<crate::exec_cell::ExecCell>()
+                });
+                let Some(cell) =
+                    active.filter(|cell| cell.iter_calls().any(|call| call.call_id == *id))
+                else {
+                    let Some((index, _, mut group)) =
+                        super::activity_groups::pending_command_group(&self.cells, id)
+                    else {
+                        return false;
+                    };
+                    complete(&mut group);
+                    let group: Arc<dyn HistoryCell> = Arc::new(group);
+                    self.view
+                        .replace_group(&self.cells, index..index + 1, &group);
+                    self.cells[index] = group;
+                    return true;
+                };
+                complete(cell);
                 if !cell.is_active()
                     && let Some(active) = self.display.active.take()
                 {

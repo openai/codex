@@ -70,6 +70,16 @@ async fn settled_tool_precedes_queued_output_and_is_not_emitted_twice() -> Resul
         .push(Arc::new(history_cell::PlainHistoryCell::new(vec![
             "past context".into(),
         ])));
+    let mut command = crate::exec_cell::new_active_exec_command(
+        "cmd".into(),
+        vec!["build".into()],
+        Vec::new(),
+        codex_app_server_protocol::CommandExecutionSource::UnifiedExecStartup,
+        /*interaction_input*/ None,
+        /*animations_enabled*/ false,
+    );
+    app.insert_history_cell(&mut tui, Box::new(command.clone()));
+    tui.clear_pending_history_lines();
     app.insert_history_cell(&mut tui, Box::new(cell.clone()));
     app.flush_native_history(&mut tui);
     assert!(tui.pending_history_lines_for_test().is_empty());
@@ -122,6 +132,13 @@ async fn settled_tool_precedes_queued_output_and_is_not_emitted_twice() -> Resul
             .iter()
             .any(|line| line.line.to_string().contains("Calling lookup"))
     );
+    command.complete_call(
+        "cmd",
+        crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, "built".into()),
+        Duration::ZERO,
+    );
+    app.complete_background_command(&mut tui, Box::new(command));
+    assert!(tui.pending_history_lines_for_test().is_empty());
     cell.update_from_item(item(DynamicToolCallStatus::Completed));
     for _ in 0..=4097 / CELLS_PER_FRAME {
         app.flush_native_history(&mut tui);
@@ -134,6 +151,12 @@ async fn settled_tool_precedes_queued_output_and_is_not_emitted_twice() -> Resul
         .join("\n");
     assert_eq!(text.matches("unique result").count(), 1);
     assert_eq!(text.matches("later output").count(), 4097);
+    insta::assert_snapshot!(&text[text.find("later output 4096").unwrap()..], @"
+    later output 4096
+
+    • Ran build
+      └ built
+    ");
     let answer = text.find("Introduction and conclusion").unwrap();
     let error = text.find("Paste failed").unwrap();
     assert_eq!(text.matches("Introduction").count(), 1);

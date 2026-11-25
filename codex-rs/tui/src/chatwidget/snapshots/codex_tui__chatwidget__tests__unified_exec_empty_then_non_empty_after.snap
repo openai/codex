@@ -1,7 +1,9 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/exec_flow.rs
 expression: combined
 ---
+$ just fix
+
 • Waited for background terminal · just fix
 
 ↳ Interacted with background terminal · just fix

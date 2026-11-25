@@ -4,6 +4,8 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 ---
 80 columns:
 "                                                                                "
+"• Running sleep 2                                                               "
+"                                                                                "
 "• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view…"
 "  └ checking command policy                                                     "
 "                                                                                "
@@ -13,6 +15,8 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 "  GPT-5.6-Sol default · /tmp/project                                            "
 "  ? for shortcuts                                                               "
 120 columns:
+"                                                                                                                        "
+"• Running sleep 2                                                                                                       "
 "                                                                                                                        "
 "• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close                        "
 "  └ checking command policy                                                                                             "

@@ -37,6 +37,8 @@ type ReplayedCloudItems = std::collections::HashMap<String, (bool, i64)>;
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// Background command rows awaiting an exit, even after turn cleanup or /stop.
+    pub(super) pending_command_rows: std::collections::HashSet<String>,
     /// Shared retained rows for concurrently running dynamic tools, removed on completion.
     pub(super) dynamic_calls:
         std::collections::HashMap<String, crate::history_cell::DynamicToolCallCell>,

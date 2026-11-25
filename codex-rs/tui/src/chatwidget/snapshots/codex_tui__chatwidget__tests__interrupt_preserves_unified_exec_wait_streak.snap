@@ -2,5 +2,8 @@
 source: tui/src/chatwidget/tests/exec_flow.rs
 expression: snapshot
 ---
-cells=1
+cells=2
+• Running just fix
+
+
 ■ Conversation interrupted - use /feedback if something went wrong

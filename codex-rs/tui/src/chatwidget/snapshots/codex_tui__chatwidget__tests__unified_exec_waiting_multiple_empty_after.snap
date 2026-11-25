@@ -1,11 +1,13 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 1229
 expression: combined
 ---
 Chat:
+• Running just fix
   Worked for [duration] • [completion time]
 
 Transcript:
+$ just fix
+
 • Waited for background terminal · just fix
   Worked for [duration] • [completion time]

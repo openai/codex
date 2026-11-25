@@ -1,0 +1,26 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+expression: "format!(\"Active\\n{started}\\nNative scrollback\\n{native}\\nTranscript after exit\\n{finished}\")"
+---
+Active
+• Running sleep 20; echo marker; exit 1
+
+Native scrollback
+• Started sleep 20; echo marker; exit 1
+
+• Ran echo quick
+  └ quick
+
+• Finished.
+
+• Ran sleep 20; echo marker; exit 1
+  └ marker
+
+Transcript after exit
+$ sleep 20; echo marker; exit 1
+marker
+✗ (1) • 5ms
+$ echo quick
+quick
+✓ • 5ms
+• Finished.

@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 1092
 expression: combined
 ---
+$ cargo test -p codex-core
+
 • Waited for background terminal · cargo test -p codex-core
 
 • Streaming response.

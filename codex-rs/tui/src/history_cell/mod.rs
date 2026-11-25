@@ -299,6 +299,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
+    /// Render a permanent entry in terminal-owned scrollback.
+    fn scrollback_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines_for_mode(width, mode)
+    }
+
     /// Returns the number of viewport rows needed to render this cell.
     ///
     /// The default delegates to `Paragraph::line_count` with

@@ -5176,12 +5176,12 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     // A command already running at handoff belongs before replies received while parked.
     let turn = "command-turn";
     let cwd = app.config.cwd.clone();
-    let command = |status| ThreadItemPayload::CommandExecution {
-        id: "cmd".into(),
-        command: "echo sidebar-check".into(),
+    let command = |id: &str, status| ThreadItemPayload::CommandExecution {
+        id: id.into(),
+        command: format!("echo {id}"),
         cwd: cwd.clone().into(),
         status,
-        source: Default::default(),
+        source: codex_app_server_protocol::CommandExecutionSource::UnifiedExecStartup,
         command_actions: Vec::new(),
         model_context: None,
         sandbox_type: None,
@@ -5193,15 +5193,20 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         duration_ms: None,
     };
     use codex_app_server_protocol::CommandExecutionStatus;
-    for event in [
-        turn_started_notification(parent, turn),
-        ServerNotification::ItemStarted(ItemStartedNotification::new(
+    app.enqueue_thread_notification(parent, turn_started_notification(parent, turn))
+        .await?;
+    // The second launch commits the first row before focus switches.
+    let commands = [
+        ("background", CommandExecutionStatus::Failed),
+        ("sidebar-check", CommandExecutionStatus::Completed),
+    ];
+    for (id, _) in &commands {
+        let event = ServerNotification::ItemStarted(ItemStartedNotification::new(
             parent.to_string(),
             turn.into(),
-            command(CommandExecutionStatus::InProgress),
+            command(id, CommandExecutionStatus::InProgress),
             /*started_at_ms*/ 0,
-        )),
-    ] {
+        ));
         app.enqueue_thread_notification(parent, event).await?;
     }
     keys!(prefix, side);
@@ -5213,23 +5218,31 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     )
     .await?;
     side_frame(&mut app, &mut tui, size)?;
-    app.enqueue_thread_notification(
-        parent,
-        ServerNotification::ItemCompleted(
-            codex_app_server_protocol::ItemCompletedNotification::new(
-                parent.to_string(),
-                turn.into(),
-                command(CommandExecutionStatus::Completed),
-                /*started_at_ms*/ None,
-                /*completed_at_ms*/ 0,
+    for (id, status) in commands {
+        app.enqueue_thread_notification(
+            parent,
+            ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification::new(
+                    parent.to_string(),
+                    turn.into(),
+                    command(id, status),
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 0,
+                ),
             ),
-        ),
-    )
-    .await?;
+        )
+        .await?;
+    }
     let finished = side_frame(&mut app, &mut tui, size)?;
     let (_, after_command) = finished
         .split_once("Ran echo sidebar-check")
         .unwrap_or_else(|| panic!("{finished}"));
+    // Compact activity groups show the latest command. Inspect the earlier row in place.
+    let pane = &app.side_companions[&parent_thread_id];
+    insta::assert_snapshot!(
+        lines_to_single_string(&pane.cells[pane.parked_tail - 1].transcript_lines(/*width*/ 80)),
+        @"$ echo background\n✗ (1) • 0ms"
+    );
     assert!(after_command.contains("Command finished."), "{finished}");
     assert_eq!(
         finished.matches("echo sidebar-check").count(),

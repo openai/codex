@@ -7,7 +7,7 @@ use super::ActivityDetails;
 use super::HistoryCell;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ActivityGroup<T> {
     pub(crate) calls: Vec<T>,
     pub(crate) details: ActivityDetails,

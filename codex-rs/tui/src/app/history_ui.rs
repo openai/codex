@@ -34,7 +34,7 @@ impl App {
         }
     }
 
-    pub(super) fn insert_history_cell(
+    pub(crate) fn insert_history_cell(
         &mut self,
         tui: &mut tui::Tui,
         mut cell: Box<dyn HistoryCell>,
@@ -97,7 +97,7 @@ impl App {
         // Owned replay must not eagerly format every historical entry. Composite status cards are
         // the only committed cells whose mutable usage data needs insertion-time bookkeeping.
         let lines = if !deferred || cell.as_any().is::<history_cell::CompositeHistoryCell>() {
-            cell.display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode())
+            cell.scrollback_lines(width, self.chat_widget.history_render_mode())
         } else {
             Vec::new()
         };

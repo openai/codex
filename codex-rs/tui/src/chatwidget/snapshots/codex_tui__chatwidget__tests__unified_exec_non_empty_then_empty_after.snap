@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 1309
 expression: combined
 ---
+$ just fix
+
 ↳ Interacted with background terminal · just fix
   └ pwd
 

@@ -1419,6 +1419,8 @@ pub(crate) enum AppEvent {
     FollowTranscript,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    /// Finish a command whose running cell has already been committed to history.
+    CompleteBackgroundCommand(Box<crate::exec_cell::ExecCell>),
     /// FIFO barrier after the completed turn's history insertions.
     TurnTipReady {
         thread_id: ThreadId,

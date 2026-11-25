@@ -30,10 +30,10 @@ impl ChatWidget {
             self.bump_active_cell_revision();
             return Ok(());
         }
-        if let Some(exploration) = active.as_any_mut().downcast_mut::<ExecCell>()
-            && exploration.is_exploring_cell()
+        if let Some(exec) = active.as_any_mut().downcast_mut::<ExecCell>()
+            && !exec.should_flush()
         {
-            exploration.group.push_detail(Arc::from(cell));
+            exec.group.push_detail(Arc::from(cell));
             self.bump_active_cell_revision();
             return Ok(());
         }

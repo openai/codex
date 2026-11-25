@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 4833
 expression: normalized_backend_snapshot(terminal.backend())
 ---
+"                                                                                "
+"• Running sleep 2                                                               "
 "                                                                                "
 "• Checking files and preparing a response (0s • esc to interrupt) · 1 backgroun…"
 "                                                                                "

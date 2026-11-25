@@ -1,6 +1,8 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/exec_flow.rs
 expression: active_combined
 ---
+$ just fix
+
 ↳ Interacted with background terminal · just fix
   └ pwd
