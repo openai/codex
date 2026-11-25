@@ -8,7 +8,10 @@ use codex_config::HookStateToml;
 use codex_config::McpServerConfig;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::AgentRuntimeOwnership;
+use codex_core::AgentTurnAdmission;
 use codex_core::ForkSnapshot;
+use codex_core::InheritedSessionId;
+use codex_core::RestrictRootCapabilities;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
@@ -41,6 +44,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -1603,6 +1607,24 @@ async fn session_end_flushes_transcript_and_ignores_control_output() -> Result<(
     let test = builder.build(&server).await?;
 
     test.submit_turn("persist this before shutdown").await?;
+    let mut options = test.start_thread_options().await;
+    options.session_source = Some(SessionSource::Custom("host".into()));
+    options.thread_source = Some(ThreadSource::Subagent);
+    options
+        .thread_extension_init
+        .insert(AgentRuntimeOwnership::Host);
+    options
+        .thread_extension_init
+        .insert(Arc::new(super::agent_control::HostRuntime) as Arc<dyn AgentTurnAdmission>);
+    options
+        .thread_extension_init
+        .insert(RestrictRootCapabilities);
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(test.session_configured.session_id));
+    let child = test.thread_manager.start_thread(options).await?;
+    child.thread.shutdown_and_wait().await?;
+
     test.codex.shutdown_and_wait().await?;
 
     let inputs = read_hook_inputs_from_log(
@@ -1611,6 +1633,10 @@ async fn session_end_flushes_transcript_and_ignores_control_output() -> Result<(
             .as_path(),
     )?;
     assert_eq!(inputs.len(), 1);
+    assert_eq!(
+        inputs[0]["session_id"],
+        test.session_configured.session_id.to_string()
+    );
     assert_eq!(inputs[0]["hook_event_name"], "SessionEnd");
     assert_eq!(inputs[0]["reason"], "other");
     assert_eq!(inputs[0]["transcript_exists"], true);

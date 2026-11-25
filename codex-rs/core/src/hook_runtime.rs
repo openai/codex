@@ -29,6 +29,7 @@ use codex_hooks::hook_execution_mode_label;
 use codex_hooks::hook_handler_type_label;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_protocol::SessionId;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -471,6 +472,11 @@ pub(crate) async fn run_turn_stop_hooks(
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
+    // A hosted child can share the root's session ID without a SubAgent session source.
+    if sess.session_id() != SessionId::from(sess.thread_id()) {
+        return;
+    }
+
     // Building a turn can read plugins and skills from a remote executor. Check
     // the captured hook declarations before spending any of the shutdown deadline.
     let environments = sess.services.turn_environments.snapshot_now();
