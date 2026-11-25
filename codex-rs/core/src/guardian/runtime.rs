@@ -83,7 +83,7 @@ pub(super) fn validate<'a>(
 
 #[derive(Clone)]
 pub(super) struct ReviewRuntime {
-    pub(super) attached_reviewer: Option<crate::guardian_review::BoundReviewer>,
+    pub(super) attached_reviewer: Option<Arc<dyn crate::guardian_review::AttachedReviewer>>,
     pub(super) session: Arc<Session>,
     pub(super) history_reset: CancellationToken,
     pub(super) context: GuardianReviewContext,

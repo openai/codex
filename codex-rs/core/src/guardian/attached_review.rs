@@ -7,7 +7,7 @@ use crate::guardian::review_session::PreparedVerdictTurn;
 use crate::guardian::review_session::ensure_guardian_followup_reminder;
 use crate::guardian::review_session::prepare_verdict_session;
 use crate::guardian::review_session::review_turn;
-use crate::guardian_review::BoundReviewer;
+use crate::guardian_review::AttachedReviewer;
 use crate::guardian_review::PreparedAssessment;
 use crate::guardian_review::ReviewPreparationError;
 use codex_analytics::GuardianReviewSessionKind;
@@ -18,25 +18,25 @@ use codex_protocol::user_input::UserInput;
 use tokio::sync::Mutex;
 
 pub(super) struct AttachedApproval {
-    provider: BoundReviewer,
+    provider: Arc<dyn AttachedReviewer>,
     config: GuardianReviewSessionConfig,
     first: Mutex<Option<Box<dyn PreparedAssessment>>>,
 }
 
 impl AttachedApproval {
     pub async fn prepare(
-        provider: BoundReviewer,
+        provider: Arc<dyn AttachedReviewer>,
         parent: &Arc<Session>,
         context: &GuardianReviewContext,
         deadline: ReviewDeadline,
         cancel: &CancellationToken,
     ) -> Result<Self, ReviewPreparationError> {
         let prepare = async {
-            let config =
-                guardian_review_session_config(parent, context, provider.retrieval.clone())
-                    .await
-                    .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
-            let reserved = Self::reserve(&provider, &config, parent, context, cancel).await?;
+            let config = guardian_review_session_config(parent, context, provider.retrieval())
+                .await
+                .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
+            let reserved =
+                Self::reserve(provider.as_ref(), &config, parent, context, cancel).await?;
             Ok(Self {
                 provider,
                 config,
@@ -52,7 +52,7 @@ impl AttachedApproval {
     }
 
     async fn reserve(
-        provider: &BoundReviewer,
+        provider: &dyn AttachedReviewer,
         config: &GuardianReviewSessionConfig,
         parent: &Arc<Session>,
         context: &GuardianReviewContext,
@@ -67,7 +67,7 @@ impl AttachedApproval {
         )
         .await
         .map_err(|_| ReviewPreparationError::ReviewerUnavailable)?;
-        provider.preparation.prepare(&setup, cancel).await
+        provider.prepare(&setup, cancel).await
     }
 
     pub async fn attempt(
@@ -86,7 +86,7 @@ impl AttachedApproval {
             let model = match first {
                 Some(first) => first,
                 None => Self::reserve(
-                    &self.provider,
+                    self.provider.as_ref(),
                     &self.config,
                     parent,
                     &approval.context,

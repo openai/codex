@@ -13,8 +13,6 @@ mod actor;
 mod conversation;
 pub use actor::ActorReviewer;
 pub use actor::PreparedReviewer;
-mod cutoff;
-pub use cutoff::RootEvidence;
 mod delivery;
 mod evidence;
 mod host;

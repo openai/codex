@@ -113,19 +113,6 @@ pub fn reviewer_headers(config: &crate::config::Config) -> crate::CodexResponses
     }
 }
 
-/// A thread's synchronous reviewer. Bind its evidence position before the action waits.
-/// Routing may hand the action to a human without ever requesting preparation.
-pub trait AttachedReviewer: Send + Sync {
-    fn bind(self: std::sync::Arc<Self>) -> BoundReviewer;
-}
-
-/// Evidence preparation bound to one action, shared by its review attempts.
-#[derive(Clone)]
-pub struct BoundReviewer {
-    pub preparation: std::sync::Arc<dyn ReviewerPreparation>,
-    pub retrieval: ReviewRetrieval,
-}
-
 /// Safe to report with a review ID before a verdict has started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ReviewPreparationError {
@@ -145,9 +132,11 @@ pub enum ReviewPreparationError {
     Cancelled,
 }
 
-/// Reserve the actor's reviewer after routing and delivery have covered this attempt.
-/// Each attempt admits evidence available to that reviewer.
-pub trait ReviewerPreparation: Send + Sync {
+/// A thread's synchronous reviewer. Reserve the conversation and admit the
+/// available evidence for each attempt, including retries.
+pub trait AttachedReviewer: Send + Sync {
+    fn retrieval(&self) -> ReviewRetrieval;
+
     fn prepare<'a>(
         &'a self,
         setup: &'a PreparedGuardianContext,

@@ -8,7 +8,7 @@ codex_rust_crate(
     run_tests_with_wine_exec = True,
     test_tags = ["no-sandbox"],
     unit_test_srcs = [
-        "src/cutoff_tests.rs",
+        "src/host_tests.rs",
         "tests/common/board_host.rs",
         "//codex-rs/message-board:tests/common/mod.rs",
     ],

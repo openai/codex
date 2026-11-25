@@ -73,7 +73,7 @@ impl EvidenceSnapshot {
         self.thread_id
     }
 
-    /// Exclusive durable source boundary to bind later retrieval to this capture.
+    /// Exclusive end of the original history read by the housekeeper.
     pub fn cutoff(&self) -> HistoryPosition {
         self.end
     }

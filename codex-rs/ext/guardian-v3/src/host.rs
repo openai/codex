@@ -39,9 +39,12 @@ use crate::ActorReviewer;
 use crate::EvidenceCursor;
 use crate::Housekeeper;
 use crate::LiveDelivery;
-use crate::cutoff::RootEvidence;
 use crate::local_board;
 use crate::local_board_options;
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;
 
 pub fn install(
     registry: &mut ExtensionRegistryBuilder<Config>,
@@ -98,7 +101,7 @@ struct Host {
 pub(super) struct RootWorker {
     pub(super) reader: Arc<dyn AgentMessageBoard>,
     wake: mpsc::Sender<()>,
-    lifetime: Arc<ReviewerTasks>,
+    lifetime: ReviewerTasks,
 }
 
 impl Host {
@@ -133,10 +136,6 @@ impl Host {
                 "in-memory Guardian evidence requires a fresh root"
             );
         }
-        let writes = input
-            .thread_store
-            .get::<PendingReviewWrites>()
-            .context("Guardian write tracker missing at thread startup")?;
         let history = self
             .manager
             .upgrade()
@@ -167,8 +166,8 @@ impl Host {
             }
         };
         let reader: Arc<dyn AgentMessageBoard> = Arc::new(board.read_only_handle());
-        let lifetime = Arc::new(ReviewerTasks::default());
-        let (wake, wakes) = mpsc::channel(1);
+        let lifetime = ReviewerTasks::default();
+        let (wake, mut wakes) = mpsc::channel(1);
         let initial_position = cursor.position();
         let delivery = Arc::clone(tree.get_or_init(|| Arc::new(LiveDelivery::from_cursor(cursor))));
         let saved = delivery.cursor();
@@ -178,54 +177,73 @@ impl Host {
         {
             let _ = wake.try_send(());
         }
-        let (queue, mut captures) = RootEvidence::new(lifetime.clone(), history, saved, writes);
-        lifetime
-            .tasks
-            .spawn(queue.clone().capture_on_activity(wakes));
-        let worker = RootWorker {
-            wake,
-            lifetime: Arc::clone(&lifetime),
-            reader,
-        };
-        let scope = lifetime.clone();
         let manager = self.manager.clone();
         let settings = Arc::clone(&self.housekeeper);
+        let cancellation = lifetime.cancellation.clone();
         lifetime.tasks.spawn(async move {
-            let cancellation = &scope.cancellation;
             let work = async {
-                let Some(mut capture) = cancellation
-                    .run_until_cancelled(captures.recv())
-                    .await
-                    .flatten()
-                else {
-                    return Ok(());
-                };
-                let startup = async {
-                    let manager = manager.upgrade().context("Guardian host stopped")?;
-                    let parent = manager.get_thread(root).await?;
-                    Housekeeper::new(Arc::new(board), delivery, &parent, &manager, &settings).await
-                };
-                let Some(housekeeper) = cancellation.run_until_cancelled(startup).await else {
-                    return Ok(());
-                };
-                let mut housekeeper = housekeeper?;
-                loop {
-                    while housekeeper
-                        .route_next(&capture.snapshot, cancellation)
-                        .await?
-                        != 0
-                    {
-                        capture.routed_through(housekeeper.cursor().position());
-                    }
-                    capture.finish();
-                    let Some(next) = cancellation
-                        .run_until_cancelled(captures.recv())
-                        .await
-                        .flatten()
-                    else {
+                let board = Arc::new(board);
+                let mut housekeeper = None;
+                while let Some(Some(())) = cancellation.run_until_cancelled(wakes.recv()).await {
+                    let cursor = delivery.cursor();
+                    let read = async {
+                        history.flush_thread(root).await?;
+                        cursor.read_history(history.as_ref()).await
+                    };
+                    let Some(records) = cancellation.run_until_cancelled(read).await else {
                         break;
                     };
-                    capture = next;
+                    let Ok(records) = records else {
+                        tracing::warn!(%root, "Guardian history unavailable until the next wake");
+                        continue;
+                    };
+                    let snapshot = cursor.snapshot(records).inspect_err(|error| {
+                        tracing::warn!(root_thread_id = %root, %error, "Guardian intake rejected stored evidence");
+                    })?;
+                    if !snapshot.source_advanced() {
+                        continue;
+                    }
+                    for &source_ordinal in &snapshot.skipped_incomplete_deliveries {
+                        tracing::warn!(
+                            name: "guardian_v3.evidence_skipped",
+                            root_thread_id = %root,
+                            source_ordinal,
+                            reason = "incomplete_delivered_message",
+                            "Skipped incomplete Guardian evidence"
+                        );
+                    }
+                    if snapshot.records().is_empty() {
+                        delivery.acknowledge(&snapshot, /*count*/ 0)?;
+                        continue;
+                    }
+                    let housekeeper = match &mut housekeeper {
+                        Some(worker) => worker,
+                        None => {
+                            let startup = async {
+                                let manager = manager.upgrade().context("Guardian host stopped")?;
+                                let parent = manager.get_thread(root).await?;
+                                Housekeeper::new(
+                                    board.clone(),
+                                    Arc::clone(&delivery),
+                                    &parent,
+                                    &manager,
+                                    &settings,
+                                ).await
+                            };
+                            let Some(worker) = cancellation.run_until_cancelled(startup).await else {
+                                break;
+                            };
+                            housekeeper.insert(worker?)
+                        }
+                    };
+                    // route_next drains accepted appends before honoring cancellation.
+                    while housekeeper.route_next(&snapshot, &cancellation).await? != 0 {}
+                    tracing::debug!(
+                        name: "guardian_v3.housekeeping_routed",
+                        root_thread_id = %root,
+                        end_ordinal_exclusive = snapshot.cutoff().end_ordinal_exclusive,
+                        "Guardian housekeeper routed evidence"
+                    );
                 }
                 anyhow::Ok(())
             };
@@ -234,8 +252,11 @@ impl Host {
                 tracing::warn!(%root, "Guardian housekeeping stopped");
             }
         });
-        input.thread_store.insert_arc(queue);
-        input.thread_store.insert(worker);
+        input.thread_store.insert(RootWorker {
+            wake,
+            lifetime,
+            reader,
+        });
         Ok(())
     }
 }
@@ -311,7 +332,6 @@ impl ThreadLifecycleContributor<Config> for Host {
                 actor.shutdown().await;
             }
             if let Some(worker) = input.thread_store.remove::<RootWorker>() {
-                input.thread_store.remove::<RootEvidence>();
                 worker.lifetime.cancellation.cancel();
                 worker.lifetime.tasks.close();
                 worker.lifetime.tasks.wait().await;

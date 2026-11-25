@@ -8,6 +8,8 @@ use anyhow::Context;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::guardian_review::AttachedReviewer;
+use codex_core::guardian_review::PreparedAssessment;
 use codex_core::guardian_review::PreparedGuardianContext;
 use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::ReviewRetrieval;
@@ -17,14 +19,11 @@ use codex_guardian_reviewer::SessionDisposition;
 use codex_message_board::AgentMessageBoard;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::HistoryPosition;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::LiveRetrievalBinding;
-use crate::RootEvidence;
 use crate::conversation::Conversation;
 use crate::host::RootWorker;
 use crate::host::TreeDelivery;
@@ -211,10 +210,9 @@ impl ActorReviewer {
         Ok(conversation)
     }
 
-    /// Reserve this actor's reviewer for a verdict against the root intake that caught up.
+    /// Drain this actor's current inbox without waiting for the housekeeper.
     pub async fn reserve(
         &self,
-        routed: &RootEvidence,
         setup: &PreparedGuardianContext,
         cancel: &CancellationToken,
     ) -> Result<PreparedReviewer, ReviewPreparationError> {
@@ -229,16 +227,10 @@ impl ActorReviewer {
                 .get_thread(self.root)
                 .await
                 .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
-            let data = root.thread_extension_data();
-            let worker = data
+            let worker = root
+                .thread_extension_data()
                 .get::<RootWorker>()
                 .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
-            let evidence = data
-                .get::<RootEvidence>()
-                .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
-            if !std::ptr::eq(routed, evidence.as_ref()) {
-                return Err(ReviewPreparationError::EvidenceUnavailable);
-            }
             let mut conversation = match slot.take() {
                 Some(previous)
                     if !previous.thread.has_shutdown_status()
@@ -264,125 +256,27 @@ impl ActorReviewer {
     }
 }
 
-/// The first attempt uses the request-time position. Every later attempt flushes and
-/// captures again before draining newly delivered evidence.
-struct BoundActorReview {
-    actor: Arc<ActorReviewer>,
-    initial: Mutex<Option<oneshot::Receiver<RequestCutoff>>>,
-}
-
-struct RequestCutoff {
-    evidence: Arc<RootEvidence>,
-    position: HistoryPosition,
-    revisions: (u64, u64),
-}
-
-async fn root_revisions(root: &CodexThread) -> (u64, u64) {
-    let history = root.conversation_history_snapshot().await;
-    (
-        history.user_message_revision(),
-        history.guardian_review_context_revision(),
-    )
-}
-
-impl codex_core::guardian_review::AttachedReviewer for ActorReviewer {
-    fn bind(self: Arc<Self>) -> codex_core::guardian_review::BoundReviewer {
-        let (mut sender, initial) = oneshot::channel();
-        let actor = Arc::clone(&self);
-        self.lifetime.tasks.spawn(async move {
-            let capture = async {
-                let manager = actor.manager.upgrade().context("Guardian host stopped")?;
-                let root = manager.get_thread(actor.root).await?;
-                let evidence = root
-                    .thread_extension_data()
-                    .get::<RootEvidence>()
-                    .context("Guardian intake unavailable")?;
-                let revisions = root_revisions(&root).await;
-                let position = evidence.capture_cutoff().await?;
-                anyhow::Ok(RequestCutoff {
-                    evidence,
-                    position,
-                    revisions,
-                })
-            };
-            tokio::select! {
-                biased;
-                _ = sender.closed() => (),
-                _ = actor.lifetime.cancellation.cancelled() => (),
-                result = capture => {
-                    if let Ok(cutoff) = result {
-                        let _ = sender.send(cutoff);
-                    }
-                }
-            }
-        });
-        codex_core::guardian_review::BoundReviewer {
-            retrieval: self.retrieval.clone(),
-            preparation: Arc::new(BoundActorReview {
-                actor: self,
-                initial: Mutex::new(Some(initial)),
-            }),
-        }
+impl AttachedReviewer for ActorReviewer {
+    fn retrieval(&self) -> ReviewRetrieval {
+        self.retrieval.clone()
     }
-}
 
-impl codex_core::guardian_review::ReviewerPreparation for BoundActorReview {
     fn prepare<'a>(
         &'a self,
         setup: &'a PreparedGuardianContext,
         cancel: &'a CancellationToken,
     ) -> codex_extension_api::ExtensionFuture<
         'a,
-        Result<Box<dyn codex_core::guardian_review::PreparedAssessment>, ReviewPreparationError>,
+        Result<Box<dyn PreparedAssessment>, ReviewPreparationError>,
     > {
         Box::pin(async move {
-            let prepare = async {
-                let manager = self
-                    .actor
-                    .manager
-                    .upgrade()
-                    .ok_or(ReviewPreparationError::ReviewerUnavailable)?;
-                let root = manager
-                    .get_thread(self.actor.root)
-                    .await
-                    .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
-                let evidence = root
-                    .thread_extension_data()
-                    .get::<RootEvidence>()
-                    .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
-                let initial = self.initial.lock().await.take();
-                let cutoff = if let Some(initial) = initial {
-                    let initial = initial.await.map_err(|_| evidence.cutoff_error())?;
-                    if !Arc::ptr_eq(&initial.evidence, &evidence) {
-                        return Err(ReviewPreparationError::EvidenceUnavailable);
-                    }
-                    // Authorization may also advance between binding and routing the first attempt.
-                    (root_revisions(&root).await == initial.revisions).then_some(initial.position)
-                } else {
-                    None
-                };
-                let ready = evidence
-                    .request_through(cutoff)
-                    .await
-                    .map_err(|_| evidence.cutoff_error())?;
-                ready
-                    .await
-                    .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
-                let reviewer = self.actor.reserve(&evidence, setup, cancel).await?;
-                Ok(Box::new(reviewer) as Box<dyn codex_core::guardian_review::PreparedAssessment>)
-            };
-            tokio::select! {
-                biased;
-                _ = self.actor.lifetime.cancellation.cancelled() => Err(ReviewPreparationError::Cancelled),
-                _ = cancel.cancelled() => Err(ReviewPreparationError::Cancelled),
-                _ = setup.history_reset.cancelled() => Err(ReviewPreparationError::Cancelled),
-                result = prepare => result,
-            }
+            let reviewer = self.reserve(setup, cancel).await?;
+            Ok(Box::new(reviewer) as Box<dyn PreparedAssessment>)
         })
     }
 }
 
-impl codex_core::guardian_review::PreparedAssessment for PreparedReviewer {
+impl PreparedAssessment for PreparedReviewer {
     fn runtime(&self) -> &codex_core::guardian_review::GuardianReviewSession {
         &self.conversation.runtime
     }
