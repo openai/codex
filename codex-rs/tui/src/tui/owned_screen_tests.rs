@@ -205,9 +205,10 @@ async fn owned_screen_lifecycle_child() {
     assert_eq!(tui.terminal.viewport_area, Rect { y: 0, ..inline });
 
     // A fresh fullscreen launch defers terminal entry until its first frame.
-    tui.terminal.tmux_kitty_image_base = Some(0x80_0100);
-    let support =
-        crate::pets::PetImageSupport::Unsupported(crate::pets::PetImageUnsupportedReason::Tmux);
+    tui.terminal.virtual_image_base = Some(0x80_0100);
+    let support = crate::pets::PetImageSupport::Unsupported(
+        crate::pets::PetImageUnsupportedReason::RequiresVirtualPlacement,
+    );
     tui.prepare_owned_screen(/*owned*/ true)
         .expect("prepare fullscreen");
     assert_eq!(support.protocol(), Some(crate::pets::ImageProtocol::Kitty));

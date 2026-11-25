@@ -143,7 +143,7 @@ impl TranscriptImage {
                 } else {
                     400
                 };
-                let max_height = if crate::tui::tmux_fullscreen_image_base().is_some() {
+                let max_height = if crate::tui::fullscreen_virtual_image_base().is_some() {
                     6 * cell_height
                 } else {
                     400

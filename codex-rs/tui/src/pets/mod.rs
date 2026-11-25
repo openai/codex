@@ -178,7 +178,7 @@ fn render_pet_image(
         return Ok(());
     };
 
-    let pane_base = crate::tui::tmux_fullscreen_image_base();
+    let pane_base = crate::tui::fullscreen_virtual_image_base();
     let image_id = pane_base.map_or(image_id, |base| base + pane_slot);
     let placement = if pane_base.is_some() {
         KittyPlacement::Virtual(image_id)

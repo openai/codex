@@ -12,7 +12,7 @@ fn force_pet_image_support(chat: &mut ChatWidget) {
 
 fn force_tmux_pet_image_unsupported(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
-        crate::pets::PetImageUnsupportedReason::Tmux,
+        crate::pets::PetImageUnsupportedReason::RequiresVirtualPlacement,
     ));
 }
 
@@ -24,7 +24,7 @@ fn force_terminal_pet_image_unsupported(chat: &mut ChatWidget) {
 
 fn force_old_iterm2_pet_image_unsupported(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
-        crate::pets::PetImageUnsupportedReason::Iterm2TooOld,
+        crate::pets::PetImageUnsupportedReason::UpgradeRequired,
     ));
 }
 

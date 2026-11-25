@@ -88,7 +88,7 @@ impl SidebarImage {
         let available_rows = area.height.saturating_sub(1 + u16::from(area.height > 2));
         // tmux uses Kitty's virtual placements. The shared placeholder renderer
         // currently emits row marks for up to six rows.
-        let rows = if crate::tui::tmux_fullscreen_image_base().is_some() {
+        let rows = if crate::tui::fullscreen_virtual_image_base().is_some() {
             available_rows.min(6)
         } else {
             available_rows

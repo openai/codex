@@ -1,7 +1,6 @@
 #![cfg(test)]
 use super::*;
 use serial_test::serial;
-
 pub(crate) struct EnvVarGuard {
     name: &'static str,
     previous: Option<std::ffi::OsString>,
@@ -36,7 +35,7 @@ fn pet_image_support_prefers_multiplexer_safety() {
             Some("Ghostty"),
             /*term*/ None,
         )),
-        PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux)
+        PetImageSupport::Unsupported(PetImageUnsupportedReason::RequiresVirtualPlacement)
     );
     assert_eq!(
         pet_image_support_for_terminal(&terminal_info_for_test(
@@ -45,7 +44,7 @@ fn pet_image_support_prefers_multiplexer_safety() {
             Some("kitty"),
             /*term*/ None,
         )),
-        PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij)
+        PetImageSupport::Unsupported(PetImageUnsupportedReason::UnsafePanePlacement)
     );
 }
 
@@ -101,15 +100,15 @@ fn pet_image_support_rejects_old_iterm2_versions() {
     ] {
         assert_eq!(
             pet_image_support_for_terminal(&info),
-            PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld)
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::UpgradeRequired)
         );
     }
 }
 
 #[test]
 fn pet_image_support_old_iterm2_message_mentions_upgrade() {
-    let message =
-        PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld).unsupported_message();
+    let message = PetImageSupport::Unsupported(PetImageUnsupportedReason::UpgradeRequired)
+        .unsupported_message();
 
     assert_eq!(
         message,

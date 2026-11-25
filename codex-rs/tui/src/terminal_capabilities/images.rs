@@ -1,9 +1,22 @@
 //! Detects image protocols and placement support, including fullscreen-only virtual placements.
+use crate::tui::fullscreen_virtual_image_base;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use std::env;
+
+/// Some implementations discard pixel data when the placement is removed.
+pub(crate) fn retains_image_data() -> bool {
+    terminal_info().name != TerminalName::Iterm2
+}
+
+impl ImageProtocol {
+    /// File-backed placements and Sixel pixels can scroll with inserted history.
+    pub(crate) fn survives_history_insertion(self) -> bool {
+        self == Self::Kitty
+    }
+}
 
 const ITERM2_KITTY_MIN_VERSION: (u64, u64, u64) = (3, 6, 0);
 
@@ -24,8 +37,8 @@ impl PetImageSupport {
     pub(crate) fn protocol(self) -> Option<ImageProtocol> {
         match self {
             Self::Supported(protocol) => Some(protocol),
-            Self::Unsupported(PetImageUnsupportedReason::Tmux) => {
-                crate::tui::tmux_fullscreen_image_base().map(|_| ImageProtocol::Kitty)
+            Self::Unsupported(PetImageUnsupportedReason::RequiresVirtualPlacement) => {
+                fullscreen_virtual_image_base().map(|_| ImageProtocol::Kitty)
             }
             Self::Unsupported(_) => None,
         }
@@ -41,22 +54,22 @@ impl PetImageSupport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PetImageUnsupportedReason {
-    Tmux,
-    Zellij,
-    Iterm2TooOld,
+    RequiresVirtualPlacement,
+    UnsafePanePlacement,
+    UpgradeRequired,
     Terminal,
 }
 
 impl PetImageUnsupportedReason {
     fn message(self) -> &'static str {
         match self {
-            Self::Tmux => {
+            Self::RequiresVirtualPlacement => {
                 "Pets are unavailable in this tmux pane. Use fullscreen Codex with allow-passthrough all, or run Codex outside tmux."
             }
-            Self::Zellij => {
+            Self::UnsafePanePlacement => {
                 "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
             }
-            Self::Iterm2TooOld => {
+            Self::UpgradeRequired => {
                 "Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets."
             }
             Self::Terminal => {
@@ -67,18 +80,23 @@ impl PetImageUnsupportedReason {
 }
 
 pub(crate) fn detect_pet_image_support() -> PetImageSupport {
-    if env::var_os("TMUX").is_some() || env::var_os("TMUX_PANE").is_some() {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
+    if super::is_tmux_session() {
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::RequiresVirtualPlacement);
     }
 
-    if env::var_os("ZELLIJ").is_some()
-        || env::var_os("ZELLIJ_SESSION_NAME").is_some()
-        || env::var_os("ZELLIJ_VERSION").is_some()
-    {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
+    if super::zellij_session() {
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::UnsafePanePlacement);
     }
 
     image_support_for_terminal_environment(&terminal_info())
+}
+
+pub(crate) fn wrap_graphics_command(command: &str) -> String {
+    if !super::tmux_transport() {
+        return command.to_string();
+    }
+
+    super::escaped_dcs(command)
 }
 
 fn image_support_for_terminal_environment(info: &TerminalInfo) -> PetImageSupport {
@@ -87,7 +105,7 @@ fn image_support_for_terminal_environment(info: &TerminalInfo) -> PetImageSuppor
             info,
             env::var("ORCA_IMAGE_PROTOCOL").ok().as_deref(),
             env::var("TERM").ok().as_deref(),
-            /*sty_present*/ env::var_os("STY").is_some(),
+            /*sty_present*/ super::screen_active(),
         ) {
             PetImageSupport::Supported(ImageProtocol::Kitty)
         } else {
@@ -123,10 +141,12 @@ fn supports_orca_kitty_graphics(
 fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
     match info.multiplexer {
         Some(Multiplexer::Tmux { .. }) => {
-            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
+            return PetImageSupport::Unsupported(
+                PetImageUnsupportedReason::RequiresVirtualPlacement,
+            );
         }
         Some(Multiplexer::Zellij { .. }) => {
-            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
+            return PetImageSupport::Unsupported(PetImageUnsupportedReason::UnsafePanePlacement);
         }
         None => {}
     }
@@ -136,7 +156,7 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
     }
 
     if is_iterm2_terminal(info) {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld);
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::UpgradeRequired);
     }
 
     if supports_kitty_graphics(info) {

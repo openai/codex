@@ -594,7 +594,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
     let mut tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
-    tui.tmux_kitty_image_base = session.virtual_image_base();
+    tui.virtual_image_base = session.virtual_image_base();
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     let initialized_terminal = InitializedTerminal {
         terminal: tui,
@@ -701,10 +701,10 @@ impl MouseCapture {
 }
 
 // Zero denotes scrollback mode or a pane without Kitty passthrough.
-static TMUX_FULLSCREEN_IMAGE_BASE: AtomicU32 = AtomicU32::new(0);
+static FULLSCREEN_VIRTUAL_IMAGE_BASE: AtomicU32 = AtomicU32::new(0);
 
-pub(crate) fn tmux_fullscreen_image_base() -> Option<u32> {
-    std::num::NonZeroU32::new(TMUX_FULLSCREEN_IMAGE_BASE.load(Ordering::Relaxed))
+pub(crate) fn fullscreen_virtual_image_base() -> Option<u32> {
+    std::num::NonZeroU32::new(FULLSCREEN_VIRTUAL_IMAGE_BASE.load(Ordering::Relaxed))
         .map(std::num::NonZeroU32::get)
 }
 
@@ -840,9 +840,9 @@ impl Tui {
 
     fn record_owned_screen(&mut self, owned: bool) {
         self.owned_screen = owned;
-        TMUX_FULLSCREEN_IMAGE_BASE.store(
+        FULLSCREEN_VIRTUAL_IMAGE_BASE.store(
             if owned {
-                self.terminal.tmux_kitty_image_base.unwrap_or_default()
+                self.terminal.virtual_image_base.unwrap_or_default()
             } else {
                 0
             },
@@ -1453,17 +1453,16 @@ impl Tui {
             let viewport = terminal.viewport_area;
             // Standard insertion scrolls only above a bottom-aligned viewport when there
             // are at least two history rows (the minimum for a DEC scroll region).
-            let preserves_direct_kitty = mode == InsertHistoryMode::Standard
+            let preserves_viewport = mode == InsertHistoryMode::Standard
                 && viewport.top() > 1
                 && viewport.bottom() == screen_size.height
                 && screen_size == terminal.last_known_screen_size
-                && terminal.tmux_kitty_image_base.is_none();
+                && terminal.virtual_image_base.is_none();
             if retained_images.iter().any(|placement| {
-                !preserves_direct_kitty
-                    || placement.image.protocol != crate::pets::ImageProtocol::Kitty
+                !preserves_viewport
+                    || !placement.image.protocol.survives_history_insertion()
                     || placement.area.intersection(viewport) != placement.area
             }) {
-                // iTerm2's file-backed images and Sixel pixels can scroll with history.
                 terminal.clear_frame_images(retained_images)?;
             }
 
