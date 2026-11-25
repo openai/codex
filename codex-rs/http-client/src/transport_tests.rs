@@ -126,3 +126,27 @@ impl Write for TestLogWriter {
         Ok(())
     }
 }
+
+#[test]
+fn omitted_body_stays_out_of_logs_after_enrichment_and_compression()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut body = crate::EncodedJsonBody::encode(&json!({"secret": "body-marker"}))?;
+    body.omit_from_logs();
+    let enriched =
+        body.with_private_json(json!({"secret": "body-marker", "extra": true}).to_string());
+    for body in [body, enriched] {
+        let expected = body.shared_bytes().clone();
+        let mut req = Request::new(Method::POST, "https://example.com".into())
+            .with_compression(crate::RequestCompression::Zstd);
+        req.body = Some(RequestBody::EncodedJson(body));
+        let prepared = req.clone().into_prepared()?;
+        for req in [&req, &prepared] {
+            pretty_assertions::assert_eq!(request_body_for_trace(req), "<redacted>");
+            assert!(!format!("{req:?}").contains("body-marker"));
+        }
+        let wire = prepared.prepare_wire_body()?;
+        let bytes = zstd::stream::decode_all(wire.body.as_deref().expect("wire body"))?;
+        pretty_assertions::assert_eq!(bytes.as_slice(), expected.as_ref());
+    }
+    Ok(())
+}

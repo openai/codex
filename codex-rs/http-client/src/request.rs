@@ -18,12 +18,13 @@ pub struct EncodedJsonBody {
     trace_bytes: Option<Bytes>,
     prepared: bool,
     private: bool,
+    omit_from_logs: bool,
 }
 
 impl fmt::Debug for EncodedJsonBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut body = f.debug_struct("EncodedJsonBody");
-        if self.private {
+        if self.private || self.omit_from_logs {
             return body
                 .field("byte_len", &self.bytes.len())
                 .finish_non_exhaustive();
@@ -43,6 +44,7 @@ impl EncodedJsonBody {
             trace_bytes: None,
             prepared: false,
             private: false,
+            omit_from_logs: false,
         })
     }
 
@@ -63,10 +65,19 @@ impl EncodedJsonBody {
             trace_bytes: Some(self.bytes.clone()),
             prepared: false,
             private: true,
+            omit_from_logs: self.omit_from_logs,
         }
     }
 
+    /// Suppress body diagnostics without changing the wire bytes or redirect policy.
+    pub fn omit_from_logs(&mut self) {
+        self.omit_from_logs = true;
+    }
+
     pub(crate) fn trace_bytes(&self) -> &[u8] {
+        if self.omit_from_logs {
+            return b"<redacted>";
+        }
         self.trace_bytes.as_ref().unwrap_or(&self.bytes)
     }
 }
@@ -158,6 +169,8 @@ impl Request {
             self.body,
             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
         );
+        let omit_from_logs =
+            matches!(&self.body, Some(RequestBody::EncodedJson(body)) if body.omit_from_logs);
         let private_trace = match &self.body {
             Some(RequestBody::EncodedJson(body)) if body.private => body.trace_bytes.clone(),
             _ => None,
@@ -165,7 +178,8 @@ impl Request {
         let private = private_trace.is_some();
         let trace_bytes = if private {
             private_trace
-        } else if self.compression != RequestCompression::None
+        } else if !omit_from_logs
+            && self.compression != RequestCompression::None
             && tracing::enabled!(target: "codex_http_client::transport", tracing::Level::TRACE)
         {
             match self.body.as_ref() {
@@ -186,6 +200,7 @@ impl Request {
                 trace_bytes,
                 prepared: true,
                 private,
+                omit_from_logs,
             })),
             (false, Some(body)) => Some(RequestBody::Raw(body)),
             (_, None) => None,
