@@ -46,12 +46,7 @@ pub use cli::Cli;
 /// * `path`  – Path to the matched entry (file or directory), relative to the
 ///   search directory.
 /// * `match_type` – Whether this match is a file or directory.
-/// * `indices` – Optional list of character indices that matched the query.
-///   These are only filled when the caller of [`run`] sets
-///   `options.compute_indices` to `true`. The indices vector follows the
-///   guidance from `nucleo::pattern::Pattern::indices`: they are
-///   unique and sorted in ascending order so that callers can use
-///   them directly for highlighting.
+/// * `indices` – Sorted, unique offsets into `path` in the requested [`IndexUnit`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FileMatch {
     pub score: u32,
@@ -114,12 +109,21 @@ pub struct FileSearchSnapshot {
     pub walk_complete: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexUnit {
+    /// One position per matched grapheme, as used by the app-server protocol.
+    Grapheme,
+    /// Every Unicode scalar in each matched grapheme, for terminal highlighting.
+    Scalar,
+}
+
 #[derive(Debug, Clone)]
 pub struct FileSearchOptions {
     pub limit: NonZero<usize>,
     pub exclude: Vec<String>,
     pub threads: NonZero<usize>,
-    pub compute_indices: bool,
+    /// Omit highlight indices when unset.
+    pub index_unit: Option<IndexUnit>,
     /// Toggle ignore-file processing in the walker.
     ///
     /// When enabled, `.gitignore` files are scoped by
@@ -138,7 +142,7 @@ impl Default for FileSearchOptions {
             exclude: Vec::new(),
             #[expect(clippy::unwrap_used)]
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         }
     }
@@ -183,7 +187,7 @@ pub fn create_session(
         limit,
         exclude,
         threads,
-        compute_indices,
+        index_unit,
         respect_gitignore,
     } = options;
 
@@ -211,7 +215,7 @@ pub fn create_session(
         search_directories,
         limit: limit.get(),
         threads: threads.get(),
-        compute_indices,
+        index_unit,
         respect_gitignore,
         cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
@@ -286,7 +290,7 @@ pub async fn run_main<T: Reporter>(
             limit,
             exclude,
             threads,
-            compute_indices,
+            index_unit: compute_indices.then_some(IndexUnit::Scalar),
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -364,7 +368,7 @@ struct SessionInner {
     search_directories: Vec<PathBuf>,
     limit: usize,
     threads: usize,
-    compute_indices: bool,
+    index_unit: Option<IndexUnit>,
     respect_gitignore: bool,
     cancelled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,

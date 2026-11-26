@@ -83,7 +83,7 @@ impl FileSearchManager {
         let session = file_search::create_session(
             vec![self.search_dir.clone()],
             file_search::FileSearchOptions {
-                compute_indices: true,
+                index_unit: Some(file_search::IndexUnit::Scalar),
                 ..Default::default()
             },
             reporter,

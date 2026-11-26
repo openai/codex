@@ -2,6 +2,7 @@
 
 use crate::FileMatch;
 use crate::FileSearchSnapshot;
+use crate::IndexUnit;
 use crate::IndexedEntry;
 use crate::MatchType;
 use crate::SessionInner;
@@ -16,6 +17,7 @@ use std::collections::BinaryHeap;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use unicode_segmentation::UnicodeSegmentation;
 
 // A single Nucleo atom returns a u16. Leave room for its full score within each group.
 const NAME_BONUS: u32 = u16::MAX as u32 + 1;
@@ -174,7 +176,7 @@ fn collect(
                     entry.match_type,
                 ),
             };
-            let indices = if inner.compute_indices {
+            let indices = inner.index_unit.map(|unit| {
                 let mut indices = Vec::<u32>::new();
                 let path = item.matcher_columns[0].slice(..);
                 let haystack = if matched_name { basename(path) } else { path };
@@ -184,10 +186,24 @@ fn collect(
                 }
                 indices.sort_unstable();
                 indices.dedup();
-                Some(indices)
-            } else {
-                None
-            };
+                // Nucleo indexes graphemes. Highlight entire graphemes in the original path.
+                if unit == IndexUnit::Scalar
+                    && matches!(item.data, IndexedEntry::Unicode(_))
+                    && path.len() != relative_path.chars().count()
+                {
+                    let mut matches = indices.into_iter().peekable();
+                    indices = Vec::new();
+                    let mut start = 0;
+                    for (i, grapheme) in relative_path.graphemes(/*is_extended*/ true).enumerate() {
+                        let end = start + grapheme.chars().count() as u32;
+                        if matches.next_if_eq(&(i as u32)).is_some() {
+                            indices.extend(start..end);
+                        }
+                        start = end;
+                    }
+                }
+                indices
+            });
             Some(FileMatch {
                 score: match_.score,
                 path: PathBuf::from(relative_path),

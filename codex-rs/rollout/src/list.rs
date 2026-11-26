@@ -1364,7 +1364,6 @@ async fn find_thread_path_by_id_str_in_subdir(
             let limit = NonZero::new(1).unwrap();
             let options = file_search::FileSearchOptions {
                 limit,
-                compute_indices: false,
                 respect_gitignore: false,
                 ..Default::default()
             };

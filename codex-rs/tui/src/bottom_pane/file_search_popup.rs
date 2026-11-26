@@ -216,24 +216,26 @@ mod tests {
                 .into_iter()
                 .map(|name| parent.join(name))
                 .collect();
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join(&parent)).unwrap();
+            for path in &paths {
+                std::fs::write(root.path().join(path), "").unwrap();
+            }
+            let mut matches = codex_file_search::run(
+                "parser",
+                vec![root.path().to_path_buf()],
+                codex_file_search::FileSearchOptions {
+                    index_unit: Some(codex_file_search::IndexUnit::Scalar),
+                    ..Default::default()
+                },
+                /*cancel_flag*/ None,
+            )
+            .unwrap()
+            .matches;
+            matches.sort_by(|a, b| a.path.cmp(&b.path));
             let mut popup = FileSearchPopup::new();
             popup.set_query("parser");
-            popup.set_matches(
-                "parser",
-                paths
-                    .iter()
-                    .enumerate()
-                    .map(|(index, path)| {
-                        let mut matched = file_match(index);
-                        matched.path = path.clone();
-                        matched.indices =
-                            fuzzy_match(&path.to_string_lossy(), "parser").map(|(indices, _)| {
-                                indices.into_iter().map(|index| index as u32).collect()
-                            });
-                        matched
-                    })
-                    .collect(),
-            );
+            popup.set_matches("parser", matches);
             for (selected, path) in paths.iter().enumerate() {
                 for width in [28, 40, 80] {
                     let area = Rect::new(
@@ -262,18 +264,12 @@ mod tests {
                     );
                     assert_eq!(popup.selected_match().map(|m| &m.path), Some(path));
                     let unselected_y = if selected == 0 { 2 } else { 1 };
-                    let parser_x = (0..width.saturating_sub(/*rhs*/ 5))
-                        .find(|&x| {
-                            (x..x + 6)
-                                .map(|column| buf[(column, unselected_y)].symbol())
-                                .eq(["p", "a", "r", "s", "e", "r"])
-                        })
-                        .expect("visible filename match");
-                    assert!(
-                        buf[(parser_x, unselected_y)]
-                            .modifier
-                            .contains(ratatui::style::Modifier::BOLD)
-                    );
+                    let highlighted: String = (0..width)
+                        .map(|x| &buf[(x, unselected_y)])
+                        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::BOLD))
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect();
+                    assert_eq!(highlighted, "parser");
                     if selected == 0 {
                         snapshots.push(format!("{components:?}, width {width}\n{text}"));
                     }

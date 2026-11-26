@@ -33,7 +33,7 @@ fn query_update_does_not_relabel_pending_matches() {
         search_directories: vec![root.path().to_path_buf()],
         limit: 50,
         threads: 1,
-        compute_indices: true,
+        index_unit: Some(IndexUnit::Scalar),
         respect_gitignore: true,
         cancelled: Arc::new(AtomicBool::new(false)),
         shutdown: Arc::new(AtomicBool::new(false)),

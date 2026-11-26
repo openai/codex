@@ -45,7 +45,7 @@ pub(crate) async fn run_fuzzy_file_search(
             file_search::FileSearchOptions {
                 limit,
                 threads,
-                compute_indices: true,
+                index_unit: Some(file_search::IndexUnit::Grapheme),
                 ..Default::default()
             },
             Some(cancellation_flag),
@@ -147,7 +147,7 @@ pub(crate) fn start_fuzzy_file_search_session(
         file_search::FileSearchOptions {
             limit,
             threads,
-            compute_indices: true,
+            index_unit: Some(file_search::IndexUnit::Grapheme),
             ..Default::default()
         },
         reporter,

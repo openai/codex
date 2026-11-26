@@ -184,7 +184,7 @@ fn fuzzy_matches_preserve_graphemes_when_truncated() {
             path: path.into(),
             full_path: path.into(),
         },
-        match_indices: Some(vec![0, 1]),
+        match_indices: Some(vec![0, 1, 2, 3]),
         score: 0,
     };
     let mut rendered = Vec::new();
@@ -206,6 +206,34 @@ fn fuzzy_matches_preserve_graphemes_when_truncated() {
     👩‍💻…  Plugin
     f  👩‍💻a…  File
     ");
+}
+
+#[test]
+fn parent_path_highlight_after_joined_emoji() {
+    let path = "👩‍💻notes/report_beta.rs";
+    let row = SearchResult {
+        display_name: path.to_string(),
+        description: None,
+        mention_type: MentionType::File,
+        label_style: ThreadLabelStyle::Plain,
+        selection: Selection::File {
+            path: path.into(),
+            full_path: path.into(),
+        },
+        match_indices: Some((3..12).collect()),
+        score: 0,
+    };
+    let mut buffer = Buffer::empty(Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 1,
+    ));
+    render_rows(buffer.area, &mut buffer, &[row], &ScrollState::new(), "");
+    let bold: String = buffer
+        .content
+        .iter()
+        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::BOLD))
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    insta::assert_snapshot!(bold, @"notes/");
 }
 
 #[test]

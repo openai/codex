@@ -289,36 +289,21 @@ fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
         MentionType::File | MentionType::Directory => base_style,
     };
     if let Some(indices) = row.match_indices.as_ref() {
-        highlighted_spans(
-            &row.display_name,
-            indices,
-            name_style,
-            MatchIndexUnit::Scalar,
-        )
-        .collect()
+        highlighted_spans(&row.display_name, indices, name_style).collect()
     } else {
         vec![row.display_name.clone().set_style(name_style)]
     }
-}
-
-enum MatchIndexUnit {
-    Scalar,
-    Grapheme,
 }
 
 fn highlighted_spans<'a>(
     text: &'a str,
     indices: &'a [usize],
     style: Style,
-    unit: MatchIndexUnit,
 ) -> impl Iterator<Item = Span<'static>> + 'a {
     let mut indices = indices.iter().peekable();
     let mut index_end = 0;
     text.graphemes(/*is_extended*/ true).map(move |grapheme| {
-        index_end += match unit {
-            MatchIndexUnit::Scalar => grapheme.chars().count(),
-            MatchIndexUnit::Grapheme => 1,
-        };
+        index_end += grapheme.chars().count();
         let mut matched = false;
         while indices.next_if(|index| **index < index_end).is_some() {
             matched = true;
@@ -368,12 +353,7 @@ fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
             .unwrap_or(row.display_name.len());
         let path = &row.display_name[..byte_start];
         if let Some(indices) = row.match_indices.as_ref() {
-            spans.extend(highlighted_spans(
-                path,
-                indices,
-                path_style,
-                MatchIndexUnit::Grapheme,
-            ));
+            spans.extend(highlighted_spans(path, indices, path_style));
         } else {
             spans.push(path.to_string().set_style(path_style));
         }

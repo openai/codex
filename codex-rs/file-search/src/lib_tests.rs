@@ -92,6 +92,35 @@ fn matching_filenames_survive_the_path_result_limit() {
 }
 
 #[test]
+fn highlights_use_scalar_offsets_for_basename_and_full_path_matches() {
+    let root = TempDir::new().unwrap();
+    let parent = Path::new("e\u{301}");
+    let path = parent.join("👩‍💻target.txt");
+    fs::create_dir(root.path().join(parent)).unwrap();
+    fs::write(root.path().join(&path), "").unwrap();
+
+    for (query, expected) in [
+        ("target", vec![6, 7, 8, 9, 10, 11]),
+        ("e👩t", vec![0, 1, 3, 4, 5, 6]),
+    ] {
+        let result = run(
+            query,
+            vec![root.path().to_path_buf()],
+            FileSearchOptions {
+                index_unit: Some(IndexUnit::Scalar),
+                ..Default::default()
+            },
+            /*cancel_flag*/ None,
+        )
+        .unwrap();
+        let [matched] = result.matches.as_slice() else {
+            panic!("expected one match for {query}");
+        };
+        assert_eq!((&matched.path, &matched.indices), (&path, &Some(expected)));
+    }
+}
+
+#[test]
 fn overlapping_roots_share_result_slots_by_path() {
     let dir = tempfile::tempdir().unwrap();
     let parent = dir.path().to_path_buf();
@@ -276,7 +305,7 @@ fn session_streams_updates_before_walk_complete() {
         search_directories: vec![dir.path().to_path_buf()],
         limit: 50,
         threads: 1,
-        compute_indices: false,
+        index_unit: None,
         respect_gitignore: true,
         cancelled: Arc::new(AtomicBool::new(false)),
         shutdown: Arc::new(AtomicBool::new(false)),
@@ -447,7 +476,7 @@ fn run_returns_matches_for_query() {
         limit: NonZero::new(20).unwrap(),
         exclude: Vec::new(),
         threads: NonZero::new(2).unwrap(),
-        compute_indices: false,
+        index_unit: None,
         respect_gitignore: true,
     };
     let results = run(
@@ -482,7 +511,7 @@ fn run_returns_directory_matches_for_query() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -523,7 +552,7 @@ fn cancel_exits_run() {
     let cancel_flag = Arc::new(AtomicBool::new(true));
     let search_dir = dir.path().to_path_buf();
     let options = FileSearchOptions {
-        compute_indices: false,
+        index_unit: None,
         ..Default::default()
     };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -572,7 +601,7 @@ fn parent_gitignore_outside_repo_does_not_hide_repo_files() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -592,7 +621,7 @@ fn parent_gitignore_outside_repo_does_not_hide_repo_files() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -636,7 +665,7 @@ fn git_repo_still_respects_local_gitignore_when_enabled() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -656,7 +685,7 @@ fn git_repo_still_respects_local_gitignore_when_enabled() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,
@@ -676,7 +705,7 @@ fn git_repo_still_respects_local_gitignore_when_enabled() {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
             threads: NonZero::new(2).unwrap(),
-            compute_indices: false,
+            index_unit: None,
             respect_gitignore: true,
         },
         /*cancel_flag*/ None,

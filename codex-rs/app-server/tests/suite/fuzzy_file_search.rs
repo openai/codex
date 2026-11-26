@@ -228,7 +228,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     std::fs::write(root.path().join("abcde"), "x")?;
     std::fs::write(root.path().join("abexy"), "x")?;
     std::fs::write(root.path().join("zzz.txt"), "x")?;
-    let sub_dir = root.path().join("sub");
+    let sub_dir = root.path().join("👩‍💻");
     std::fs::create_dir_all(&sub_dir)?;
     let sub_abce_path = sub_dir.join("abce");
     std::fs::write(&sub_abce_path, "x")?;
@@ -283,7 +283,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "match_type": "file",
                     "file_name": "abce",
                     "score": filename_bonus + 72,
-                    "indices": [4, 5, 7],
+                    "indices": [2, 3, 5],
                 },
                 {
                     "root": root_path.clone(),
@@ -356,7 +356,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     let codex_home = TempDir::new()?;
     let root = TempDir::new()?;
-    std::fs::write(root.path().join("alpha.txt"), "contents")?;
+    std::fs::write(root.path().join("👩‍💻alpha.txt"), "contents")?;
     let mut mcp = initialized_mcp(&codex_home).await?;
 
     let root_path = root.path().to_string_lossy().to_string();
@@ -371,7 +371,8 @@ async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
         wait_for_session_updated(&mut mcp, session_id, "alp", FileExpectation::NonEmpty).await?;
     assert_eq!(payload.files.len(), 1);
     assert_eq!(payload.files[0].root, root_path);
-    assert_eq!(payload.files[0].path, "alpha.txt");
+    assert_eq!(payload.files[0].path, "👩‍💻alpha.txt");
+    assert_eq!(payload.files[0].indices, Some(vec![1, 2, 3]));
     let completed = wait_for_session_completed(&mut mcp, session_id).await?;
     assert_eq!(completed.session_id, session_id);
 
