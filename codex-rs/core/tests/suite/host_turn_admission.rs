@@ -17,7 +17,11 @@ use codex_core::SuspendTurnOutcome;
 use codex_core::TurnAdmissionState;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
+use codex_extension_api::TurnStartPhase;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -100,7 +104,40 @@ impl AgentTurnAdmission for HostAdmission {
 }
 
 #[derive(Default)]
-struct PendingRosterRead(Notify);
+struct PendingRosterRead {
+    turn_start_entered: Notify,
+    roster_read_entered: Notify,
+}
+
+impl TurnLifecycleContributor for PendingRosterRead {
+    fn turn_start_phase(&self, _: &ExtensionData) -> TurnStartPhase {
+        TurnStartPhase::RegularTaskStart
+    }
+
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let thread = input
+                .thread_store
+                .get::<std::sync::Weak<CodexThread>>()
+                .expect("hosted thread")
+                .upgrade()
+                .expect("running thread");
+            // Finish this poll after suspension detaches the task, so startup reaches
+            // the initial input handoff instead of taking the early cancellation path.
+            tokio::task::block_in_place(|| {
+                self.turn_start_entered.notify_one();
+                let detached = async {
+                    while thread.has_active_turn().await {
+                        tokio::task::yield_now().await;
+                    }
+                };
+                tokio::runtime::Handle::current()
+                    .block_on(tokio::time::timeout(Duration::from_secs(10), detached))
+                    .expect("suspension must detach the active task");
+            });
+        })
+    }
+}
 
 impl AgentSessionReader for PendingRosterRead {
     fn root(&self) -> BoxFuture<'_, CodexResult<AgentRef>> {
@@ -113,7 +150,7 @@ impl AgentSessionReader for PendingRosterRead {
 
     fn children(&self) -> BoxFuture<'_, CodexResult<Vec<AgentRef>>> {
         Box::pin(async {
-            self.0.notify_one();
+            self.roster_read_entered.notify_one();
             std::future::pending().await
         })
     }
@@ -560,8 +597,12 @@ async fn tree_suspension_leaves_an_ephemeral_turn_running() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(/*before_roster*/ true; "before roster preparation")]
+#[test_case::test_case(/*before_roster*/ false; "during roster read")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn suspending_root_during_roster_read_preserves_the_recoverable_prompt() -> Result<()> {
+async fn suspending_root_with_host_roster_preserves_the_recoverable_prompt(
+    before_roster: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let builder = test_codex().with_config(|config| {
@@ -571,11 +612,24 @@ async fn suspending_root_during_roster_read_preserves_the_recoverable_prompt() -
             .expect("enable multi-agent V2");
     });
     let roster = Arc::new(PendingRosterRead::default());
+    let (builder, entered) = if before_roster {
+        let mut extensions = ExtensionRegistryBuilder::new();
+        extensions.turn_lifecycle_contributor(roster.clone());
+        (
+            builder.with_extensions(Arc::new(extensions.build())),
+            &roster.turn_start_entered,
+        )
+    } else {
+        (builder, &roster.roster_read_entered)
+    };
     let (test, mut attempts) = root_with_admission(&server, builder, Some(roster.clone())).await?;
+    test.codex
+        .thread_extension_data()
+        .insert(Arc::downgrade(&test.codex));
     let prompt = "Save this admitted prompt across handoff.";
     let (turn_id, grant) = start(&test, &mut attempts, prompt).await?;
     assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
-    tokio::time::timeout(Duration::from_secs(10), roster.0.notified()).await?;
+    tokio::time::timeout(Duration::from_secs(10), entered.notified()).await?;
     suspend_and_check_recoverable_prompt(&test, &server, turn_id, prompt).await
 }
 
@@ -612,7 +666,11 @@ async fn repro_16086_context_only_host_handoff() -> Result<()> {
         .context("admission provider dropped")?;
     assert_eq!(request.turn_id, turn_id);
     assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
-    tokio::time::timeout(Duration::from_secs(10), roster.0.notified()).await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        roster.roster_read_entered.notified(),
+    )
+    .await?;
 
     assert_eq!(
         test.codex.suspend_turn_and_shutdown().await?,
