@@ -54,7 +54,7 @@ pub(super) struct InstallationsTool {
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for InstallationsTool {
+impl ToolExecutor for InstallationsTool {
     fn tool_name(&self) -> ToolName {
         skill_tool_name(TOOL_NAME)
     }
@@ -70,10 +70,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for InstallationsTool {
         )
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let mut outcome = "internal_error";
             let mut source_filter = "unparsed";

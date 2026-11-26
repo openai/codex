@@ -98,12 +98,25 @@ impl ToolExposure {
     }
 }
 
+/// Selects the input a tool receives for the lifetime of one call.
+/// Keeping the associated type here lets `ToolExecutor` remain dyn-compatible.
+pub trait ToolInput {
+    type Call<'a>: 'a;
+}
+
+/// Extension tools borrow host capabilities for the duration of the call.
+pub enum BorrowedToolCall {}
+
+impl ToolInput for BorrowedToolCall {
+    type Call<'a> = crate::ToolCall<'a>;
+}
+
 /// Shared runtime contract for model-visible tools.
 ///
 /// Implementations keep the model-visible spec tied to the executable runtime.
 /// Host crates can layer routing, hooks, telemetry, or other orchestration on
 /// top without reopening the spec/runtime split.
-pub trait ToolExecutor<Invocation>: Send + Sync {
+pub trait ToolExecutor<Input: ToolInput = BorrowedToolCall>: Send + Sync {
     /// The concrete tool name handled by this runtime instance.
     fn tool_name(&self) -> ToolName;
 
@@ -133,7 +146,5 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
     }
 
     /// Handles one invocation without retaining capabilities borrowed by the host.
-    fn handle<'a>(&'a self, invocation: Invocation) -> ToolExecutorFuture<'a>
-    where
-        Invocation: 'a;
+    fn handle<'a>(&'a self, invocation: Input::Call<'a>) -> ToolExecutorFuture<'a>;
 }

@@ -39,7 +39,7 @@ impl CopyFileArgs {
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for CopyFileTool {
+impl ToolExecutor for CopyFileTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_NAME)
     }
@@ -107,10 +107,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for CopyFileTool {
         ])
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> codex_tools::ToolExecutorFuture<'a> {
         Box::pin(async move {
             let args = CopyFileArgs::parse(call.function_arguments()?)?;
             let [source, target] = call.environments.as_slice() else {

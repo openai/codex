@@ -2998,12 +2998,12 @@ impl ToolContributor for SettingsEcho {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         vec![Arc::new(self.clone())]
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
+impl ToolExecutor for SettingsEcho {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("extension_settings")
     }
@@ -3019,10 +3019,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
         })
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             *self.history.lock().expect("history lock") = Some(call.conversation_history);
             let metadata: Value = serde_json::from_str(

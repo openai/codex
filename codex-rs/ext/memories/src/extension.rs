@@ -13,6 +13,7 @@ use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_features::Feature;
 use codex_otel::MetricsClient;
 use codex_protocol::MemoryVersion;
@@ -139,9 +140,7 @@ impl ToolContributor for MemoriesExtension {
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<
-        Arc<dyn for<'call> codex_extension_api::ToolExecutor<codex_extension_api::ToolCall<'call>>>,
-    > {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
             return Vec::new();
         };

@@ -18,7 +18,6 @@ use codex_extension_api::PromptSlot;
 use codex_extension_api::SkillInvocationContributor;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnInputContext;
@@ -282,7 +281,7 @@ where
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
         step_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         skill_tools(
             self.providers.clone(),
             session_store,

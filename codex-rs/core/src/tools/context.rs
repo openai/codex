@@ -130,6 +130,10 @@ pub struct ToolInvocation {
     pub(crate) environments: ToolEnvironments,
 }
 
+impl codex_tools::ToolInput for ToolInvocation {
+    type Call<'a> = Self;
+}
+
 /// Identity of the model call that started a tool invocation, retained across code-mode waits.
 #[derive(Clone)]
 pub(crate) struct ToolCallOrigin {

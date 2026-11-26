@@ -205,7 +205,7 @@ async fn strict_finalization_cannot_resurrect_hidden_or_policy_denied_tools() {
             ),
             mcp_runtime("denied", "mcp__denied", "lookup", ToolExposure::Direct),
         ],
-        std::iter::empty::<Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>>(),
+        std::iter::empty::<Arc<dyn ToolExecutor>>(),
         &[
             dynamic_tool(
                 /*namespace*/ None,

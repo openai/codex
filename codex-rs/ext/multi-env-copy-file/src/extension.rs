@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 
@@ -17,7 +16,7 @@ impl ToolContributor for FileCopyExtension {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         vec![Arc::new(CopyFileTool)]
     }
 }

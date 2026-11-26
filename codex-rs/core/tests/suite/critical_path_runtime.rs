@@ -63,12 +63,12 @@ impl ToolContributor for GatedTool {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         vec![Arc::new(self.clone())]
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for GatedTool {
+impl ToolExecutor for GatedTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(if matches!(self.admission, Admission::Unsupported) {
             "followup_task"
@@ -92,10 +92,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GatedTool {
         matches!(self.admission, Admission::Parallel)
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             self.entered
                 .send((call.call_id.to_string(), Instant::now()))

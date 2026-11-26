@@ -953,12 +953,12 @@ impl ToolContributor for DeferredCustomTool {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         vec![Arc::new(Self)]
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for DeferredCustomTool {
+impl ToolExecutor for DeferredCustomTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("custom_echo")
     }
@@ -980,10 +980,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for DeferredCustomTool {
         ToolExposure::Deferred
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let ToolPayload::Custom { input } = call.payload else {
                 return Err(FunctionCallError::Fatal(

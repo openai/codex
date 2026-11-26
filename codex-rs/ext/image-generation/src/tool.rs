@@ -140,7 +140,7 @@ fn extension_turn_item(item: ImageGenerationItem, legacy_event: EventMsg) -> Ext
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
+impl ToolExecutor for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
@@ -156,10 +156,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
     }
 
     /// Executes the selected image operation and returns the completed image result.
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> codex_extension_api::ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> codex_extension_api::ToolExecutorFuture<'a> {
         Box::pin(self.handle_call(call))
     }
 }

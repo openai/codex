@@ -8,7 +8,6 @@ use std::sync::Weak;
 use codex_core::CodexThread;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnLifecycleContributor;
@@ -19,7 +18,7 @@ pub(super) struct ConversationHistoryTools {
     pub parent: Weak<CodexThread>,
 }
 
-struct HistoryTools(Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>);
+struct HistoryTools(Vec<Arc<dyn ToolExecutor>>);
 
 impl TurnLifecycleContributor for ConversationHistoryTools {
     fn turn_start_phase(&self, _thread_store: &ExtensionData) -> TurnStartPhase {
@@ -54,7 +53,7 @@ impl ToolContributor for ConversationHistoryTools {
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         thread_store
             .get::<HistoryTools>()
             .map(|tools| tools.0.clone())

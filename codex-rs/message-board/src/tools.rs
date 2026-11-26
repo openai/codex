@@ -58,7 +58,7 @@ pub fn message_board_tools(
     namespace: Option<&str>,
     namespace_description: &str,
     tool_messages: Option<&MultiAgentToolMessages>,
-) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+) -> Vec<Arc<dyn ToolExecutor>> {
     tools
         .iter()
         .map(|&tool| {
@@ -78,7 +78,7 @@ pub fn message_board_tools(
                 namespace: namespace.map(str::to_owned),
                 namespace_description: namespace_description.to_owned(),
                 description: tool_message.and_then(|tool| tool.description.clone()),
-            }) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
+            }) as Arc<dyn ToolExecutor>
         })
         .collect()
 }
@@ -93,7 +93,7 @@ struct BoardTool {
     description: Option<CodexCachedStr>,
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
+impl ToolExecutor for BoardTool {
     fn tool_name(&self) -> ToolName {
         ToolName::new(self.namespace.clone(), self.tool.name())
     }
@@ -109,10 +109,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
         MessageBoardTool::READ_ONLY.contains(&self.tool)
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let raw = call.function_arguments()?;
             if raw.len() > MAX_TOOL_ARGUMENT_KIB * 1024 {

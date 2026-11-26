@@ -187,7 +187,6 @@ async fn step_preparation_finishes_before_tools_and_world_state() -> Result<()> 
     use codex_extension_api::ExtensionFuture;
     use codex_extension_api::SelectedPluginSnapshot;
     use codex_extension_api::StepPreparationInput;
-    use codex_extension_api::ToolCall;
     use codex_extension_api::ToolContributor;
     use codex_extension_api::ToolExecutor;
     use codex_extension_api::WorldStateContributionInput;
@@ -221,7 +220,7 @@ async fn step_preparation_finishes_before_tools_and_world_state() -> Result<()> 
             _session_store: &ExtensionData,
             _thread_store: &ExtensionData,
             step_store: &ExtensionData,
-        ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        ) -> Vec<Arc<dyn ToolExecutor>> {
             assert!(step_store.get::<SelectedPluginSnapshot>().is_some());
             assert_eq!(
                 *step_store

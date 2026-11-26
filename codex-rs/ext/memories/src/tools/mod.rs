@@ -28,7 +28,7 @@ mod search;
 pub(crate) fn memory_tools<B>(
     backend: B,
     metrics_client: Option<MetricsClient>,
-) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>
+) -> Vec<Arc<dyn ToolExecutor>>
 where
     B: MemoriesBackend,
 {

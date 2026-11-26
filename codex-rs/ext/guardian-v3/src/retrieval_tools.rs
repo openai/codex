@@ -11,7 +11,6 @@ use codex_message_board::MessageBoardTool;
 use codex_message_board::message_board_tools;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use std::sync::Arc;
@@ -69,7 +68,7 @@ impl LiveRetrievalBinding {
             .map(|name| ToolName::namespaced(NAMESPACE, name))
     }
 
-    pub fn tools(&self) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    pub fn tools(&self) -> Vec<Arc<dyn ToolExecutor>> {
         let mut tools = message_board_tools(
             &LIVE_READ_TOOLS,
             self.board.clone(),
@@ -94,7 +93,7 @@ impl ToolContributor for RetrievalTools {
         &self,
         _session: &ExtensionData,
         thread: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         thread
             .get::<LiveRetrievalBinding>()
             .map_or_else(Vec::new, |binding| binding.tools())

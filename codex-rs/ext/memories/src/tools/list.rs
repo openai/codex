@@ -39,7 +39,7 @@ pub(super) struct ListTool<B> {
     pub(super) metrics_client: Option<MetricsClient>,
 }
 
-impl<'call, B> ToolExecutor<ToolCall<'call>> for ListTool<B>
+impl<B> ToolExecutor for ListTool<B>
 where
     B: MemoriesBackend,
 {
@@ -58,10 +58,7 @@ where
         )
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> codex_extension_api::ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> codex_extension_api::ToolExecutorFuture<'a> {
         Box::pin(self.handle_call(call))
     }
 }

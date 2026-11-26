@@ -1637,7 +1637,7 @@ async fn goal_service_enforces_maximum_token_budget_on_creation_and_updates() ->
 async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
-) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+) -> Vec<Arc<dyn ToolExecutor>> {
     installed_tools_with_start(
         runtime,
         thread_id,
@@ -1652,7 +1652,7 @@ async fn installed_tools_with_start(
     thread_id: ThreadId,
     session_source: SessionSource,
     persistent_thread_state_available: bool,
-) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+) -> Vec<Arc<dyn ToolExecutor>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     let goal_service = Arc::new(GoalService::new());
     install_with_backend(
@@ -1692,7 +1692,7 @@ async fn installed_tools_with_start(
         .collect()
 }
 
-fn tool_names(tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>]) -> Vec<String> {
+fn tool_names(tools: &[Arc<dyn ToolExecutor>]) -> Vec<String> {
     tools.iter().map(|tool| tool.tool_name().name).collect()
 }
 
@@ -1794,7 +1794,7 @@ impl GoalExtensionHarness {
         })
     }
 
-    fn tools(&self) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    fn tools(&self) -> Vec<Arc<dyn ToolExecutor>> {
         self.registry
             .tool_contributors()
             .iter()
@@ -1948,10 +1948,7 @@ impl GoalExtensionHarness {
     }
 }
 
-fn tool_by_name<'a>(
-    tools: &'a [Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>],
-    name: &str,
-) -> &'a Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>> {
+fn tool_by_name<'a>(tools: &'a [Arc<dyn ToolExecutor>], name: &str) -> &'a Arc<dyn ToolExecutor> {
     tools
         .iter()
         .find(|tool| tool.tool_name().namespace.is_none() && tool.tool_name().name == name)

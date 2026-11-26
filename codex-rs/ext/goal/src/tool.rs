@@ -142,7 +142,7 @@ impl GoalToolExecutor {
     }
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
+impl ToolExecutor for GoalToolExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(match self.kind {
             GoalToolKind::Get => GET_GOAL_TOOL_NAME,
@@ -165,11 +165,8 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
 
     fn handle<'a>(
         &'a self,
-        invocation: ToolCall<'call>,
-    ) -> codex_extension_api::ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+        invocation: ToolCall<'a>,
+    ) -> codex_extension_api::ToolExecutorFuture<'a> {
         Box::pin(async move {
             if !self.execution_allowed {
                 return Err(FunctionCallError::RespondToModel(

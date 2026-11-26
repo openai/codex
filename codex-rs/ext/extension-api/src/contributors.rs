@@ -10,7 +10,6 @@ use codex_exec_server_protocol::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
@@ -429,7 +428,7 @@ pub trait ToolContributor: Send + Sync {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         Vec::new()
     }
 
@@ -439,7 +438,7 @@ pub trait ToolContributor: Send + Sync {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
         _step_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         self.tools(session_store, thread_store)
     }
 }

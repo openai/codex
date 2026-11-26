@@ -133,10 +133,7 @@ impl MergeHarness {
         Ok(harness)
     }
 
-    async fn tools(
-        &self,
-        step: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    async fn tools(&self, step: &ExtensionData) -> Vec<Arc<dyn ToolExecutor>> {
         step.get_or_init(|| self.catalog_metrics.clone() as Arc<dyn ExtensionMetrics>);
         if let Some(snapshots) = &self.snapshots {
             step.insert(snapshots.clone());
@@ -220,7 +217,7 @@ impl MergeHarness {
 }
 
 pub(super) async fn call_tool(
-    tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>],
+    tools: &[Arc<dyn ToolExecutor>],
     name: &str,
     arguments: Value,
 ) -> Result<Value, FunctionCallError> {
@@ -228,7 +225,7 @@ pub(super) async fn call_tool(
 }
 
 async fn call_tool_with_budget(
-    tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>],
+    tools: &[Arc<dyn ToolExecutor>],
     name: &str,
     arguments: Value,
     truncation_policy: TruncationPolicy,

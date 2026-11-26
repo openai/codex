@@ -8,7 +8,6 @@ use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -42,7 +41,7 @@ impl ToolContributor for StepPreparationObserver {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         if let Some(ready) = self.tools_ready.lock().expect("tool gate").take() {
             ready
                 .send(())

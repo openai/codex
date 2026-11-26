@@ -15,7 +15,6 @@ use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TokenUsageContributor;
-use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
@@ -560,9 +559,7 @@ where
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<
-        Arc<dyn for<'call> codex_extension_api::ToolExecutor<codex_extension_api::ToolCall<'call>>>,
-    > {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();
         };
@@ -603,7 +600,7 @@ where
             .into_iter()
             .map(|mut tool| {
                 tool.execution_allowed = runtime.tools_available();
-                Arc::new(tool) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
+                Arc::new(tool) as Arc<dyn ToolExecutor>
             })
             .collect()
     }

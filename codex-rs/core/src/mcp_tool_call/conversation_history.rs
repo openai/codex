@@ -39,7 +39,7 @@ use super::with_mcp_tool_call_ids_meta;
 pub async fn conversation_history_tools(
     parent: &Arc<CodexThread>,
     max_output_tokens: usize,
-) -> anyhow::Result<Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>> {
+) -> anyhow::Result<Vec<Arc<dyn ToolExecutor>>> {
     let binding = history_binding(&parent.session).await?;
     let mut tools = Vec::new();
     for name in ["search_messages", "read_messages"] {
@@ -63,8 +63,7 @@ pub async fn conversation_history_tools(
             parent: Arc::downgrade(&parent.session),
             function,
             max_output_tokens,
-        })
-            as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>);
+        }) as Arc<dyn ToolExecutor>);
     }
     Ok(tools)
 }
@@ -93,7 +92,7 @@ struct HistoryTool {
     max_output_tokens: usize,
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
+impl ToolExecutor for HistoryTool {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("user_message", &self.function.name)
     }
@@ -114,10 +113,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
         ToolExposure::DirectModelOnly
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let result: anyhow::Result<Box<dyn ToolOutput>> = async {
                 let parent = self.parent.upgrade().context("Parent thread has stopped")?;

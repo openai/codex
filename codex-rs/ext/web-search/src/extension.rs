@@ -17,6 +17,7 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadOriginator;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_model_provider::WorkspaceRoutingContext;
@@ -123,9 +124,7 @@ impl ToolContributor for WebSearchExtension {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
         step_store: &ExtensionData,
-    ) -> Vec<
-        Arc<dyn for<'call> codex_extension_api::ToolExecutor<codex_extension_api::ToolCall<'call>>>,
-    > {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         let (Some(config), Some(workspace_routing), Some(mode)) = (
             thread_store.get::<WebSearchExtensionConfig>(),
             thread_store.get::<WorkspaceRoutingContext>(),

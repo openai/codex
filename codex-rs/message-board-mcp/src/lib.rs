@@ -52,7 +52,7 @@ use uuid::Uuid;
 /// The board's host continues to handle notifications; this service adds no
 /// Core delivery, lifecycle registration, or MCP push notifications.
 pub struct MessageBoardMcpServer {
-    tools: Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>,
+    tools: Vec<Arc<dyn ToolExecutor>>,
     invocation_scope: String,
 }
 

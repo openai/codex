@@ -94,10 +94,7 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
         create_request_permissions_tool(request_permissions_tool_description())
     }
 
-    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        ToolInvocation: 'a,
-    {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(self.handle_call(invocation))
     }
 }

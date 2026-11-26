@@ -116,14 +116,14 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         vec![Arc::new(ExtensionEchoExecutor)]
     }
 }
 
 struct ExtensionEchoExecutor;
 
-impl<'call> ToolExecutor<ExtensionToolCall<'call>> for ExtensionEchoExecutor {
+impl ToolExecutor for ExtensionEchoExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("extension/", "echo")
     }
@@ -151,10 +151,7 @@ impl<'call> ToolExecutor<ExtensionToolCall<'call>> for ExtensionEchoExecutor {
         })
     }
 
-    fn handle<'a>(&'a self, call: ExtensionToolCall<'call>) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ExtensionToolCall<'a>) -> codex_tools::ToolExecutorFuture<'a> {
         Box::pin(self.handle_call(call))
     }
 }
@@ -184,9 +181,7 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 fn test_tool_router(
     step_context: &StepContext,
     mcp_tools: Vec<RegisteredTool>,
-    extension_tool_executors: impl IntoIterator<
-        Item = Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>,
-    >,
+    extension_tool_executors: impl IntoIterator<Item = Arc<dyn ToolExecutor>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRouter {
     let mut registry = build_core_tool_registry(

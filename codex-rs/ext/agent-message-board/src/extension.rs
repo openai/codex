@@ -22,7 +22,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::openai_models::MultiAgentToolMessages;
-use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -102,7 +101,7 @@ impl<C: Sync> ToolContributor for BoardExtension<C> {
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         self.tools_with_descriptions(thread_store, /*tool_messages*/ None)
     }
 
@@ -111,7 +110,7 @@ impl<C: Sync> ToolContributor for BoardExtension<C> {
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
         step_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         let tool_messages = step_store.get::<MultiAgentToolMessages>();
         self.tools_with_descriptions(thread_store, tool_messages.as_deref())
     }
@@ -122,7 +121,7 @@ impl<C> BoardExtension<C> {
         &self,
         thread_store: &ExtensionData,
         tool_messages: Option<&MultiAgentToolMessages>,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    ) -> Vec<Arc<dyn ToolExecutor>> {
         thread_store
             .get::<Binding>()
             .map_or_else(Vec::new, |binding| {

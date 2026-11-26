@@ -90,7 +90,7 @@ pub(super) struct ReadTool {
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
+impl ToolExecutor for ReadTool {
     fn tool_name(&self) -> ToolName {
         skill_tool_name(TOOL_NAME)
     }
@@ -112,10 +112,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
         )
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let mut outcome = "internal_error";
             let result = async {

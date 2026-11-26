@@ -84,7 +84,6 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::IndirectNamespacePrefixes;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
-use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolExposures;
@@ -326,9 +325,7 @@ pub(crate) fn append_source_tools(
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
     mcp_tools: Vec<RegisteredTool>,
-    extension_tool_executors: impl IntoIterator<
-        Item = Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>,
-    >,
+    extension_tool_executors: impl IntoIterator<Item = Arc<dyn ToolExecutor>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSpec> {
     for tool in mcp_tools {
@@ -352,7 +349,7 @@ pub(crate) fn append_source_tools(
 pub(crate) fn extension_tool_executors<'a>(
     session: &'a Session,
     step_store: &'a ExtensionData,
-) -> impl Iterator<Item = Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>> + 'a {
+) -> impl Iterator<Item = Arc<dyn ToolExecutor>> + 'a {
     session
         .services
         .extensions
@@ -1629,7 +1626,7 @@ fn append_tool_search_executor(
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
-    executors: impl IntoIterator<Item = Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>>,
+    executors: impl IntoIterator<Item = Arc<dyn ToolExecutor>>,
     registry: &mut ToolRegistry,
 ) -> Option<ToolName> {
     let standalone_web_search_enabled = standalone_web_search_enabled(turn_context, model_info);

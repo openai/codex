@@ -77,7 +77,7 @@ pub(super) fn tools(
     path: &AgentPath,
     namespace: &str,
     namespace_description: &str,
-) -> impl Iterator<Item = Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+) -> impl Iterator<Item = Arc<dyn ToolExecutor>> {
     TOOLS
         .into_iter()
         .map(move |(name, description, operation)| {
@@ -111,11 +111,11 @@ pub(super) fn tools(
                 operation,
                 name,
                 spec,
-            }) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
+            }) as Arc<dyn ToolExecutor>
         })
 }
 
-impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
+impl ToolExecutor for SubscriptionTool {
     fn tool_name(&self) -> ToolName {
         self.name.clone()
     }
@@ -128,10 +128,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
         matches!(self.operation, Operation::List)
     }
 
-    fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
-    where
-        'call: 'a,
-    {
+    fn handle<'a>(&'a self, call: ToolCall<'a>) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             let raw = call.function_arguments()?;
             if raw.len() > MAX_TOOL_ARGUMENT_KIB * 1024 {

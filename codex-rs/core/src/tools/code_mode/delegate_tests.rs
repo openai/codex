@@ -106,10 +106,7 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         })
     }
 
-    fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        ToolInvocation: 'a,
-    {
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(async {
             Ok(Box::new(FunctionToolOutput::from_text(
                 "audit-probe-ok".to_string(),

@@ -27,14 +27,10 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::turn_metadata::ExecutionMetadata;
 
-pub(crate) struct ExtensionToolAdapter(
-    Arc<dyn for<'call> codex_tools::ToolExecutor<ExtensionToolCall<'call>>>,
-);
+pub(crate) struct ExtensionToolAdapter(Arc<dyn ToolExecutor>);
 
 impl ExtensionToolAdapter {
-    pub(crate) fn new(
-        executor: Arc<dyn for<'call> codex_tools::ToolExecutor<ExtensionToolCall<'call>>>,
-    ) -> Self {
+    pub(crate) fn new(executor: Arc<dyn ToolExecutor>) -> Self {
         Self(executor)
     }
 }
@@ -60,10 +56,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         self.0.search_info()
     }
 
-    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        ToolInvocation: 'a,
-    {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(async move {
             let step = &invocation.step_context;
             let selected: Vec<_> = match &invocation.environments {
@@ -296,9 +289,7 @@ mod tests {
 
     struct StubExtensionExecutor;
 
-    impl<'call> codex_extension_api::ToolExecutor<codex_tools::ToolCall<'call>>
-        for StubExtensionExecutor
-    {
+    impl codex_extension_api::ToolExecutor for StubExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
         }
@@ -324,11 +315,8 @@ mod tests {
 
         fn handle<'a>(
             &'a self,
-            _call: codex_tools::ToolCall<'call>,
-        ) -> codex_tools::ToolExecutorFuture<'a>
-        where
-            'call: 'a,
-        {
+            _call: codex_tools::ToolCall<'a>,
+        ) -> codex_tools::ToolExecutorFuture<'a> {
             Box::pin(async {
                 Ok(
                     Box::new(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
@@ -343,9 +331,7 @@ mod tests {
         captured_sandbox_cwds: Arc<Mutex<Vec<PathUri>>>,
     }
 
-    impl<'call> codex_extension_api::ToolExecutor<codex_tools::ToolCall<'call>>
-        for CapturingExtensionExecutor
-    {
+    impl codex_extension_api::ToolExecutor for CapturingExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
         }
@@ -363,11 +349,8 @@ mod tests {
 
         fn handle<'a>(
             &'a self,
-            call: codex_tools::ToolCall<'call>,
-        ) -> codex_tools::ToolExecutorFuture<'a>
-        where
-            'call: 'a,
-        {
+            call: codex_tools::ToolCall<'a>,
+        ) -> codex_tools::ToolExecutorFuture<'a> {
             Box::pin(self.handle_call(call))
         }
     }

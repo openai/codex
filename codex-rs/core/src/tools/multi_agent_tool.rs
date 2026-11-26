@@ -125,10 +125,7 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
         self.handler.search_info()
     }
 
-    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-    where
-        ToolInvocation: 'a,
-    {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
         self.handler.handle(invocation)
     }
 }
