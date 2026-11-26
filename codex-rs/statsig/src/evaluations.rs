@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
 use std::time::Duration;
+use std::time::Instant;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_backend_client::Client;
@@ -31,6 +33,7 @@ use tokio::task::JoinHandle;
 
 use crate::StatsigBootstrapContext;
 use crate::StatsigHttpClient;
+use crate::telemetry;
 
 const EVALUATION_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_RETRY_INTERVAL: Duration = Duration::from_secs(60);
@@ -49,7 +52,15 @@ impl Gate {
 
     /// Reads the latest cached decision, defaulting to false until evaluations are available.
     pub fn is_enabled(self) -> bool {
-        current_evaluations().is_some_and(|values| values.sdk.check_gate(self.0))
+        let (value, reason) = match current_evaluations() {
+            Ok(values) => {
+                let gate = values.sdk.get_feature_gate(self.0);
+                (gate.value(), sdk_reason(gate.details().reason()))
+            }
+            Err(reason) => (false, reason),
+        };
+        telemetry::evaluation(self.0, "gate", reason);
+        value
     }
 }
 
@@ -64,17 +75,39 @@ impl DynamicConfig {
 
     /// Reads the latest cached JSON object, defaulting to an empty object until available.
     pub fn value(self) -> Map<String, Value> {
-        let Some(values) = current_evaluations() else {
-            return Map::new();
+        let (value, reason) = match current_evaluations() {
+            Ok(values) => {
+                let config = values.sdk.get_dynamic_config(self.0);
+                (
+                    config.value().clone(),
+                    sdk_reason(config.details().reason()),
+                )
+            }
+            Err(reason) => (Map::new(), reason),
         };
-        values.sdk.get_dynamic_config(self.0).value().clone()
+        telemetry::evaluation(self.0, "config", reason);
+        value
     }
 }
 
-fn current_evaluations() -> Option<Arc<StatsigEvaluations>> {
-    let runtime = StatsigRuntime::current()?;
+fn current_evaluations() -> Result<Arc<StatsigEvaluations>, &'static str> {
+    // `pre_setup` also includes Statsig being intentionally disabled.
+    let runtime = StatsigRuntime::current().ok_or("pre_setup")?;
     let values = runtime.evaluations.borrow().clone()?;
-    values.is_current().then_some(values)
+    values
+        .is_current()
+        .then_some(values)
+        .ok_or("identity_changed")
+}
+
+fn sdk_reason(reason: &str) -> &'static str {
+    if reason.ends_with(":Unrecognized") {
+        "unrecognized"
+    } else if matches!(reason, "NoValues" | "Uninitialized") {
+        "no_values"
+    } else {
+        "evaluated"
+    }
 }
 
 /// The identity this process is authorized to use for Statsig.
@@ -85,7 +118,7 @@ pub enum StatsigIdentity {
 
 /// Owns one background refresh worker for a harness and exposes its local decisions.
 pub struct StatsigRuntime {
-    evaluations: watch::Receiver<Option<Arc<StatsigEvaluations>>>,
+    evaluations: watch::Receiver<Result<Arc<StatsigEvaluations>, &'static str>>,
     worker: JoinHandle<()>,
 }
 
@@ -112,7 +145,9 @@ impl StatsigRuntime {
         if let Some(runtime) = active.upgrade() {
             return runtime;
         }
-        let (publish, evaluations) = watch::channel::<Option<Arc<StatsigEvaluations>>>(None);
+        let (publish, evaluations) = watch::channel::<Result<Arc<StatsigEvaluations>, &'static str>>(
+            Err("bootstrap_in_progress"),
+        );
         let mut auth_changes = match &identity {
             StatsigIdentity::Account(auth) => Some(auth.credentials.auth_change_state_receiver()),
             StatsigIdentity::Installation(_) => None,
@@ -124,11 +159,14 @@ impl StatsigRuntime {
                     _ = publish.closed() => break,
                     () = async {
                         let generation = auth_changes.as_mut().map(|changes| *changes.borrow_and_update());
-                        let current = publish.borrow().clone();
-                        let update = if let Some(current) = current.filter(|values| values.is_current()) {
+                        let current = publish.borrow().as_ref().ok().cloned();
+                        let current = current.filter(|values| values.is_current());
+                        let refresh = current.is_some();
+                        let started = Instant::now();
+                        let update = if let Some(current) = current {
                             current.refresh().await
                         } else {
-                            if let Some(previous) = publish.send_replace(None) {
+                            if let Ok(previous) = publish.send_replace(Err("bootstrap_in_progress")) {
                                 previous.shutdown().await;
                             }
                             StatsigEvaluations::start(
@@ -142,13 +180,26 @@ impl StatsigRuntime {
                                     .with_sdk_exception_url("https://ab.chatgpt.com/v1/sdk_exception")
                                     .with_disable_all_logging(!exposure_logging_enabled),
                             ).await.map(|values| {
-                                publish.send_replace(Some(Arc::new(values)));
+                                let _ = publish.send_replace(Ok(Arc::new(values)));
                             })
                         };
+                        let failure = update.as_ref().err().map(telemetry::failure_category);
+                        if !refresh && let Some(failure) = failure {
+                            let _ = publish.send_replace(Err(failure));
+                        }
+                        if !matches!(failure, Some(telemetry::WAITING_AUTH)) {
+                            let values = publish.borrow().as_ref().ok().cloned();
+                            telemetry::update(
+                                if refresh { "refresh" } else { "bootstrap" },
+                                started.elapsed(),
+                                failure,
+                                values.as_ref().map(|values| &values.sdk),
+                            );
+                        }
                         if update.is_err() {
                             tracing::debug!("Statsig evaluations update failed");
                         }
-                        let interval = if publish.borrow().is_some() {
+                        let interval = if publish.borrow().is_ok() {
                             REFRESH_INTERVAL
                         } else {
                             INITIALIZE_RETRY_INTERVAL
@@ -167,7 +218,7 @@ impl StatsigRuntime {
                     } => {}
                 }
             }
-            if let Some(current) = publish.send_replace(None) {
+            if let Ok(current) = publish.send_replace(Err("shutdown")) {
                 current.shutdown().await;
             }
         });
@@ -219,7 +270,7 @@ impl StatsigEvaluations {
                 let (auth, factory) = auth_manager
                     .auth_with_http_client_factory()
                     .await
-                    .ok_or_else(|| anyhow!("Sign in to Codex before starting Statsig"))?;
+                    .context(telemetry::WAITING_AUTH)?;
                 let owner = auth_manager
                     .auth_owner_for(&auth)
                     .ok_or_else(|| anyhow!("Codex authentication changed during Statsig setup"))?;
@@ -232,8 +283,14 @@ impl StatsigEvaluations {
                             context_auth.runtime_auth.as_ref(),
                             &Default::default(),
                         )
-                        .await?;
-                        Some(backend.statsig_bootstrap(&context).await?)
+                        .await
+                        .context(telemetry::AUTH)?;
+                        Some(
+                            backend
+                                .statsig_bootstrap(&context)
+                                .await
+                                .context(telemetry::HTTP)?,
+                        )
                     }
                     CodexAuth::ApiKey(_) => None,
                     _ => anyhow::bail!("This Codex sign-in method is unsupported by Statsig"),

@@ -3,6 +3,9 @@
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::ProviderAuthContext;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use statsig_client::StatsigOptions;
@@ -16,6 +19,17 @@ use wiremock::matchers::path;
 use super::StatsigBootstrapContext;
 use super::StatsigEvaluations;
 use super::StatsigIdentity;
+
+#[test]
+fn wrapped_policy_denials_keep_their_category() {
+    let denied = codex_http_client::NetworkPolicyDenied::Destination;
+    for error in [
+        anyhow::Error::new(codex_api::AuthError::Policy(denied)).context("auth"),
+        anyhow::Error::new(codex_backend_client::RequestError::Policy(denied)).context("http"),
+    ] {
+        assert_eq!(super::telemetry::failure_category(&error), "policy");
+    }
+}
 
 #[tokio::test]
 async fn bootstraps_once_and_refreshes_directly_through_the_sdk() -> anyhow::Result<()> {
@@ -60,6 +74,10 @@ async fn bootstraps_once_and_refreshes_directly_through_the_sdk() -> anyhow::Res
         .expect(1)
         .mount_as_scoped(&server)
         .await;
+    let metrics = codex_otel::install_global_metrics(codex_otel::MetricsClient::new(
+        codex_otel::MetricsConfig::in_memory("test", "test", "1", Default::default())
+            .with_runtime_reader(),
+    )?);
     let runtime = super::StatsigRuntime::start_process(
         StatsigIdentity::Account(account.clone()),
         server.uri(),
@@ -104,16 +122,38 @@ async fn bootstraps_once_and_refreshes_directly_through_the_sdk() -> anyhow::Res
     let mut evaluations = runtime.evaluations.clone();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        evaluations.wait_for(Option::is_some),
+        evaluations.wait_for(Result::is_ok),
     )
     .await??;
     assert!(PROBE.is_enabled());
+    let mut checks = Vec::new();
+    let snapshot = metrics.snapshot()?;
+    for metric in snapshot.scope_metrics().flat_map(ScopeMetrics::metrics) {
+        if metric.name() == "codex.statsig.evaluation.count"
+            && let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data()
+        {
+            for point in sum.data_points() {
+                let tags = ["kind", "name", "reason"].map(|key| {
+                    let tag = point.attributes().find(|attr| attr.key.as_str() == key);
+                    tag.expect(key).value.to_string()
+                });
+                checks.push((tags, point.value()));
+            }
+        }
+    }
+    checks.sort();
+    assert_eq!(
+        checks,
+        ["bootstrap_in_progress", "evaluated"]
+            .map(|reason| (["gate", "probe", reason].map(str::to_owned), 1))
+    );
     assert_eq!(
         super::DynamicConfig::new("probe").value(),
         json!({"limit": 1}).as_object().unwrap().clone()
     );
     drop(evaluations);
     super::StatsigRuntime::finish(Some(runtime)).await;
+    metrics.shutdown()?;
     for response in [
         ResponseTemplate::new(503),
         ResponseTemplate::new(200).set_body_json(values(false, 2)),

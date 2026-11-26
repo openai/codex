@@ -5226,12 +5226,15 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "codex-api",
  "codex-backend-client",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
+ "codex-otel",
  "http 1.4.0",
  "oai-statsig-rust-client",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -11344,9 +11347,9 @@ checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
 
 [[package]]
 name = "oai-statsig-rust-client"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5adc8fe6756bcf80f8039f2312efe1a6f268406f1e9647e8e5ed16ef4fcf60d"
+checksum = "bfd7aa16fc69922f38a8b0050ca8c6855079aa68a29e3df6caf78bcce5cb5dc9"
 dependencies = [
  "ahash",
  "arc-swap",
