@@ -120,7 +120,6 @@ pub(crate) async fn make_test_app() -> Box<App> {
         app_server_backend_id: None,
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
-            primary: false,
             platform_default: true,
             ssh: false,
             wsl: false,

@@ -155,6 +155,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDateFormatter", "NSEnumerator", "NSFormatter", "NSLocale", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31.3", features = ["socket"] }
+wl-clipboard-rs = { workspace = true }
 # Keep the same executor features as the credential store, which also uses zbus.
 zbus = "4.4.0"
 

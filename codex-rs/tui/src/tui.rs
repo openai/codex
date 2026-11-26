@@ -754,6 +754,7 @@ pub struct Tui {
     owned_screen: bool,
     pub(crate) mouse_capture: MouseCapture,
     // Copies and native ownership survive closing an overlay or startup picker.
+    primary_selection: Arc<AtomicBool>,
     pub(crate) clipboard: crate::clipboard_copy::worker::ClipboardWorker,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
@@ -830,6 +831,7 @@ impl Tui {
             alt_screen_enabled: true,
             owned_screen: false,
             mouse_capture: MouseCapture::Inherit,
+            primary_selection: terminal_capabilities::detect_primary_selection(),
             clipboard: Default::default(),
             _stderr_guard: stderr_guard,
         }
@@ -903,6 +905,10 @@ impl Tui {
 
     pub(crate) fn transcript_mode(&self) -> crate::transcript_mode::TranscriptMode {
         crate::transcript_mode::TranscriptMode::resolve(self.owned_screen, self.alt_screen_enabled)
+    }
+
+    pub(crate) fn primary_selection_available(&self) -> bool {
+        self.primary_selection.load(Ordering::Relaxed)
     }
 
     /// Retain the mouse capture policy across temporary editor, suspend and panic handoffs.

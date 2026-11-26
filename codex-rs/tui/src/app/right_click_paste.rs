@@ -1,4 +1,4 @@
-//! Clipboard text paste from keyboard shortcuts, right-click, or X11 middle-click PRIMARY.
+//! Clipboard text paste from keyboard shortcuts, right-click, or middle-click PRIMARY.
 //! The policy also reports why a configured mode is unavailable in this terminal.
 //! Existing selection handlers run first. Only a draw may deliver a read, so real input
 //! invalidates pending paste before completion and is never replaced by clipboard text.
@@ -23,7 +23,6 @@ pub(super) struct PendingPaste {
 }
 
 pub(crate) struct PasteEnvironment {
-    pub(super) primary: bool,
     pub(super) platform_default: bool,
     pub(super) ssh: bool,
     pub(super) wsl: bool,
@@ -33,7 +32,6 @@ pub(crate) struct PasteEnvironment {
 impl PasteEnvironment {
     pub(crate) fn detect() -> Self {
         Self {
-            primary: crate::clipboard_copy::primary::available(),
             platform_default: cfg!(any(target_os = "windows", target_os = "linux")),
             ssh: crate::terminal_capabilities::is_ssh_session(),
             wsl: crate::terminal_capabilities::is_wsl_session(),
@@ -100,7 +98,7 @@ impl App {
                             self.local_settings.transcript_mode,
                         )
                 }
-                PasteSource::Primary => self.right_click_paste_environment.primary,
+                PasteSource::Primary => tui.primary_selection_available(),
             };
         if (shortcut.is_none() && !tui.is_owned_screen())
             || self.overlay.is_some()

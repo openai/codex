@@ -44,7 +44,7 @@ impl App {
             selection.view.copy_on_select = self.local_settings.copy_on_select();
             selection.view.copy_on_select_clear_selection =
                 self.local_settings.tui.copy_on_select_clear_selection;
-            selection.view.primary_selection = self.right_click_paste_environment.primary;
+            selection.view.primary_selection = tui.primary_selection_available();
             selection.handle_event(event, tui.terminal.previous_buffer())
         };
         let Some(action) = action else {

@@ -922,6 +922,7 @@ impl App {
             }
             _ => self.sidebar_press = None,
         }
+        self.transcript_view.primary_selection = tui.primary_selection_available();
         self.transcript_view.bidi_layout = tui.terminal.bidi_layout;
         self.transcript_view.agent_links = self
             .side_retention_enabled(tui)

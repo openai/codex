@@ -286,14 +286,14 @@ pub(crate) fn paste_owner() -> PasteOwner {
     }
 }
 
-pub(crate) fn primary_selection_available() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("DISPLAY").is_some()
-        && std::env::var_os("WAYLAND_DISPLAY").is_none()
-        && !is_ssh_session()
-        && !is_tmux_session()
-        && !is_wsl_session()
-        && !matches!(paste_owner(), PasteOwner::Terminal(_))
+#[cfg(target_os = "linux")]
+mod primary;
+#[cfg(target_os = "linux")]
+pub(crate) use primary::detect_primary_selection;
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn detect_primary_selection() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    Default::default()
 }
 
 pub(crate) fn title_encoding() -> crate::terminal_title::TitleEncoding {

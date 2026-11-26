@@ -1,12 +1,9 @@
-//! Local X11 PRIMARY selection. Never forward PRIMARY over SSH or tmux, or
-//! accidentally target a Wayland compositor or WSL host clipboard.
+//! Local Linux PRIMARY selection. Never forward PRIMARY over SSH, tmux, or WSL.
 
 #[cfg(target_os = "linux")]
 use super::ClipboardLease;
 use super::CopyOutcome;
 use std::time::Instant;
-
-pub(crate) use crate::terminal_capabilities::primary_selection_available as available;
 
 #[cfg(target_os = "linux")]
 pub(super) fn copy(
@@ -20,7 +17,7 @@ pub(super) fn copy(
         .set()
         .clipboard(arboard::LinuxClipboardKind::Primary)
         .text(text)
-        .map_err(|err| format!("X11 primary selection: {err}"))?;
+        .map_err(|err| format!("primary selection: {err}"))?;
     Ok(CopyOutcome::Copied(Some(ClipboardLease::native_linux(
         clipboard,
     ))))

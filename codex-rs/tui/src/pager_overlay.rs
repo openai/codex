@@ -67,7 +67,6 @@ impl Overlay {
         overlay.view.bidi_layout = bidi_layout;
         overlay.view.copy_on_select = copy_on_select;
         overlay.view.mouse_scroll_speed = mouse_scroll_speed;
-        overlay.view.primary_selection = crate::clipboard_copy::primary::available();
         Self::Transcript(overlay)
     }
 

@@ -44,7 +44,7 @@ impl SelectionCopy {
 }
 
 impl Tui {
-    /// Copy to CLIPBOARD and/or publish X11 PRIMARY under one selection policy.
+    /// Copy to CLIPBOARD and/or publish PRIMARY under one selection policy.
     pub(crate) fn copy_selection(
         &mut self,
         text: &str,

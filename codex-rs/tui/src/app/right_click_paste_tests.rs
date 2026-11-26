@@ -41,7 +41,6 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
         (true, false, true, Application, on, Ok(true)),
     ] {
         let env = PasteEnvironment {
-            primary: false,
             platform_default,
             ssh,
             wsl,
@@ -59,7 +58,6 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
     }
 
     let env = PasteEnvironment {
-        primary: false,
         platform_default: true,
         ssh: false,
         wsl: false,

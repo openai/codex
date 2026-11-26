@@ -5465,6 +5465,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "libc",
+ "nix 0.31.3",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -5514,6 +5515,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winsplit",
  "wiremock",
+ "wl-clipboard-rs",
  "zbus",
 ]
 

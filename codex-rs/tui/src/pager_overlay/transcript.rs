@@ -225,6 +225,7 @@ impl TranscriptOverlay {
                     mouse.column = self.content_area.x;
                     mouse.row = self.content_area.bottom().saturating_sub(1);
                 }
+                self.view.primary_selection = tui.primary_selection_available();
                 self.view.handle_mouse(mouse, &self.cells)
             }
             TuiEvent::Paste(text) => {
