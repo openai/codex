@@ -485,7 +485,7 @@ where
             } else if !moved.contains(&index)
                 && updates.iter().any(|update| match update {
                     DrawCommand::Put { x, y, .. } => image.area.contains((*x, *y).into()),
-                    DrawCommand::ClearToEnd { x, y, .. } => {
+                    DrawCommand::ClearToEnd { x, y } => {
                         (image.area.y..image.area.bottom()).contains(y) && *x < image.area.right()
                     }
                 })
@@ -707,7 +707,7 @@ use ratatui::buffer::Cell;
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
     Put { x: u16, y: u16, cell: Cell },
-    ClearToEnd { x: u16, y: u16, bg: Color },
+    ClearToEnd { x: u16, y: u16 },
 }
 
 fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
@@ -720,14 +720,10 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let row_end = row_start + a.area.width as usize;
         let previous_row = &a.content[row_start..row_end];
         let row = &next_buffer[row_start..row_end];
-        let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
-        // Scan the row to find the rightmost column that still matters: any non-space glyph,
-        // any cell whose bg differs from the row’s trailing bg, any cell with modifiers,
-        // or any cell explicitly marked for updating.
-        // Multi-width glyphs extend that region through their full displayed width.
-        // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
-        // versus emitting multiple space Put commands.
+        // Only erase a tail of blanks with the default background. Apple Terminal can
+        // lose a background applied by an erase when a later frame clears part of
+        // the row. Printed spaces keep their color when the diff skips them.
         let mut last_nonblank_column = 0usize;
         let mut column = 0usize;
         while column < row.len() {
@@ -735,7 +731,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             let width = usize::from(cell.cell_width());
             // A trailing clear must neither swallow a forced repaint nor erase skipped cells.
             if cell.symbol() != " "
-                || cell.bg != bg
+                || cell.bg != Color::Reset
                 || cell.modifier != Modifier::empty()
                 || matches!(
                     cell.diff_option,
@@ -765,7 +761,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
                 });
             if tail_changed || wide_char_overlaps_tail {
                 let (x, y) = a.pos_of(row_start + clear_start);
-                updates.push(DrawCommand::ClearToEnd { x, y, bg });
+                updates.push(DrawCommand::ClearToEnd { x, y });
             }
         }
 
@@ -837,7 +833,7 @@ where
     for command in commands {
         let (x, y) = match &command {
             DrawCommand::Put { x, y, .. } => (x, y),
-            DrawCommand::ClearToEnd { x, y, .. } => (x, y),
+            DrawCommand::ClearToEnd { x, y } => (x, y),
         };
         let hyperlink = match &command {
             DrawCommand::Put { cell, .. } => osc8_hyperlink_parts(cell.symbol()),
@@ -881,11 +877,11 @@ where
                 let symbol = hyperlink.map_or_else(|| cell.symbol(), |(_, visible)| visible);
                 queue!(writer, Print(symbol))?;
             }
-            DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
+            DrawCommand::ClearToEnd { .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
                 modifier = Modifier::empty();
-                queue!(writer, SetBackgroundColor((*clear_bg).into_crossterm()))?;
-                bg = *clear_bg;
+                fg = Color::Reset;
+                bg = Color::Reset;
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
             }
         }
@@ -992,6 +988,8 @@ mod tests {
 
     #[path = "cursor_tests.rs"]
     mod cursor;
+    #[path = "shading_tests.rs"]
+    mod shading;
 
     struct CaptureBackend {
         output: Vec<u8>,
@@ -1504,7 +1502,7 @@ mod tests {
             assert!(
                 commands
                     .iter()
-                    .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
+                    .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0 })),
                 "expected clear-to-end after {before:?} became {after:?}; commands: {commands:?}"
             );
         }

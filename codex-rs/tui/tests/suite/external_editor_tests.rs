@@ -91,6 +91,7 @@ fn external_editors_keep_the_screen_and_return_the_draft() -> Result<()> {
                             line.contains("initial draft")
                                 || line.contains("Save and close external editor to continue.")
                         })
+                        .map(str::trim_end)
                         .collect::<Vec<_>>()
                         .join("\n"),
                 );
