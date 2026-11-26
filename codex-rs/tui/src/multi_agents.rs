@@ -280,6 +280,15 @@ fn render_tool_call(
                 )
             }
         }),
+        CollabAgentTool::Wait if receiver_thread_ids.is_empty() && agents_states.is_empty() => {
+            let title = match status {
+                CollabAgentToolCallStatus::InProgress => "Waiting",
+                CollabAgentToolCallStatus::Completed => "Waited",
+                CollabAgentToolCallStatus::Failed => "Failed to wait",
+                CollabAgentToolCallStatus::Interrupted => "Interrupted",
+            };
+            Some(collab_event(title_text(title), Vec::new()))
+        }
         CollabAgentTool::Wait => {
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
                 Some(waiting_begin(receiver_thread_ids, &mut agent_metadata))
@@ -854,8 +863,33 @@ mod tests {
         )
         .expect("close item renders");
 
+        let waits_without_targets = [
+            CollabAgentToolCallStatus::InProgress,
+            CollabAgentToolCallStatus::Completed,
+            CollabAgentToolCallStatus::Failed,
+            CollabAgentToolCallStatus::Interrupted,
+        ]
+        .map(|status| {
+            tool_call_history_cell(
+                &ThreadItemPayload::CollabAgentToolCall {
+                    id: "wait-without-targets".to_string(),
+                    tool: CollabAgentTool::Wait,
+                    status,
+                    sender_thread_id: sender_thread_id.to_string(),
+                    receiver_thread_ids: Vec::new(),
+                    prompt: None,
+                    model: None,
+                    reasoning_effort: None,
+                    agents_states: HashMap::new(),
+                },
+                /*cached_spawn_request*/ None,
+                |thread_id| metadata_for(thread_id, robie_id, bob_id),
+            )
+            .expect("wait without targets renders")
+        });
         let snapshot = [spawn, send, waiting, finished, close]
             .iter()
+            .chain(&waits_without_targets)
             .map(cell_to_text)
             .collect::<Vec<_>>()
             .join("\n\n");
