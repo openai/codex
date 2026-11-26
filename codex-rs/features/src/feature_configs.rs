@@ -338,6 +338,9 @@ where
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV3ConfigToml {
+    /// Maximum evidence per root shadow board in MiB. Defaults to 32. Ignored in project config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_board_limit_mib: Option<NonZeroU32>,
     /// Keep each fresh root's Guardian board in memory until the runtime closes. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_board_in_memory: Option<bool>,

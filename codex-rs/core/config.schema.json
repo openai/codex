@@ -2558,6 +2558,12 @@
         },
         "reviewer": {
           "$ref": "#/definitions/GuardianV3ReviewerConfigToml"
+        },
+        "shadow_board_limit_mib": {
+          "description": "Maximum evidence per root shadow board in MiB. Defaults to 32. Ignored in project config.",
+          "format": "uint32",
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
       "type": "object"

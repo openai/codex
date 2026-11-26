@@ -47,6 +47,9 @@ use crate::Housekeeper;
 use crate::LiveDelivery;
 use crate::local_board;
 use crate::local_board_options;
+use crate::shadow_metrics::BoardSize;
+use crate::shadow_metrics::PayloadLimit;
+use crate::shadow_metrics::ShadowMetrics;
 
 #[path = "shadow.rs"]
 mod shadow;
@@ -145,6 +148,7 @@ enum BoardStorage {
 pub(super) struct TreeDelivery {
     pub(super) delivery: OnceLock<Arc<LiveDelivery>>,
     stop: CancellationToken,
+    shadow_intake_stopped: CancellationToken,
     actors: Mutex<Vec<Weak<ActorReviewer>>>,
 }
 
@@ -290,10 +294,13 @@ impl Host {
             let _ = wake.try_send(None);
         }
         let shadow = self.shadow;
+        let intake_guard = shadow.then(|| tree.shadow_intake_stopped.clone().drop_guard());
+        let metrics = thread.get::<ShadowMetrics>();
         let manager = self.manager.clone();
         let settings = Arc::clone(&self.housekeeper);
         let cancellation = lifetime.cancellation.clone();
         lifetime.tasks.spawn(async move {
+            let mut failure_stage = "housekeeper";
             let work = async {
                 let board = Arc::new(board);
                 let mut housekeeper = None;
@@ -321,6 +328,7 @@ impl Host {
                         continue;
                     };
                     let snapshot = cursor.snapshot(records).inspect_err(|error| {
+                        failure_stage = "capture";
                         tracing::warn!(root_thread_id = %root, %error, "Guardian intake rejected stored evidence");
                     })?;
                     if !snapshot.source_advanced() {
@@ -347,13 +355,20 @@ impl Host {
                             let startup = async {
                                 let manager = manager.upgrade().context("Guardian host stopped")?;
                                 let parent = manager.get_thread(root).await?;
-                                Housekeeper::new(
+                                let mut worker = Housekeeper::new(
                                     board.clone(),
                                     Arc::clone(&delivery),
                                     &parent,
                                     &manager,
                                     &settings,
-                                ).await
+                                ).await?;
+                                if shadow {
+                                    let config = parent.config().await;
+                                    let limit = config.guardian_v3.as_ref()
+                                        .and_then(|v3| v3.shadow_board_limit_mib);
+                                    worker.shadow_size = Some(BoardSize::new(limit));
+                                }
+                                anyhow::Ok(worker)
                             };
                             let Some(worker) = cancellation.run_until_cancelled(startup).await else {
                                 break;
@@ -362,7 +377,11 @@ impl Host {
                         }
                     };
                     // route_next drains accepted appends before honoring cancellation.
-                    while housekeeper.route_next(&snapshot, &cancellation).await? != 0 {}
+                    while housekeeper.route_next(&snapshot, &cancellation).await? != 0 {
+                        if let (Some(size), Some(metrics)) = (housekeeper.shadow_size, &metrics) {
+                            size.record(metrics);
+                        }
+                    }
                     finish();
                     tracing::debug!(
                         name: "guardian_v3.housekeeping_routed",
@@ -373,7 +392,18 @@ impl Host {
                 }
                 anyhow::Ok(())
             };
-            if work.await.is_err() && !cancellation.is_cancelled() {
+            let result = work.await;
+            drop(intake_guard);
+            if let Err(error) = result
+                && !cancellation.is_cancelled()
+            {
+                if let Some(metrics) = metrics {
+                    metrics.stopped(if error.is::<PayloadLimit>() {
+                        "payload_limit"
+                    } else {
+                        failure_stage
+                    });
+                }
                 // Provider error messages can quote the evidence being routed.
                 tracing::warn!(%root, "Guardian housekeeping stopped");
             }
@@ -403,6 +433,9 @@ impl ThreadLifecycleContributor<Config> for Host {
             if self.shadow {
                 // Observe settings changes even before the root is ready.
                 input.thread_store.insert(shadow::Enrollment::default());
+                if let Some(metrics) = input.extension_metrics {
+                    input.thread_store.insert(ShadowMetrics(metrics));
+                }
             } else {
                 // Only authoritative GV3 needs evidence writes to survive interruption.
                 input.thread_store.insert(PreserveReviewWrites);

@@ -9,6 +9,7 @@ codex_rust_crate(
     test_tags = ["no-sandbox"],
     unit_test_srcs = [
         "src/host_tests.rs",
+        "src/shadow_metrics_tests.rs",
         "tests/common/board_host.rs",
         "//codex-rs/message-board:tests/common/mod.rs",
     ],

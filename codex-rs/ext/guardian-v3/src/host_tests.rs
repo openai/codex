@@ -506,8 +506,13 @@ async fn committed_posts_reach_current_subscribers_once_across_channel_retries()
     Ok(())
 }
 
+#[test_case::test_case(None; "capture_failure_and_reenrollment")]
+#[test_case::test_case(Some((20, 1)); "two_copies_exceed_the_limit")]
+#[test_case::test_case(Some((40, 0)); "one_copy_exceeds_the_limit_without_sampling")]
 #[tokio::test]
-async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
+async fn shadow_intake_enrolls_only_new_opted_in_roots(
+    overflow: Option<(usize, usize)>,
+) -> anyhow::Result<()> {
     use codex_core::ConfigRefreshOutcome;
     use codex_core::InheritedSessionId;
     use codex_core::config::Config;
@@ -554,7 +559,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     let mut settings = ExtensionRegistryBuilder::default();
     settings.config_contributor(Arc::clone(&unavailable.config_contributors()[0]));
     settings.config_contributor(Arc::new(RecordReviewerChange));
-    let test = test_codex()
+    let mut builder = test_codex()
         .with_extensions(Arc::new(settings.build()))
         .with_config(|config| {
             config.features.enable(Feature::GuardianV2).unwrap();
@@ -567,9 +572,19 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
                 .set(AskForApproval::OnRequest)
                 .unwrap();
         })
-        .with_history_mode(ThreadHistoryMode::Paginated)
-        .build_with_auto_env(&server)
-        .await?;
+        .with_history_mode(ThreadHistoryMode::Paginated);
+    if overflow.is_some() {
+        builder = builder
+            .with_config(|config| {
+                Arc::make_mut(config.guardian_v3.get_or_insert_with(Arc::default))
+                    .shadow_board_limit_mib = std::num::NonZeroU32::new(1);
+            })
+            .with_model_info_override("gpt-5.6-luna", |model| {
+                model.truncation_policy =
+                    codex_protocol::openai_models::TruncationPolicyConfig::bytes(64 * 1024);
+            });
+    }
+    let test = builder.build_with_auto_env(&server).await?;
     let root = test.session_configured.thread_id;
     let session = ExtensionData::new(root.to_string());
     let thread = test.codex.thread_extension_data();
@@ -676,7 +691,106 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     let child_reviewer = child_store
         .get::<ShadowReviewer>()
         .context("child reviewer")?;
+    if let Some((message_kib, expected_calls)) = overflow {
+        use serde_json::json;
+
+        let append = async |order, kib: usize| -> anyhow::Result<()> {
+            let item = RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: user_message_item(&"x".repeat(kib * 1024)),
+                metadata: Some(CodexHarnessMetadata {
+                    user_input_order: Some(order),
+                    ..Default::default()
+                }),
+            });
+            test.thread_store
+                .append_items(AppendThreadItemsParams {
+                    thread_id: root,
+                    items: vec![item],
+                })
+                .await?;
+            test.thread_store.flush_thread(root).await?;
+            super::wake_worker(thread);
+            Ok(())
+        };
+        // Sixteen 62 KiB copies leave just under 32 KiB after source metadata.
+        let channels: Vec<_> = (0..16).map(|i| format!("topic-{i}")).collect();
+        let descriptions: Vec<_> = channels
+            .iter()
+            .map(|name| json!({"channel": name, "description": "Seed"}))
+            .collect();
+        let seed = json!({"routes": [channels], "descriptions": descriptions});
+        let _seed = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_assistant_message("seed", &seed.to_string()),
+                ev_completed("seed"),
+            ]),
+        )
+        .await;
+        let mut routed = NamedTraceEvents::subscribe("guardian_v3.housekeeping_routed");
+        append(/*order*/ 1, /*kib*/ 62).await?;
+        routed.next().await?;
+        let query = codex_message_board::ChannelQuery {
+            query: None,
+            direction: codex_message_board::SortDirection::OldestFirst,
+            page: Default::default(),
+        };
+        let worker = thread.get::<super::RootWorker>().context("shadow board")?;
+        let board = &worker.reader;
+        let before = board.list_channels(root, query.clone()).await?;
+        assert_eq!(before.channels.results.len(), 16);
+
+        let route = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_assistant_message(
+                    "overflow",
+                    r#"{"routes":[["topic-0","new"]],"descriptions":[{"channel":"new","description":"New topic"}]}"#,
+                ),
+                ev_completed("overflow"),
+            ]),
+        ).await;
+        append(/*order*/ 2, message_kib).await?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            old_reviewer.intake_stopped.cancelled(),
+        )
+        .await?;
+        assert!(child_reviewer.intake_stopped.is_cancelled());
+        assert_eq!(route.requests().len(), expected_calls);
+        // Channel summaries include post counts and the last message ID.
+        assert_eq!(board.list_channels(root, query).await?, before);
+        lifecycle
+            .on_thread_stop(ThreadStopInput {
+                thread_store: thread,
+                session_store: &session,
+            })
+            .await;
+        child.shutdown_and_wait().await?;
+        test.codex.shutdown_and_wait().await?;
+        return Ok(());
+    }
     assert!(child_store.get::<super::RootWorker>().is_none());
+
+    // A terminal capture error closes admission for the whole board, even without metrics.
+    test.thread_store
+        .append_items(AppendThreadItemsParams {
+            thread_id: root,
+            items: vec![RolloutItem::ResponseItem(ResponseItemEnvelope::new(
+                user_message_item("Missing provenance"),
+            ))],
+        })
+        .await?;
+    test.thread_store.flush_thread(root).await?;
+    super::wake_worker(thread);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        old_reviewer.intake_stopped.cancelled(),
+    )
+    .await?;
+    assert!(child_reviewer.intake_stopped.is_cancelled());
+    assert!(!old_reviewer.cancellation.is_cancelled());
+    assert!(!child_reviewer.cancellation.is_cancelled());
 
     let refresh = async |requirements: &str, expected: ApprovalsReviewer| -> anyhow::Result<()> {
         let loader = CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
@@ -746,6 +860,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots() -> anyhow::Result<()> {
     assert!(!Arc::ptr_eq(&old_worker.reader, &new_worker.reader));
     assert!(!Arc::ptr_eq(&old_reviewer.reviewer, &new_reviewer.reviewer));
     assert!(!new_reviewer.cancellation.is_cancelled());
+    assert!(!new_reviewer.intake_stopped.is_cancelled());
     lifecycle
         .on_thread_stop(ThreadStopInput {
             thread_store: thread,

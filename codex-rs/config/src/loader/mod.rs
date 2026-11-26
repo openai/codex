@@ -1375,18 +1375,30 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.shell_snapshot".to_string());
         }
+        // Serde also accepts positional arrays for these structs. Project overrides
+        // must use named settings so the user-only fields below can be filtered.
+        if features.get("guardianv3").is_some_and(TomlValue::is_array) {
+            features.remove("guardianv3");
+            ignored_keys.push("features.guardianv3".to_string());
+        }
         if let Some(guardian) = features
             .get_mut("guardianv3")
             .and_then(TomlValue::as_table_mut)
         {
-            if guardian.remove("max_instruction_tokens").is_some() {
-                ignored_keys.push("features.guardianv3.max_instruction_tokens".to_string());
+            for key in ["max_instruction_tokens", "shadow_board_limit_mib"] {
+                if guardian.remove(key).is_some() {
+                    ignored_keys.push(format!("features.guardianv3.{key}"));
+                }
             }
             for (section, key) in [
                 ("housekeeper", "routing_instructions"),
                 ("reviewer", "retrieval_instructions"),
             ] {
-                if let Some(settings) = guardian.get_mut(section).and_then(TomlValue::as_table_mut)
+                if guardian.get(section).is_some_and(TomlValue::is_array) {
+                    guardian.remove(section);
+                    ignored_keys.push(format!("features.guardianv3.{section}"));
+                } else if let Some(settings) =
+                    guardian.get_mut(section).and_then(TomlValue::as_table_mut)
                     && settings.remove(key).is_some()
                 {
                     ignored_keys.push(format!("features.guardianv3.{section}.{key}"));

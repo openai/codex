@@ -11,6 +11,7 @@ use codex_state::SqliteConfig;
 
 mod actor;
 mod conversation;
+mod shadow_metrics;
 pub use actor::ActorReviewer;
 pub use actor::PreparedReviewer;
 mod delivery;

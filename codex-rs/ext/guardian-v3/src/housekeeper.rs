@@ -63,6 +63,7 @@ pub struct Housekeeper {
     sampler: HousekeeperSampler,
     batch_timeout: Duration,
     stopped: bool,
+    pub(super) shadow_size: Option<crate::shadow_metrics::BoardSize>,
     delivery: Arc<LiveDelivery>,
 }
 
@@ -96,6 +97,7 @@ impl Housekeeper {
                     Duration::from_millis(u64::from(ms.get()))
                 }),
             stopped: false,
+            shadow_size: None,
             delivery,
         })
     }
@@ -174,6 +176,12 @@ impl Housekeeper {
             for source in pending {
                 // Preserve the existing board's post-size limit, including source metadata.
                 let text = to_json_string_bounded(source, 64 * 1024)?;
+                // Every valid batch must route the first original to at least one channel.
+                if texts.is_empty()
+                    && let Some(size) = self.shadow_size
+                {
+                    size.check_capacity(text.len() as u64)?;
+                }
                 let added_bytes = text.len() + usize::from(!texts.is_empty());
                 if added_bytes > input_budget.saturating_sub(input_bytes) {
                     break;
@@ -221,6 +229,16 @@ impl Housekeeper {
                 valid,
                 "housekeeper returned invalid source routes or descriptions"
             );
+            let next_size = self
+                .shadow_size
+                .map(|size| {
+                    let added = descriptions
+                        .keys()
+                        .filter(|name| !catalog.contains_key(*name))
+                        .count();
+                    size.with_batch(catalog.len() + added, &output.routes, &texts)
+                })
+                .transpose()?;
             for (channel_name, description) in descriptions {
                 if catalog.get(&channel_name).and_then(Option::as_deref)
                     == Some(description.as_str())
@@ -272,6 +290,7 @@ impl Housekeeper {
                 }
                 self.delivery.acknowledge(snapshot, /*count*/ 1)?;
             }
+            self.shadow_size = next_size;
             self.sampler.commit(batch);
             Ok(sources.len())
         };

@@ -1310,10 +1310,11 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
 }
 
 #[test]
-fn project_config_cannot_supply_guardian_v3_prompts_or_their_cap() {
+fn project_config_cannot_override_guardian_v3_prompts_or_limits() {
     let mut project: TomlValue = toml::toml! {
         [features.guardianv3]
         max_instruction_tokens = 1
+        shadow_board_limit_mib = 512
         [features.guardianv3.housekeeper]
         routing_instructions = "Use project routing"
         batch_timeout_ms = 15000
@@ -1340,6 +1341,7 @@ fn project_config_cannot_supply_guardian_v3_prompts_or_their_cap() {
         ignored,
         [
             "features.guardianv3.max_instruction_tokens",
+            "features.guardianv3.shadow_board_limit_mib",
             "features.guardianv3.housekeeper.routing_instructions",
             "features.guardianv3.reviewer.retrieval_instructions",
         ]
@@ -1355,6 +1357,36 @@ fn project_config_cannot_supply_guardian_v3_prompts_or_their_cap() {
             [features.guardianv3.reviewer]
         }
         .into()
+    );
+}
+
+#[test]
+fn project_config_ignores_positional_guardian_v3_settings() {
+    let mut project: TomlValue =
+        toml::from_str("features.guardianv3 = [512, true, true, {}, {}, 1]").unwrap();
+    let sanitize = |project: &mut TomlValue| {
+        sanitize_project_config(project, CredentialBrokerProjectState::Unconfigured, &[])
+    };
+    assert_eq!(sanitize(&mut project), ["features.guardianv3"]);
+    assert!(project["features"].get("guardianv3").is_none());
+
+    let mut project: TomlValue = toml::toml! {
+        [features.guardianv3]
+        enabled = true
+        housekeeper = ["Use project routing", 15000]
+        reviewer = ["Use project retrieval"]
+    }
+    .into();
+    assert_eq!(
+        sanitize(&mut project),
+        [
+            "features.guardianv3.housekeeper",
+            "features.guardianv3.reviewer"
+        ]
+    );
+    assert_eq!(
+        project,
+        toml::toml! { [features.guardianv3] enabled = true }.into()
     );
 }
 

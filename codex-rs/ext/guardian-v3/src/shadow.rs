@@ -122,6 +122,7 @@ impl Host {
         thread.insert_arc(Arc::clone(&reviewer));
         thread.insert(ShadowReviewer {
             reviewer: reviewer.clone(),
+            intake_stopped: tree.shadow_intake_stopped.clone(),
             cancellation,
         });
         if identity.actor == identity.root {
@@ -159,6 +160,7 @@ impl Host {
         };
         let tree = self.tree_delivery(root);
         *state = State::Running(Arc::clone(&tree));
+        let metrics = thread.get::<crate::shadow_metrics::ShadowMetrics>();
         let host = self.clone();
         let current = Arc::clone(&enrollment);
         enrollment.tasks.spawn(async move {
@@ -203,6 +205,9 @@ impl Host {
                 if !tree.stop.is_cancelled() {
                     *state = State::PendingStart(start);
                     drop(state);
+                    if let Some(metrics) = metrics {
+                        metrics.stopped("intake");
+                    }
                     tracing::warn!(%root, "Guardian shadow intake unavailable until the next turn");
                 }
             }
