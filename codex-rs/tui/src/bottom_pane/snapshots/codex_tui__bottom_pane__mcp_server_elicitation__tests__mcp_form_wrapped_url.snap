@@ -4,6 +4,8 @@ expression: snapshot_buffer(&buf)
 ---
                                         
   Field 1/1 (1 required unanswered)     
+  Server: server-1                      
+                                        
   Review https://github.com/openai/     
   codex/pull/12345?diff=split before    
   choosing.                             
@@ -17,7 +19,5 @@ expression: snapshot_buffer(&buf)
                                         
                                         
                                         
-                                        
-                                        
-                                        
-  enter to submit | esc to cancel
+  enter to submit | f6 to decline       
+  esc to cancel

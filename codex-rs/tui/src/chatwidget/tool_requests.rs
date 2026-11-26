@@ -361,8 +361,16 @@ impl ChatWidget {
                 .push_mcp_server_elicitation_request(request);
         } else {
             match params.request {
-                McpServerElicitationRequest::Form { message, .. } => {
+                McpServerElicitationRequest::Form {
+                    message,
+                    requested_schema,
+                    ..
+                } => {
                     let request = ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
+                        has_required_fields: requested_schema
+                            .required
+                            .as_ref()
+                            .is_some_and(|fields| !fields.is_empty()),
                         thread_id,
                         thread_label: None,
                         server_name: params.server_name,

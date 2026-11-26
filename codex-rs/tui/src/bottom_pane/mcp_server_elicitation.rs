@@ -5,6 +5,8 @@ use std::path::PathBuf;
 #[cfg(test)]
 use crate::app_command::AppCommand as Op;
 use codex_app_server_protocol::McpElicitationEnumSchema;
+use codex_app_server_protocol::McpElicitationNumberSchema;
+use codex_app_server_protocol::McpElicitationNumberType;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
@@ -52,6 +54,8 @@ use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::footer_hint::shortcut;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
 use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
@@ -62,6 +66,7 @@ use crate::terminal_program_status::ProgramStatusKind;
 use crate::text_formatting::format_json_compact;
 use crate::text_formatting::truncate_text;
 
+const DECLINE_FORM: KeyBinding = crate::key_hint::plain(KeyCode::F(6));
 const ANSWER_PLACEHOLDER: &str = "Type your answer";
 const OPTIONAL_ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
 const FOOTER_SEPARATOR: &str = " | ";
@@ -120,6 +125,7 @@ enum McpServerElicitationFieldInput {
         options: Vec<McpServerElicitationOption>,
         default_idx: Option<usize>,
     },
+    Number(McpElicitationNumberSchema),
     Text {
         secret: bool,
     },
@@ -211,7 +217,6 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
-        let requested_schema = serde_json::to_value(requested_schema).ok()?;
         let meta = meta.as_ref();
         let tool_suggestion = parse_tool_suggestion_request(meta);
         let is_tool_approval = meta
@@ -219,14 +224,12 @@ impl McpServerElicitationFormRequest {
             .and_then(|meta| meta.get(APPROVAL_META_KIND_KEY))
             .and_then(Value::as_str)
             == Some(APPROVAL_META_KIND_MCP_TOOL_CALL);
-        let is_empty_object_schema = requested_schema.as_object().is_some_and(|schema| {
-            schema.get("type").and_then(Value::as_str) == Some("object")
-                && schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .is_some_and(serde_json::Map::is_empty)
-        });
-        let is_message_only_schema = requested_schema.is_null() || is_empty_object_schema;
+        let properties = &requested_schema.properties;
+        let required: HashSet<_> = requested_schema.required.iter().flatten().collect();
+        if required.iter().any(|id| !properties.contains_key(*id)) {
+            return None;
+        }
+        let is_message_only_schema = properties.is_empty();
         let is_tool_approval_action = is_tool_approval && is_message_only_schema;
         let approval_display_params = if is_tool_approval_action {
             parse_tool_approval_display_params(meta)
@@ -307,7 +310,10 @@ impl McpServerElicitationFormRequest {
         } else {
             (
                 McpServerElicitationResponseMode::FormContent,
-                parse_fields_from_schema(&requested_schema)?,
+                properties
+                    .iter()
+                    .map(|(id, property)| parse_field(id, property.clone(), required.contains(id)))
+                    .collect::<Option<Vec<_>>>()?,
             )
         };
 
@@ -501,33 +507,6 @@ fn format_tool_approval_display_param_value(value: &Value) -> String {
     truncate_text(&formatted, APPROVAL_TOOL_PARAM_VALUE_TRUNCATE_GRAPHEMES)
 }
 
-fn parse_fields_from_schema(requested_schema: &Value) -> Option<Vec<McpServerElicitationField>> {
-    let schema = requested_schema.as_object()?;
-    if schema.get("type").and_then(Value::as_str) != Some("object") {
-        return None;
-    }
-    let required = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(ToString::to_string)
-        .collect::<HashSet<_>>();
-    let properties = schema.get("properties")?.as_object()?;
-    let mut fields = Vec::new();
-    for (id, property_schema) in properties {
-        let property =
-            serde_json::from_value::<McpElicitationPrimitiveSchema>(property_schema.clone())
-                .ok()?;
-        fields.push(parse_field(id, property, required.contains(id))?);
-    }
-    if fields.is_empty() {
-        return None;
-    }
-    Some(fields)
-}
-
 fn parse_field(
     id: &str,
     property: McpElicitationPrimitiveSchema,
@@ -606,9 +585,62 @@ fn parse_field(
         McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::SingleSelect(schema)) => {
             parse_single_select_field(id, schema, required)
         }
-        McpElicitationPrimitiveSchema::Number(_)
-        | McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::MultiSelect(_)) => None,
+        McpElicitationPrimitiveSchema::Number(mut schema) => {
+            let label = schema.title.take().unwrap_or_else(|| id.to_string());
+            let prompt = schema.description.take().unwrap_or_else(|| label.clone());
+            Some(McpServerElicitationField {
+                id: id.to_string(),
+                label,
+                prompt,
+                required,
+                input: McpServerElicitationFieldInput::Number(schema),
+            })
+        }
+        McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::MultiSelect(_)) => None,
     }
+}
+
+fn format_schema_number(value: f64) -> String {
+    // Shortest float formatting can change the digits of an exact integer.
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn numeric_answer(schema: &McpElicitationNumberSchema, text: &str) -> Result<Value, String> {
+    let number = match schema.type_ {
+        McpElicitationNumberType::Integer => text
+            .parse::<i64>()
+            .map(serde_json::Number::from)
+            .or_else(|_| text.parse::<u64>().map(serde_json::Number::from))
+            .map_err(|_| "Enter a whole number.")?,
+        McpElicitationNumberType::Number => text
+            .parse::<serde_json::Number>()
+            .map_err(|_| "Enter a number.")?,
+    };
+    let value = number.as_f64().ok_or("Enter a finite number.")?;
+    // Compare integral values without rounding large integers to the nearest float.
+    let integer = number.as_i128();
+    if let Some(min) = schema.minimum
+        && integer.map_or(value < min, |n| n < min.ceil() as i128)
+    {
+        let min = format_schema_number(min);
+        return Err(format!("Enter a value of at least {min}."));
+    }
+    if let Some(max) = schema.maximum
+        && integer.map_or(value > max, |n| n > max.floor() as i128)
+    {
+        let max = format_schema_number(max);
+        return Err(format!("Enter a value of at most {max}."));
+    }
+    // Send the same value we checked, even with arbitrary-precision JSON enabled.
+    Ok(if integer.is_some() {
+        Value::Number(number)
+    } else {
+        Value::from(value)
+    })
 }
 
 fn parse_single_select_field(
@@ -686,6 +718,7 @@ pub(crate) struct McpServerElicitationOverlay {
     done: bool,
     validation_error: Option<String>,
     list_keymap: ListKeymap,
+    composer_submit_keys: Vec<KeyBinding>,
     composer_submit_hint: Option<ShortcutHint>,
 }
 
@@ -737,6 +770,7 @@ impl McpServerElicitationOverlay {
             done: false,
             validation_error: None,
             list_keymap: keymap.list,
+            composer_submit_keys: keymap.composer.submit,
             composer_submit_hint,
         };
         overlay.reset_for_request();
@@ -756,6 +790,13 @@ impl McpServerElicitationOverlay {
                         selection.selected_idx = default_idx.or(Some(0));
                         (ComposerDraft::default(), default_idx.is_some())
                     }
+                    McpServerElicitationFieldInput::Number(schema) => (
+                        ComposerDraft {
+                            text: schema.default.map(format_schema_number).unwrap_or_default(),
+                            ..ComposerDraft::default()
+                        },
+                        schema.default.is_some(),
+                    ),
                     McpServerElicitationFieldInput::Text { .. } => {
                         (ComposerDraft::default(), false)
                     }
@@ -831,8 +872,14 @@ impl McpServerElicitationOverlay {
             return;
         }
         let draft = self.capture_composer_draft();
-        if let Some(answer) = self.current_answer_mut() {
-            if answer.answer_committed && answer.draft != draft {
+        let idx = self.current_index();
+        if let Some(answer) = self.answers.get_mut(idx) {
+            if matches!(
+                self.request.fields[idx].input,
+                McpServerElicitationFieldInput::Number(_)
+            ) {
+                answer.answer_committed = !draft.text.trim().is_empty();
+            } else if answer.draft != draft {
                 answer.answer_committed = false;
             }
             answer.draft = draft;
@@ -854,7 +901,14 @@ impl McpServerElicitationOverlay {
 
     fn answer_placeholder(&self) -> &'static str {
         self.current_field().map_or(ANSWER_PLACEHOLDER, |field| {
-            if field.required {
+            if let McpServerElicitationFieldInput::Number(schema) = &field.input {
+                match (schema.type_, field.required) {
+                    (McpElicitationNumberType::Integer, true) => "Enter a whole number",
+                    (McpElicitationNumberType::Integer, false) => "Enter a whole number (optional)",
+                    (McpElicitationNumberType::Number, true) => "Enter a number",
+                    (McpElicitationNumberType::Number, false) => "Enter a number (optional)",
+                }
+            } else if field.required {
                 ANSWER_PLACEHOLDER
             } else {
                 OPTIONAL_ANSWER_PLACEHOLDER
@@ -941,7 +995,9 @@ impl McpServerElicitationOverlay {
             &self.request.message,
             &self.request.approval_display_params,
         );
-        if self.request.environment_id.is_some() {
+        if self.request.response_mode == McpServerElicitationResponseMode::FormContent
+            || self.request.environment_id.is_some()
+        {
             let server = crate::app_server_approval_conversions::mcp_server_label(
                 &self.request.server_name,
                 self.request.environment_id.as_deref(),
@@ -1003,6 +1059,9 @@ impl McpServerElicitationOverlay {
                     "change field",
                 ));
             }
+        }
+        if self.request.response_mode == McpServerElicitationResponseMode::FormContent {
+            tips.push(shortcut(&DECLINE_FORM.display_label(), "to decline"));
         }
         tips.push(shortcut("esc", "to cancel"));
         tips
@@ -1068,26 +1127,30 @@ impl McpServerElicitationOverlay {
         self.restore_current_draft();
     }
 
-    fn field_value(&self, idx: usize) -> Option<Value> {
-        let field = self.request.fields.get(idx)?;
-        let answer = self.answers.get(idx)?;
-        match &field.input {
-            McpServerElicitationFieldInput::Select { options, .. } => {
-                if !answer.answer_committed {
-                    return None;
-                }
-                let selected_idx = answer.selection.selected_idx?;
-                options.get(selected_idx).map(|option| option.value.clone())
-            }
+    fn field_value(&self, idx: usize) -> Result<Option<Value>, String> {
+        let Some(answer) = self
+            .answers
+            .get(idx)
+            .filter(|answer| answer.answer_committed)
+        else {
+            return Ok(None);
+        };
+        Ok(match &self.request.fields[idx].input {
+            McpServerElicitationFieldInput::Number(schema) => Some(numeric_answer(
+                schema,
+                answer.draft.text_with_pending().trim(),
+            )?),
+            McpServerElicitationFieldInput::Select { options, .. } => answer
+                .selection
+                .selected_idx
+                .and_then(|idx| options.get(idx))
+                .map(|option| option.value.clone()),
             McpServerElicitationFieldInput::Text { .. } => {
-                if !answer.answer_committed {
-                    return None;
-                }
                 let text = answer.draft.text_with_pending();
                 let text = text.trim();
                 (!text.is_empty()).then(|| Value::String(text.to_string()))
             }
-        }
+        })
     }
 
     fn required_unanswered_count(&self) -> usize {
@@ -1095,21 +1158,12 @@ impl McpServerElicitationOverlay {
             .fields
             .iter()
             .enumerate()
-            .filter(|(idx, field)| field.required && self.field_value(*idx).is_none())
+            .filter(|(idx, field)| field.required && !matches!(self.field_value(*idx), Ok(Some(_))))
             .count()
     }
 
-    fn first_required_unanswered_index(&self) -> Option<usize> {
-        self.request
-            .fields
-            .iter()
-            .enumerate()
-            .find(|(idx, field)| field.required && self.field_value(*idx).is_none())
-            .map(|(idx, _)| idx)
-    }
-
     fn is_current_field_answered(&self) -> bool {
-        self.field_value(self.current_index()).is_some()
+        matches!(self.field_value(self.current_index()), Ok(Some(_)))
     }
 
     fn option_index_for_digit(&self, ch: char) -> Option<usize> {
@@ -1136,14 +1190,16 @@ impl McpServerElicitationOverlay {
         }
     }
 
-    fn dispatch_cancel(&self) {
+    fn dismiss(&self, decision: McpServerElicitationAction) {
+        let cancel_tool =
+            self.request.is_tool_approval && decision == McpServerElicitationAction::Cancel;
         self.app_event_tx.resolve_elicitation(
             self.request.thread_id,
             self.request.server_name.clone(),
             self.request.request_id.clone(),
-            McpServerElicitationAction::Cancel,
+            decision,
             /*content*/ None,
-            self.request.is_tool_approval.then(|| {
+            cancel_tool.then(|| {
                 serde_json::json!({
                     CANCELLATION_REASON_KEY: McpApprovalCancellationReason::User,
                 })
@@ -1163,15 +1219,25 @@ impl McpServerElicitationOverlay {
 
     fn submit_answers(&mut self) {
         self.save_current_draft();
-        if let Some(idx) = self.first_required_unanswered_index() {
-            self.validation_error = Some("Answer required fields before submitting.".to_string());
+        let mut content = serde_json::Map::new();
+        for (idx, field) in self.request.fields.iter().enumerate() {
+            let error = match self.field_value(idx) {
+                Ok(Some(value)) => {
+                    content.insert(field.id.clone(), value);
+                    continue;
+                }
+                Ok(None) if !field.required => continue,
+                Ok(None) => "Answer required fields before submitting.".to_string(),
+                Err(error) => error,
+            };
             self.jump_to_field(idx);
+            self.validation_error = Some(error);
             return;
         }
         self.validation_error = None;
         if self.request.response_mode == McpServerElicitationResponseMode::ApprovalAction {
-            let (decision, meta) =
-                match self.field_value(/*idx*/ 0).as_ref().and_then(Value::as_str) {
+            let (decision, approval_meta) =
+                match content.get(APPROVAL_FIELD_ID).and_then(Value::as_str) {
                     Some(APPROVAL_ACCEPT_ONCE_VALUE) => (McpServerElicitationAction::Accept, None),
                     Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
                         McpServerElicitationAction::Accept,
@@ -1202,18 +1268,11 @@ impl McpServerElicitationOverlay {
                 self.request.request_id.clone(),
                 decision,
                 /*content*/ None,
-                meta,
+                approval_meta,
             );
             self.advance_queue_or_complete();
             return;
         }
-        let content = self
-            .request
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| self.field_value(idx).map(|value| (field.id.clone(), value)))
-            .collect::<serde_json::Map<_, _>>();
         self.app_event_tx.resolve_elicitation(
             self.request.thread_id,
             self.request.server_name.clone(),
@@ -1255,6 +1314,7 @@ impl McpServerElicitationOverlay {
     }
 
     fn apply_submission_to_draft(&mut self, text: String, text_elements: Vec<TextElement>) {
+        let committed = !text.trim().is_empty();
         let local_image_paths = self.composer.local_image_paths();
         if let Some(answer) = self.current_answer_mut() {
             answer.draft = ComposerDraft {
@@ -1263,7 +1323,7 @@ impl McpServerElicitationOverlay {
                 local_image_paths: local_image_paths.clone(),
                 pending_pastes: Vec::new(),
             };
-            answer.answer_committed = !text.trim().is_empty();
+            answer.answer_committed = committed;
         }
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
@@ -1283,8 +1343,10 @@ impl McpServerElicitationOverlay {
                 ..
             } => {
                 self.apply_submission_to_draft(text, text_elements);
-                self.validation_error = None;
-                self.go_next_or_submit();
+                self.validation_error = self.field_value(self.current_index()).err();
+                if self.validation_error.is_none() {
+                    self.go_next_or_submit();
+                }
                 true
             }
             _ => false,
@@ -1521,11 +1583,20 @@ impl BottomPaneView for McpServerElicitationOverlay {
             return;
         }
 
+        if self.request.response_mode == McpServerElicitationResponseMode::FormContent
+            && key_event.kind == KeyEventKind::Press
+            && DECLINE_FORM.is_press(key_event)
+        {
+            self.dismiss(McpServerElicitationAction::Decline);
+            self.advance_queue_or_complete();
+            return;
+        }
+
         if matches!(key_event.code, KeyCode::Esc)
             || self.current_field_is_select()
                 && self.list_keymap.action_for(key_event) == Some(ListAction::Cancel)
         {
-            self.dispatch_cancel();
+            self.dismiss(McpServerElicitationAction::Cancel);
             self.done = true;
             return;
         }
@@ -1615,6 +1686,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                     }
                 }
                 (_, KeyCode::Backspace | KeyCode::Delete) => self.clear_selection(),
+                _ if key_event.kind == KeyEventKind::Repeat => {}
                 (_, KeyCode::Char(' ')) => self.select_current_option(/*committed*/ true),
                 (Some(ListAction::Accept), _) | (_, KeyCode::Enter) => {
                     if self.selected_option_index().is_some() {
@@ -1643,6 +1715,16 @@ impl BottomPaneView for McpServerElicitationOverlay {
             return;
         }
         let after = self.capture_composer_draft();
+        // The composer suppresses empty submissions, but optional fields can be skipped.
+        if key_event.kind == KeyEventKind::Press
+            && self.composer_submit_keys.is_pressed(key_event)
+            && after.text.trim().is_empty()
+            && !self.composer.is_in_paste_burst()
+            && self.current_field().is_some_and(|field| !field.required)
+        {
+            self.go_next_or_submit();
+            return;
+        }
         if before != after {
             self.validation_error = None;
             if let Some(answer) = self.current_answer_mut() {
@@ -1668,7 +1750,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
             self.clear_current_draft();
             return CancellationEvent::Handled;
         }
-        self.dispatch_cancel();
+        self.dismiss(McpServerElicitationAction::Cancel);
         self.done = true;
         CancellationEvent::Handled
     }
@@ -1903,28 +1985,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_numeric_form_falls_back() {
-        let request = from_form_request(
-            ThreadId::default(),
-            form_request(
-                "Pick a number",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "count": {
-                            "type": "integer",
-                            "title": "Count",
-                        }
-                    },
-                }),
-                /*meta*/ None,
-            ),
-        );
-
-        assert_eq!(request, None);
-    }
-
-    #[test]
     fn empty_object_schema_uses_approval_actions() {
         let thread_id = ThreadId::default();
         let request = from_form_request(
@@ -2152,17 +2212,21 @@ mod tests {
         let request = from_form_request(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Complete your order",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
+                        "amount": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "price": {"type": "number", "maximum": 0.5, "default": 1},
+                        "reference": {"type": "integer", "default": 1_000_000_000_000_000_128_i64},
+                        "tip": {"type": "number", "default": 1},
                         "confirmed": {
                             "type": "boolean",
                             "title": "Confirm",
                             "description": "Approve the pending action.",
                         }
                     },
-                    "required": ["confirmed"],
+                    "required": ["amount", "confirmed"],
                 }),
                 /*meta*/ None,
             ),
@@ -2170,11 +2234,52 @@ mod tests {
         .expect("expected supported form");
         let mut overlay = McpServerElicitationOverlay::new(
             request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
-            /*disable_paste_burst*/ false,
+            /*disable_paste_burst*/ true,
         );
 
-        overlay.select_current_option(/*committed*/ true);
-        overlay.submit_answers();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let repeat = KeyEvent {
+            kind: KeyEventKind::Repeat,
+            ..enter
+        };
+        for invalid in ["0", "1.5", "4"] {
+            overlay.clear_current_draft();
+            overlay.handle_paste(invalid.to_string());
+            overlay.handle_key_event(enter);
+            assert!(rx.try_recv().is_err());
+            assert!(overlay.validation_error.is_some());
+        }
+        let width = 80;
+        let area = Rect::new(0, 0, width, overlay.desired_height(width));
+        let snapshot = render_snapshot(&overlay, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!("numeric_form_validation", snapshot);
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        overlay.handle_key_event(enter);
+        overlay.handle_key_event(repeat);
+        overlay.handle_key_event(enter); // Confirm
+        let next = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        overlay.handle_key_event(next); // Leave the invalid price default untouched
+        overlay.handle_key_event(next); // Keep the reference default
+        overlay.handle_key_event(KeyCode::Backspace.into()); // Clear the optional tip
+        overlay.handle_key_event(repeat);
+        assert!(overlay.validation_error.is_none());
+        overlay.handle_key_event(enter);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            overlay.validation_error.as_deref(),
+            Some("Enter a value of at most 0.5.")
+        );
+
+        overlay.clear_current_draft();
+        overlay.handle_paste("0.50000000000000001".to_string());
+        overlay.handle_key_event(next);
+        overlay.handle_key_event(next);
+        overlay.handle_key_event(enter);
 
         let event = rx.try_recv().expect("expected resolution");
         let AppEvent::SubmitThreadOp {
@@ -2192,6 +2297,9 @@ mod tests {
                 request_id: request_id("request-1"),
                 decision: McpServerElicitationAction::Accept,
                 content: Some(serde_json::json!({
+                    "amount": 2,
+                    "price": 0.5,
+                    "reference": 1_000_000_000_000_000_128_i64,
                     "confirmed": true,
                 })),
                 meta: None,
@@ -2492,7 +2600,7 @@ mod tests {
 
     #[test]
     fn queues_requests_fifo() {
-        let (tx, _rx) = test_sender();
+        let (tx, mut rx) = test_sender();
         let first = from_form_request(
             ThreadId::default(),
             form_request(
@@ -2551,8 +2659,18 @@ mod tests {
 
         overlay.try_consume_mcp_server_elicitation_request(second);
         overlay.try_consume_mcp_server_elicitation_request(third);
-        overlay.select_current_option(/*committed*/ true);
-        overlay.submit_answers();
+        overlay.handle_key_event(KeyCode::F(6).into());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SubmitThreadOp {
+                op: Op::ResolveElicitation {
+                    decision: McpServerElicitationAction::Decline,
+                    content: None,
+                    ..
+                },
+                ..
+            })
+        ));
 
         assert_eq!(overlay.request.message, "Second");
 

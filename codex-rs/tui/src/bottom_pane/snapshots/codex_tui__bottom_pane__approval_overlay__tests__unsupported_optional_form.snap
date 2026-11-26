@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "render_overlay_lines(&view, 80)"
+---
+
+  Codex cannot display this form from test-server.
+
+  Server: test-server
+
+  Need more information
+
+
+› 1. Accept without optional fields (y)
+  2. Decline and continue (n)
+  3. Cancel this request (esc)
+
+  Press enter to confirm or q to cancel

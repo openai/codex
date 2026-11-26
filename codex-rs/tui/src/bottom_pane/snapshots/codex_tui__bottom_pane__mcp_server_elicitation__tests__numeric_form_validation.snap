@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/mcp_server_elicitation.rs
+expression: snapshot
+---
+
+  Field 1/5 (2 required unanswered)
+  Server: server-1
+
+  Complete your order
+
+  amount
+
+  › 4
+
+  Enter a value of at most 3. | enter to submit answer | ⌃p / ⌃n change field
+  f6 to decline | esc to cancel

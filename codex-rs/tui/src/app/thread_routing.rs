@@ -425,9 +425,14 @@ impl App {
                     match &params.request {
                         codex_app_server_protocol::McpServerElicitationRequest::Form {
                             message,
+                            requested_schema,
                             ..
                         } => Some(ThreadInteractiveRequest::Approval(
                             ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
+                                has_required_fields: requested_schema
+                                    .required
+                                    .as_ref()
+                                    .is_some_and(|fields| !fields.is_empty()),
                                 thread_id,
                                 thread_label,
                                 server_name: params.server_name.clone(),

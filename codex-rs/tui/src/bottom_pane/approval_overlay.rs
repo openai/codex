@@ -114,6 +114,7 @@ pub(crate) struct ApplyPatchApprovalRequest {
 
 #[derive(Clone, Debug)]
 pub(crate) struct McpElicitationApprovalRequest {
+    pub has_required_fields: bool,
     pub thread_id: ThreadId,
     pub thread_label: Option<String>,
     pub server_name: String,
@@ -303,9 +304,9 @@ impl ApprovalOverlay {
                 "Would you like to make the following edits?".to_string(),
             ),
             ApprovalRequest::McpElicitation(request) => (
-                elicitation_options(approval_keymap),
+                elicitation_options(approval_keymap, request.has_required_fields),
                 format!(
-                    "{} needs your approval.",
+                    "Codex cannot display this form from {}.",
                     crate::app_server_approval_conversions::mcp_server_label(
                         &request.server_name,
                         request.environment_id.as_deref()
@@ -326,7 +327,13 @@ impl ApprovalOverlay {
             .iter()
             .map(|opt| SelectionItem {
                 name: opt.label.clone(),
-                display_shortcut: approval_keymap.hint_for_bindings(&opt.shortcuts),
+                display_shortcut: match opt.decision {
+                    // Esc is reserved for Cancel and was filtered out of these bindings.
+                    ApprovalDecision::McpElicitation(McpServerElicitationAction::Decline) => {
+                        approval_keymap.primary_hint("decline", &opt.shortcuts)
+                    }
+                    _ => approval_keymap.hint_for_bindings(&opt.shortcuts),
+                },
                 dismiss_on_select: false,
                 ..Default::default()
             })
@@ -1114,7 +1121,7 @@ fn permissions_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
 /// dismissal remains a safe abort path and never silently maps to "continue
 /// without requested info." Any decline/cancel overlap is removed from the
 /// decline option in elicitation mode to preserve this invariant.
-fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
+fn elicitation_options(keymap: &ApprovalKeymap, has_required_fields: bool) -> Vec<ApprovalOption> {
     let mut cancel_shortcuts = vec![key_hint::plain(KeyCode::Esc)];
     for shortcut in &keymap.cancel {
         if !cancel_shortcuts.contains(shortcut) {
@@ -1129,14 +1136,17 @@ fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
         .filter(|shortcut| !cancel_shortcuts.contains(shortcut))
         .collect();
 
-    vec![
-        ApprovalOption {
-            label: "Yes, provide the requested info".to_string(),
+    let mut options = Vec::new();
+    if !has_required_fields {
+        options.push(ApprovalOption {
+            label: "Accept without optional fields".to_string(),
             decision: ApprovalDecision::McpElicitation(McpServerElicitationAction::Accept),
             shortcuts: keymap.approve.clone(),
-        },
+        });
+    }
+    options.extend([
         ApprovalOption {
-            label: "No, but continue without it".to_string(),
+            label: "Decline and continue".to_string(),
             decision: ApprovalDecision::McpElicitation(McpServerElicitationAction::Decline),
             shortcuts: decline_shortcuts,
         },
@@ -1145,7 +1155,8 @@ fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
             decision: ApprovalDecision::McpElicitation(McpServerElicitationAction::Cancel),
             shortcuts: cancel_shortcuts,
         },
-    ]
+    ]);
+    options
 }
 
 #[cfg(test)]
@@ -1287,6 +1298,7 @@ mod tests {
 
     fn make_elicitation_request() -> ApprovalRequest {
         ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
+            has_required_fields: false,
             environment_id: None,
             thread_id: ThreadId::new(),
             thread_label: None,
@@ -1404,6 +1416,10 @@ mod tests {
             keymap.list,
         );
 
+        assert_snapshot!(
+            "unsupported_optional_form",
+            render_overlay_lines(&view, /*width*/ 80)
+        );
         view.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
 
         assert!(view.is_complete());
@@ -2499,8 +2515,17 @@ mod tests {
     fn esc_cancels_mcp_elicitation() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = make_overlay(make_elicitation_request(), tx, Features::with_defaults());
+        let mut request = make_elicitation_request();
+        if let ApprovalRequest::McpElicitation(form) = &mut request {
+            form.has_required_fields = true;
+        }
+        let mut view = make_overlay(request, tx, Features::with_defaults());
 
+        assert_snapshot!(
+            "unsupported_required_form",
+            render_overlay_lines(&view, /*width*/ 80)
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         let mut decision = None;
