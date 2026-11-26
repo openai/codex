@@ -101,6 +101,8 @@ mod session_lifecycle_requests;
 mod side_chat_policy_tests;
 #[path = "tests/sidebar_chooser_hover_tests.rs"]
 mod sidebar_chooser_hover_tests;
+#[path = "tests/sidebar_file_path_tests.rs"]
+mod sidebar_file_path_tests;
 mod startup;
 #[path = "tests/startup_frame_tests.rs"]
 mod startup_frame_tests;

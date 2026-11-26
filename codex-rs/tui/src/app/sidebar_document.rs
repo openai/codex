@@ -1,6 +1,6 @@
 //! Read-only Markdown previews use the focused thread's workspace and app-server.
 
-mod footer;
+pub(super) mod footer;
 pub(super) mod model_read;
 mod open_error;
 mod path_actions;
@@ -11,6 +11,8 @@ use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
 use crate::custom_terminal::Frame;
+use crate::footer_hint::Hint;
+use crate::footer_hint::HintFocus;
 use crate::keymap::RuntimeKeymap;
 use crate::markdown_render::FileLink;
 use crate::markdown_render::SourceLocation;
@@ -102,6 +104,7 @@ pub(super) struct DocumentRenderOptions<'a> {
     pub(super) keymap: &'a RuntimeKeymap,
     pub(super) resize_preview: bool,
     pub(super) resize_hint: Option<&'a str>,
+    pub(super) hint_focus: HintFocus,
     pub(super) image_protocol: Option<ImageProtocol>,
 }
 
@@ -212,6 +215,13 @@ impl Document {
 
     fn title(&self) -> String {
         self.path.basename().unwrap_or_default()
+    }
+
+    fn opens_live_on_enter(&self) -> bool {
+        self.awaits_open()
+            || (self.is_model_snapshot()
+                && self.link.is_none()
+                && !self.owns_interaction_key(KeyCode::Enter.into()))
     }
 
     pub(super) fn awaits_open(&self) -> bool {
@@ -393,6 +403,7 @@ impl Document {
             frames,
             keymap,
             resize_hint,
+            hint_focus,
             resize_preview,
             image_protocol,
         } = options;
@@ -405,7 +416,8 @@ impl Document {
             let line = if let Some(hint) = resize_hint {
                 crate::sidebar_chooser::resize_hint(hint, footer.width)
             } else {
-                self.path_actions.revealed_footer(footer.width, frames)
+                self.path_actions
+                    .revealed_footer(footer.width, frames, hint_focus)
             };
             line.render(footer, buf);
             crate::sidebar_chooser::paint_file_path(
@@ -417,33 +429,32 @@ impl Document {
             return None;
         }
         if self.is_model_snapshot() && body.height > 1 {
-            "Snapshot · Enter to open live"
-                .dim()
+            let open = (hint_focus.is_active() && self.opens_live_on_enter())
+                .then(|| Hint::key("enter", "open live"));
+            let banner = std::iter::once(Hint::Status("Snapshot".dim().into())).chain(open);
+            HintFocus::Active
+                .render_row(banner, body.width)
+                .line
                 .render(Rect { height: 1, ..body }, buf);
             body.y += 1;
             body.height -= 1;
         }
         let path_actions_available = self.path_actions_available() && body.height > 2;
         if !matches!(self.state, State::Ready { .. }) {
+            let close = || {
+                Hint::key(
+                    crate::key_hint::plain(KeyCode::Esc).display_label(),
+                    "close",
+                )
+            };
             let (base, max_rows) = match &self.state {
                 State::Image(_) => (
-                    vec![
-                        crate::footer_hint::shortcut(
-                            &crate::key_hint::plain(KeyCode::Esc).display_label(),
-                            "close",
-                        ),
-                        crate::footer_hint::shortcut("←/→", "tabs"),
-                    ],
+                    vec![close(), Hint::key("←/→", "tabs")],
                     body.height.saturating_sub(1).min(2),
                 ),
                 State::Failed { error, .. } => {
                     let count = open_error::lines(&self.path, error, body.width).len();
-                    let close = (count + 2 < usize::from(body.height)).then(|| {
-                        crate::footer_hint::shortcut(
-                            &crate::key_hint::plain(KeyCode::Esc).display_label(),
-                            "close",
-                        )
-                    });
+                    let close = (count + 2 < usize::from(body.height)).then(close);
                     (
                         close.into_iter().collect(),
                         body.height
@@ -466,11 +477,10 @@ impl Document {
                         usize::from(max_rows),
                         frames,
                         [true; 2],
+                        hint_focus,
                     )
-                } else if base.is_empty() {
-                    Vec::new()
                 } else {
-                    vec![crate::footer_hint::HintLine::new(base, body.width).line]
+                    hint_focus.render_lines(base, body.width, usize::from(max_rows.min(1)))
                 };
                 footer::paint(&mut body, lines, buf);
             }
@@ -488,7 +498,8 @@ impl Document {
                     .into_iter()
                     .map(|line| Line::from(line.into_owned()))
                     .collect::<Vec<_>>();
-                lines.push("Focus this pane and press Enter to open.".dim().into());
+                let prompt = hint_focus.render_row([Hint::key("enter", "open")], body.width);
+                lines.push(prompt.line);
                 Paragraph::new(lines)
                     .wrap(ratatui::widgets::Wrap { trim: true })
                     .render(body, buf);
@@ -529,7 +540,10 @@ impl Document {
                 if view.advance_search(cells) {
                     frames.schedule_frame();
                 }
-                let footer = view.footer_with_navigation(body.width, motion, "Esc close");
+                let footer = hint_focus
+                    .is_active()
+                    .then(|| view.footer_with_navigation(body.width, motion, "Esc close"))
+                    .flatten();
                 let text: ratatui::text::Text<'_> = if let Some(hint) = resize_hint {
                     crate::sidebar_chooser::resize_hint(hint, body.width).into()
                 } else if let Some(footer) = &footer
@@ -537,27 +551,46 @@ impl Document {
                 {
                     footer.text.clone()
                 } else {
-                    let hints = footer::reader_hints(
+                    let escape = if self.link.is_some() {
+                        "clear link"
+                    } else if target.is_some() {
+                        "clear highlight"
+                    } else {
+                        "close"
+                    };
+                    let esc = crate::key_hint::plain(KeyCode::Esc).display_label();
+                    let mut hints = vec![Hint::key(esc, escape)];
+                    let available = footer::key_available(keymap);
+                    if self.link.is_some() && available(KeyCode::Enter) {
+                        hints.push(Hint::key("enter", "open link"));
+                    }
+                    let link = available(KeyCode::Tab).then(|| Hint::key("Tab", "link"));
+                    hints.extend(footer::reading_hints(
                         keymap,
-                        if target.is_some() {
-                            "clear highlight"
-                        } else {
-                            "close"
-                        },
-                    );
+                        footer::PagerHints::WithChords,
+                        link,
+                    ));
+                    let max_rows = usize::from(body.height.saturating_sub(1).min(2));
                     if path_actions_available {
                         self.path_actions
                             .footer_lines(
                                 hints,
                                 body.width,
-                                usize::from(body.height.saturating_sub(1).min(2)),
+                                max_rows,
                                 frames,
-                                footer::available_path_keys(keymap),
+                                ['c', 'p'].map(|ch| available(KeyCode::Char(ch))),
+                                hint_focus,
                             )
                             .into()
                     } else {
-                        crate::footer_hint::HintLine::new(hints, body.width)
-                            .line
+                        let query = (!hint_focus.is_active())
+                            .then(|| view.search_footer(body.width).map(|(query, _)| query))
+                            .flatten();
+                        let rows = max_rows.saturating_sub(usize::from(query.is_some())).min(1);
+                        query
+                            .into_iter()
+                            .chain(hint_focus.render_lines(hints, body.width, rows))
+                            .collect::<Vec<_>>()
                             .into()
                     }
                 };
@@ -942,10 +975,7 @@ impl App {
                 }
                 if crate::key_hint::plain(KeyCode::Enter).is_press(*key)
                     && let Some(parent) = parent
-                    && (doc.awaits_open()
-                        || (doc.is_model_snapshot()
-                            && doc.link.is_none()
-                            && !doc.owns_interaction_key(*key)))
+                    && doc.opens_live_on_enter()
                 {
                     doc.access = DocumentAccess::User;
                     if doc.awaits_open() {

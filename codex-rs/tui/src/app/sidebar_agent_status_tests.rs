@@ -722,6 +722,35 @@ async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_
     );
     assert!(!screen.contains("direct input is disabled"), "{screen}");
 
+    let keymap = toml::from_str(
+        r#"
+        [pager]
+        scroll_up = ["f12 u", "up"]
+        find = ["f12 f", "f3"]
+        "#,
+    )?;
+    app.keymap = crate::keymap::RuntimeKeymap::from_config(&keymap).expect("valid pager bindings");
+    app.chat_widget.apply_keymap_update(keymap, &app.keymap);
+    // A short viewport gives the displayed scroll key actual history to move through.
+    let screen = side_frame(&mut app, &mut tui, Size::new(/*width*/ 180, /*height*/ 8))?;
+    let footer = screen
+        .lines()
+        .last()
+        .unwrap()
+        .split_once('│')
+        .unwrap()
+        .1
+        .trim();
+    insta::assert_snapshot!(footer, @"↑/↓ read · f3 find · ⌃x [ select");
+    assert!(app.transcript_view.is_following());
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Up.into())))
+        .await?;
+    assert!(!app.transcript_view.is_following());
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::End.into())))
+        .await?;
+    assert!(app.transcript_view.is_following());
+    side_frame(&mut app, &mut tui, Size::new(/*width*/ 180, /*height*/ 20))?;
+
     app.keymap.pager.jump_top = vec![crate::key_hint::plain(KeyCode::F(6))];
     Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::F(6).into())))
         .await?;

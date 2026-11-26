@@ -250,6 +250,7 @@ async fn document_preview_scenario() -> Result<()> {
         app.keymap.pager.scroll_down = vec![KeyBinding::from_event(key)];
         Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
         let scrolled = side_frame(&mut app, &mut tui, size)?;
+        assert_eq!(scrolled.contains("Tab link"), key.code != KeyCode::Tab);
         assert!(!scrolled.contains("# Guide"), "{scrolled}");
         assert!(!scrolled.contains("Back to bottom"), "{scrolled}");
         Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Home.into())))
@@ -285,6 +286,16 @@ async fn document_preview_scenario() -> Result<()> {
         .find_map(|line| line.find("Find: ").map(|start| line[start..].trim_end()))
         .expect("document Find editor");
     insta::assert_snapshot!(footer, @"Find: egg");
+    app.focus_workspace_composer(&mut tui);
+    assert_eq!(app.panel_focus(), Some(PaneFocus::Main));
+    let parked = side_frame(&mut app, &mut tui, size)?;
+    let sidebar = app.conversation_frame.panel_area().expect("document panel");
+    insta::assert_snapshot!(visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1), @"Find: egg");
+    assert!(!parked.contains("esc cancel"), "{parked}");
+    let pane = app.sidebar_mut();
+    pane.show(pane.visible_content().unwrap(), PaneFocus::Sidebar);
+    assert!(side_frame(&mut app, &mut tui, size)?.contains("Find: egg"));
+
     Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
         .await?;
     let select = crossterm::event::KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
@@ -299,6 +310,12 @@ async fn document_preview_scenario() -> Result<()> {
     for key in [KeyCode::Char('v'), KeyCode::Right] {
         Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
     }
+    app.focus_workspace_composer(&mut tui);
+    let parked = side_frame(&mut app, &mut tui, size)?;
+    assert!(!parked.contains("q close"), "{parked}");
+    let pane = app.sidebar_mut();
+    pane.show(pane.visible_content().unwrap(), PaneFocus::Sidebar);
+    assert!(side_frame(&mut app, &mut tui, size)?.contains("q close"));
     app.reconnect.offline = true;
     let copy = crossterm::event::KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(matches!(
@@ -392,6 +409,13 @@ async fn document_preview_scenario() -> Result<()> {
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
     insta::assert_snapshot!(highlighted, @"Next");
+    let line = visible_sidebar_row(&tui, sidebar, sidebar.bottom() - 1);
+    assert!(line.starts_with("esc clear link"), "{line}");
+    for key in [KeyCode::Esc, KeyCode::Tab] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+        assert_eq!(app.sidebar().unwrap().documents.len(), 1);
+    }
+
     for key in [KeyCode::Home, KeyCode::Enter] {
         assert!(
             Box::pin(app.handle_document_input(&mut tui, &mut server, &TuiEvent::Key(key.into())))

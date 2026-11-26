@@ -52,16 +52,17 @@ impl Confirmation {
             Line::from(label).style(style).render(button, buf);
         }
         if let Some(footer) = body.rows().nth(offset + 2) {
-            footer_hint::HintLine::new(
-                [
-                    footer_hint::shortcut("←/→", "choose"),
-                    footer_hint::shortcut("Enter", "confirm"),
-                    footer_hint::shortcut("Esc", "cancel"),
-                ],
-                footer.width,
-            )
-            .line
-            .render(footer, buf);
+            footer_hint::HintFocus::Active
+                .render_row(
+                    [
+                        footer_hint::Hint::key("←/→", "choose"),
+                        footer_hint::Hint::key("Enter", "confirm"),
+                        footer_hint::Hint::key("Esc", "cancel"),
+                    ],
+                    footer.width,
+                )
+                .line
+                .render(footer, buf);
         }
         buttons
     }

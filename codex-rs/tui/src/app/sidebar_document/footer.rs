@@ -1,8 +1,9 @@
 //! Builds preview shortcuts and reserves only the footer rows that are actually used.
 
-use crate::footer_hint::shortcut;
+use crate::footer_hint::Hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
 use crate::keymap::KeymapContext;
 use crate::keymap::RuntimeKeymap;
 use crossterm::event::KeyCode;
@@ -12,35 +13,51 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-pub(super) fn reader_hints(keymap: &RuntimeKeymap, close_label: &str) -> Vec<Line<'static>> {
-    [
-        Some(shortcut(
-            &crate::key_hint::plain(KeyCode::Esc).display_label(),
-            close_label,
-        )),
-        Some(shortcut("↑/↓", "read")),
-        Some(shortcut(
-            &keymap
-                .pager
-                .find
-                .first()
-                .map_or_else(|| "F3".to_owned(), KeyBinding::display_label),
-            "find",
-        )),
-        Some(shortcut("Tab", "link")),
-        keymap
-            .primary_hint(KeymapContext::Global, "select_transcript")
-            .map(|hint| shortcut(&hint.display_label(), "select")),
+/// Watch-only readers handle pager keys directly without dispatching pager chords.
+pub(in crate::app) enum PagerHints {
+    SingleKeys,
+    WithChords,
+}
+
+pub(in crate::app) fn reading_hints(
+    keymap: &RuntimeKeymap,
+    pager_hints: PagerHints,
+    link: Option<Hint>,
+) -> impl Iterator<Item = Hint> {
+    let pager = &keymap.pager;
+    let hint = |action, bindings: &[KeyBinding]| match pager_hints {
+        PagerHints::SingleKeys => {
+            crate::keymap::primary_binding(bindings).map(ShortcutHint::Single)
+        }
+        PagerHints::WithChords => pager.primary_hint(action, bindings),
+    };
+    let movement = [
+        hint("scroll_up", &pager.scroll_up),
+        hint("scroll_down", &pager.scroll_down),
     ]
     .into_iter()
     .flatten()
-    .collect()
+    .map(crate::key_hint::ShortcutHint::display_label)
+    .collect::<Vec<_>>()
+    .join("/");
+    [
+        (!movement.is_empty()).then(|| Hint::key(movement, "read")),
+        hint("find", &pager.find)
+            .or_else(|| keymap.primary_hint(KeymapContext::Global, "find_transcript"))
+            .map(|hint| Hint::key(hint.display_label(), "find")),
+        link,
+        keymap
+            .primary_hint(KeymapContext::Global, "select_transcript")
+            .map(|hint| Hint::key(hint.display_label(), "select")),
+    ]
+    .into_iter()
+    .flatten()
 }
 
-pub(super) fn available_path_keys(keymap: &RuntimeKeymap) -> [bool; 2] {
+pub(super) fn key_available(keymap: &RuntimeKeymap) -> impl Fn(KeyCode) -> bool + '_ {
     let pager = &keymap.pager;
-    ['c', 'p'].map(|ch| {
-        let key = KeyCode::Char(ch).into();
+    |code| {
+        let key = code.into();
         ![
             &pager.jump_top,
             &pager.jump_bottom,
@@ -56,7 +73,7 @@ pub(super) fn available_path_keys(keymap: &RuntimeKeymap) -> [bool; 2] {
         ]
         .iter()
         .any(|bindings| bindings.is_pressed(key))
-    })
+    }
 }
 
 pub(super) fn paint(body: &mut Rect, lines: Vec<Line<'_>>, buf: &mut Buffer) {

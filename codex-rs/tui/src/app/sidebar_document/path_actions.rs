@@ -3,8 +3,8 @@
 use crate::clipboard_copy::CopyFormat;
 use crate::clipboard_copy::CopyStatus;
 use crate::clipboard_copy::worker::CopyResult;
-use crate::footer_hint::HintLine;
-use crate::footer_hint::shortcut;
+use crate::footer_hint::Hint;
+use crate::footer_hint::HintFocus;
 use crate::key_hint::plain;
 use crate::keymap::ListAction;
 use crate::sidebar_chooser;
@@ -118,26 +118,35 @@ impl PathActions {
         }
     }
 
-    pub(super) fn revealed_footer(&mut self, width: u16, frames: &FrameRequester) -> Line<'static> {
+    pub(super) fn revealed_footer(
+        &mut self,
+        width: u16,
+        frames: &FrameRequester,
+        focus: HintFocus,
+    ) -> Line<'static> {
         let esc = plain(KeyCode::Esc).display_label();
-        let hints = self.feedback_hint(frames).into_iter().chain([
-            shortcut(&format!("p/{esc}"), "hide path"),
-            shortcut("c", "copy path"),
-        ]);
-        HintLine::new(hints, width).line
+        let hints = [
+            Hint::key(format!("p/{esc}"), "hide path"),
+            Hint::key("c", "copy path"),
+        ];
+        let feedback = self.feedback_hint(frames).map(Hint::Status);
+        focus
+            .render_row(feedback.into_iter().chain(hints), width)
+            .line
     }
 
     pub(super) fn footer_lines(
         &mut self,
-        base: Vec<Line<'static>>,
+        base: Vec<Hint>,
         width: u16,
         max_rows: usize,
         frames: &FrameRequester,
         available: [bool; 2],
+        focus: HintFocus,
     ) -> Vec<Line<'static>> {
         // The first base hint is close or clear highlight. Navigation can overflow.
         let mut base = base.into_iter();
-        let path_hints = [shortcut("c", "copy path"), shortcut("p", "show path")]
+        let path_hints = [Hint::key("c", "copy path"), Hint::key("p", "show path")]
             .into_iter()
             .zip(available)
             .filter_map(|(hint, available)| available.then_some(hint));
@@ -145,12 +154,9 @@ impl PathActions {
             .next()
             .into_iter()
             .chain(path_hints)
-            .chain(self.feedback_hint(frames))
+            .chain(self.feedback_hint(frames).map(Hint::Status))
             .chain(base);
-        HintLine::wrapped(hints, width, max_rows)
-            .into_iter()
-            .map(|row| row.line)
-            .collect()
+        focus.render_lines(hints, width, max_rows)
     }
 
     fn feedback_hint(&mut self, frames: &FrameRequester) -> Option<Line<'static>> {

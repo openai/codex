@@ -304,6 +304,19 @@ impl App {
                     tui.frame_requester().schedule_frame();
                     if down {
                         self.sidebar_press = candidate;
+                        if button == MouseButton::Left
+                            && mouse.modifiers.is_empty()
+                            && self.chooser_focus() == Some(PaneFocus::Main)
+                            && self.sidebar().is_some_and(|pane| pane.showing_file_path)
+                            && frame.sidebar_input == current
+                            && self.pane_resize.is_none()
+                            && frame.panel_area().is_some_and(|area| {
+                                sidebar_chooser::file_path_areas(area)[0].contains(point)
+                            })
+                        {
+                            self.sidebar_mut()
+                                .show(SidebarContent::Chooser, PaneFocus::Sidebar);
+                        }
                         return true;
                     }
                     let Some(press) = candidate.filter(|candidate| Some(*candidate) == pressed)

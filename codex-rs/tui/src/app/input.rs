@@ -260,7 +260,7 @@ impl App {
             && self.sidebar_chooser_available()
     }
 
-    fn key_chord_contexts(&self, tui: &tui::Tui) -> crate::keymap::KeymapContextSet {
+    pub(super) fn key_chord_contexts(&self, tui: &tui::Tui) -> crate::keymap::KeymapContextSet {
         let contexts = self.active_keymap_contexts();
         if !self.conversation_focus_available(tui) {
             return contexts;

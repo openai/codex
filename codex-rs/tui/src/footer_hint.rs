@@ -1,9 +1,12 @@
 //! Packs footer hints into rows without separating a shortcut from its label.
-//! Shared tips style keyboard tokens separately from their labels; callers own clipping.
+//! Resolve focus before measuring. Only visible buttons get mouse targets.
 
+use crate::key_hint::ShortcutHint;
 use crate::style::secondary_text_style;
 use ratatui::style::Styled;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::borrow::Cow;
 
 /// Show the configured scroll keys for directions with rows beyond the viewport.
 pub(crate) fn scroll_keys(
@@ -28,23 +31,122 @@ pub(crate) fn shortcut(keys: &str, label: &str) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The same measured spans determine which hints fit and where each one can be clicked.
-pub(crate) struct HintLine {
-    pub(crate) line: Line<'static>,
-    pub(crate) items: Vec<std::ops::Range<u16>>,
+/// Omit unavailable actions entirely. An available button still works without a binding.
+pub(crate) enum Hint<A = ()> {
+    Key(String, Cow<'static, str>),
+    Button {
+        key: Option<String>,
+        label: &'static str,
+        action: A,
+        before_focus: bool,
+    },
+    Status(Line<'static>),
 }
 
-impl HintLine {
-    /// Wrap complete shortcuts into at most `max_rows`, marking any remaining overflow.
-    pub(crate) fn wrapped(
-        hints: impl IntoIterator<Item = Line<'static>>,
+impl Hint {
+    pub(crate) fn key(keys: impl Into<String>, label: impl Into<Cow<'static, str>>) -> Self {
+        Self::Key(keys.into(), label.into())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HintFocus {
+    Active,
+    Inactive,
+    Focusable(ShortcutHint, &'static str),
+}
+
+impl HintFocus {
+    pub(crate) fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    pub(crate) fn render_row<A>(
+        self,
+        hints: impl IntoIterator<Item = Hint<A>>,
+        width: u16,
+    ) -> HintLine<A> {
+        self.render_hints(hints, width, /*max_rows*/ 1)
+            .pop()
+            .unwrap_or_else(|| HintLine::new([], width))
+    }
+
+    pub(crate) fn render_lines(
+        self,
+        hints: impl IntoIterator<Item = Hint>,
         width: u16,
         max_rows: usize,
-    ) -> Vec<Self> {
-        if max_rows == 0 {
+    ) -> Vec<Line<'static>> {
+        self.render_hints(hints, width, max_rows)
+            .into_iter()
+            .map(|row| row.line)
+            .collect()
+    }
+
+    // Keep the active pane's order. In an inactive pane, put status and primary
+    // mouse controls ahead of the focus cue so they survive narrow widths.
+    fn render_hints<A>(
+        self,
+        hints: impl IntoIterator<Item = Hint<A>>,
+        width: u16,
+        max_rows: usize,
+    ) -> Vec<HintLine<A>> {
+        let active = self.is_active();
+        let mut items = Vec::new();
+        let mut focus_index = 0;
+        for hint in hints {
+            let (line, action, priority) = match hint {
+                Hint::Key(..) if !active => continue,
+                Hint::Key(keys, label) => (shortcut(&keys, &label), None, false),
+                Hint::Status(line) => (line, None, true),
+                Hint::Button {
+                    key,
+                    label,
+                    action,
+                    before_focus,
+                } => {
+                    let line = match key {
+                        Some(key) if active => shortcut(&key, label),
+                        _ => label.bold().into(),
+                    };
+                    (line, Some(action), before_focus)
+                }
+            };
+            if !active && priority {
+                items.insert(focus_index, (line, action));
+                focus_index += 1;
+            } else {
+                items.push((line, action));
+            }
+        }
+        if let Self::Focusable(key, label) = self {
+            items.insert(focus_index, (shortcut(&key.display_label(), label), None));
+        }
+        HintLine::wrapped(items, width, max_rows)
+    }
+}
+
+pub(crate) struct HintLine<A> {
+    pub(crate) line: Line<'static>,
+    pub(crate) targets: Vec<(std::ops::Range<u16>, A)>,
+}
+
+impl<A> HintLine<A> {
+    /// Wrap complete shortcuts into at most `max_rows`, marking any remaining overflow.
+    fn wrapped(hints: Vec<(Line<'static>, Option<A>)>, width: u16, max_rows: usize) -> Vec<Self> {
+        if max_rows == 0 || hints.is_empty() {
             return Vec::new();
         }
-        let mut rows = wrap_hint_rows(hints, width, /*separator_width*/ 3, Line::width).into_iter();
+        if max_rows == 1 {
+            return vec![Self::new(hints, width)];
+        }
+        let mut rows = wrap_hint_rows(
+            hints,
+            width,
+            /*separator_width*/ 3,
+            |(line, _)| line.width(),
+        )
+        .into_iter();
         let mut lines = Vec::new();
         while let Some(row) = rows.next() {
             if lines.len() + 1 == max_rows {
@@ -56,30 +158,32 @@ impl HintLine {
         lines
     }
 
-    pub(crate) fn new(hints: impl IntoIterator<Item = Line<'static>>, width: u16) -> Self {
+    fn new(hints: impl IntoIterator<Item = (Line<'static>, Option<A>)>, width: u16) -> Self {
         let mut hints = hints.into_iter().peekable();
         let mut line = Line::default();
-        let mut items = Vec::new();
+        let mut targets = Vec::new();
         let mut end = 0;
-        while let Some(hint) = hints.next() {
-            let start = end + if items.is_empty() { 0 } else { 3 };
+        while let Some((hint, action)) = hints.next() {
+            let start = end + if line.spans.is_empty() { 0 } else { 3 };
             let next = start + hint.width();
             let overflow_space = if hints.peek().is_some() { 2 } else { 0 };
             if next + overflow_space > usize::from(width) {
                 if width > 0 {
-                    let marker = if items.is_empty() { "…" } else { " …" };
+                    let marker = if line.spans.is_empty() { "…" } else { " …" };
                     line.push_span(marker.set_style(secondary_text_style()));
                 }
                 break;
             }
-            if !items.is_empty() {
+            if !line.spans.is_empty() {
                 line.push_span(" · ".set_style(secondary_text_style()));
             }
             line.extend(hint.spans);
-            items.push(start as u16..next as u16);
+            if let Some(action) = action {
+                targets.push((start as u16..next as u16, action));
+            }
             end = next;
         }
-        Self { line, items }
+        Self { line, targets }
     }
 }
 

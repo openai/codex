@@ -56,7 +56,7 @@ async fn chord_app() -> Result<(Box<App>, Tui, AppServerSession)> {
     Ok((app, tui, app_server))
 }
 
-async fn press(
+pub(super) async fn press(
     app: &mut App,
     tui: &mut Tui,
     app_server: &mut AppServerSession,

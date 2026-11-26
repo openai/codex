@@ -3,7 +3,7 @@ source: tui/src/app/sidebar_open_in_codex_tests.rs
 expression: sidebar.trim_end()
 ---
  PLAN.md    ×                        +
- Snapshot · Enter to open live
+ Snapshot
  Use the sidebar.                     ↑
 
 
@@ -12,5 +12,5 @@ expression: sidebar.trim_end()
 
 
 
- esc clear highlight · c copy path
- p show path · ↑/↓ read · f3 find …
+
+ ⌃x s focus sidebar

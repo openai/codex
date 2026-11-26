@@ -16,6 +16,7 @@ use crate::bottom_pane::CommandPopupPlacement;
 use crate::bottom_pane::ComposerRenderOptions;
 use crate::custom_terminal::Frame;
 use crate::empty_state_animation::ComposerState;
+use crate::footer_hint::HintFocus;
 #[cfg(test)]
 use crate::history_cell::HistoryRenderMode;
 use crate::keymap::KeymapContext;
@@ -90,6 +91,7 @@ impl ConversationFrame {
 }
 
 pub(super) struct PreparedConversation {
+    hint_focus: HintFocus,
     floating_shortcuts: bool,
     area: Rect,
     transcript_width: u16,
@@ -265,9 +267,8 @@ impl App {
         }
         let caller_inset = self.conversation_frame.inset;
         let parent = self.sidebar_parent();
-        if !self.conversation_focus_available(tui)
-            && let Some(pane) = self.sidebars.get_mut(&parent)
-        {
+        let conversation_available = self.conversation_focus_available(tui);
+        if !conversation_available && let Some(pane) = self.sidebars.get_mut(&parent) {
             pane.close = None;
         }
         if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent())
@@ -347,6 +348,40 @@ impl App {
         });
         let mut sidebar_targets = Vec::new();
         let sidebar_parent = self.sidebar_parent();
+        let center_focused = self.workspace_center_owns_input();
+        let panel = self
+            .conversation_frame
+            .panel_area()
+            .and_then(|_| self.panel_focus());
+        let blocked = self.pane_resize.is_some()
+            || self.key_chord_matcher.is_pending()
+            || self.sidebar().is_some_and(|pane| pane.close.is_some());
+        let conversation_available = conversation_available
+            && !blocked
+            && !center_focused
+            && !self.chat_widget.quick_dial_menu_open();
+        let mut contexts = None;
+        let mut focus_hint = |action, label| {
+            let context = KeymapContext::Global;
+            let id = crate::keymap::KeymapActionId { context, action };
+            let binding = self.keymap.primary_hint(context, action).filter(|key| {
+                !matches!(key, crate::key_hint::ShortcutHint::Chord { .. })
+                    || contexts
+                        .get_or_insert_with(|| self.key_chord_contexts(tui))
+                        .contains_action(id)
+            });
+            binding.map_or(HintFocus::Inactive, |key| HintFocus::Focusable(key, label))
+        };
+        let hint_focus = match panel {
+            Some(PaneFocus::Sidebar) if conversation_available => HintFocus::Active,
+            Some(PaneFocus::Main) if conversation_available => {
+                focus_hint("focus_sidebar_content", "focus sidebar")
+            }
+            _ => HintFocus::Inactive,
+        };
+        if !conversation_available || hint_focus.is_active() {
+            prepared.hint_focus = HintFocus::Inactive;
+        }
         let sidebar_image_protocol = self.preview_image_protocol(tui);
         let sidebar_motion =
             MotionMode::from_animations_enabled(self.local_settings.tui.animations);
@@ -433,12 +468,13 @@ impl App {
                                 frames: &frames,
                                 keymap: &self.keymap,
                                 resize_hint,
+                                hint_focus,
                                 resize_preview: self
                                     .divider_drag
                                     .is_some_and(super::side_pane::DividerDrag::is_live_preview),
                                 image_protocol: sidebar_image_protocol,
                             },
-                        ) && focused
+                        ) && hint_focus.is_active()
                         {
                             frame.cursor_position = Some(cursor);
                         }
@@ -472,14 +508,16 @@ impl App {
                                 ]))
                             }
                             CreationState::Failed { message, .. } => {
-                                ratatui::text::Text::from(if resize_hint.is_some() {
-                                    message.clone()
-                                } else {
-                                    crate::sidebar_chooser::creation_failure_text(
-                                        message,
-                                        &self.keymap,
-                                    )
-                                })
+                                let mut text = ratatui::text::Text::from(message.clone());
+                                let hints = crate::sidebar_chooser::creation_failure_hints(
+                                    &self.keymap,
+                                    hint_focus,
+                                    body.width,
+                                );
+                                if hints.width() > 0 {
+                                    text.lines.push(hints);
+                                }
+                                text
                             }
                         };
                         ratatui::widgets::Paragraph::new(text)
@@ -499,16 +537,17 @@ impl App {
                             let row = crate::sidebar_chooser::body_row(*sidebar, sidebar.y);
                             crate::sidebar_chooser::resize_hint(hint, row.width)
                         } else {
-                            let (hints, actions) = crate::sidebar_chooser::footer(
+                            let hints = crate::sidebar_chooser::footer(
                                 &self.keymap,
                                 *sidebar,
                                 pane.choice,
                                 tabs,
                                 new_chat,
+                                hint_focus,
                                 full_path.is_some(),
                             );
                             sidebar_targets.extend(
-                                crate::sidebar_chooser::footer_targets(*sidebar, &hints, actions)
+                                crate::sidebar_chooser::footer_targets(*sidebar, &hints)
                                     .map(|(action, area)| (SidebarTarget::Footer(action), area)),
                             );
                             hints.line
@@ -738,6 +777,7 @@ impl App {
             frames.schedule_frame();
         }
         PreparedConversation {
+            hint_focus: HintFocus::Active,
             floating_shortcuts: false,
             area,
             transcript_width,
@@ -961,7 +1001,12 @@ impl App {
 
         let area = prepared.area;
         ratatui::widgets::Clear.render(area, frame.buffer);
-        let back = self.keymap.list.primary_hint(ListAction::Cancel);
+        let hint_focus = prepared.hint_focus;
+        let back = self
+            .keymap
+            .list
+            .primary_hint(ListAction::Cancel)
+            .filter(|_| hint_focus.is_active() && !self.transcript_view.has_active_interaction());
         let heading = back.map_or_else(
             || "Watch only".to_owned(),
             |hint| format!("{} back to agents · Watch only", hint.display_label()),
@@ -979,33 +1024,25 @@ impl App {
             ..area
         };
         let view = &mut self.transcript_view;
-        let footer = self
-            .pane_resize
-            .is_none()
+        let footer = hint_focus
+            .is_active()
             .then(|| view.footer_with_navigation(body.width, prepared.motion, "end latest"))
             .flatten();
-        let hints = crate::footer_hint::HintLine::new(
-            [
-                Some(crate::footer_hint::shortcut("↑/↓", "read")),
-                self.keymap
-                    .pager
-                    .find
-                    .first()
-                    .map(|key| crate::footer_hint::shortcut(&key.display_label(), "find")),
-                self.keymap
-                    .primary_hint(KeymapContext::Global, "select_transcript")
-                    .map(|hint| crate::footer_hint::shortcut(&hint.display_label(), "select")),
-            ]
-            .into_iter()
-            .flatten(),
-            body.width,
-        );
         let text = if self.pane_resize.is_some() {
             crate::sidebar_chooser::resize_hint(side_pane::RESIZE_HINT, body.width).into()
         } else if let Some(footer) = &footer {
             footer.text.clone()
+        } else if !hint_focus.is_active()
+            && let Some((query, _)) = view.search_footer(body.width)
+        {
+            query.into()
         } else {
-            hints.line.into()
+            let hints = sidebar_document::footer::reading_hints(
+                &self.keymap,
+                sidebar_document::footer::PagerHints::SingleKeys,
+                /*link*/ None,
+            );
+            hint_focus.render_row(hints, body.width).line.into()
         };
         let footer_height = body.height.saturating_sub(1).min(text.height() as u16);
         body.height -= footer_height;

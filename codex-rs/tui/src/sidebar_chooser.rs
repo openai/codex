@@ -1,7 +1,9 @@
 //! The sidebar chooser belongs to its parent conversation and can remain open without taking input.
 
 use crate::app_server_session::SideChat;
-use crate::footer_hint;
+use crate::footer_hint::Hint;
+use crate::footer_hint::HintFocus;
+use crate::footer_hint::HintLine;
 use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
@@ -69,16 +71,15 @@ fn list_hint(keymap: &RuntimeKeymap, action: ListAction) -> Option<String> {
         .map(super::key_hint::ShortcutHint::display_label)
 }
 
-pub(crate) fn creation_failure_text(message: &str, keymap: &RuntimeKeymap) -> String {
+pub(crate) fn creation_failure_hints(
+    keymap: &RuntimeKeymap,
+    focus: HintFocus,
+    width: u16,
+) -> Line<'static> {
     let hints = [(ListAction::Accept, "retry"), (ListAction::Cancel, "back")]
         .into_iter()
-        .filter_map(|(action, label)| Some(format!("{} {label}", list_hint(keymap, action)?)))
-        .collect::<Vec<_>>();
-    if hints.is_empty() {
-        message.to_owned()
-    } else {
-        format!("{message}\n{}", hints.join(" · "))
-    }
+        .filter_map(|(action, label)| Some(Hint::key(list_hint(keymap, action)?, label)));
+    focus.render_row(hints, width).line
 }
 
 pub(crate) fn footer(
@@ -87,21 +88,23 @@ pub(crate) fn footer(
     choice: usize,
     tabs: ChatTabs<'_>,
     new_chat: NewChatState,
+    focus: HintFocus,
     showing_path: bool,
-) -> (footer_hint::HintLine, Vec<Option<ChooserAction>>) {
+) -> HintLine<ChooserAction> {
     let hint = |action| list_hint(keymap, action);
+    let width = body_row(area, area.y).width;
+    let button = |key, label, action: Option<ChooserAction>| {
+        action.map(|action| Hint::Button {
+            key,
+            label,
+            action,
+            before_focus: action == ChooserAction::Back,
+        })
+    };
     if showing_path {
-        let (hints, actions): (Vec<_>, Vec<_>) = [
-            (hint(ListAction::Cancel), "back", Some(ChooserAction::Back)),
-            (hint(ListAction::MoveDown), "scroll", None),
-        ]
-        .into_iter()
-        .filter_map(|(key, label, action)| Some((footer_hint::shortcut(&key?, label), action)))
-        .unzip();
-        return (
-            footer_hint::HintLine::new(hints, body_row(area, area.y).width),
-            actions,
-        );
+        let back = button(hint(ListAction::Cancel), "back", Some(ChooserAction::Back));
+        let scroll = hint(ListAction::MoveDown).map(|key| Hint::Key(key, "scroll".into()));
+        return focus.render_row(back.into_iter().chain(scroll), width);
     }
     let selected_file = tabs.file(choice);
     let visible = choice_is_visible(area, tabs, choice);
@@ -118,17 +121,15 @@ pub(crate) fn footer(
     let hide = keymap
         .primary_hint(KeymapContext::Global, "hide_pane")
         .map(super::key_hint::ShortcutHint::display_label);
-    let (hints, actions): (Vec<_>, Vec<_>) = [
-        (
-            hint(ListAction::Accept)
-                .filter(|_| {
-                    visible
-                        && !tabs.agent_is_disabled(choice)
-                        && (new_chat == NewChatState::Available
-                            || selected_file.is_some()
-                            || tabs.agent(choice).is_some())
-                })
-                .filter(|_| selected_file.is_none() || tabs.file_preview_unavailable.is_none()),
+    let can_open = visible
+        && !tabs.agent_is_disabled(choice)
+        && (new_chat == NewChatState::Available
+            || selected_file.is_some()
+            || tabs.agent(choice).is_some())
+        && (selected_file.is_none() || tabs.file_preview_unavailable.is_none());
+    let hints = [
+        button(
+            hint(ListAction::Accept),
             if tabs.retry_row(choice)
                 || tabs.opening.is_some_and(|o| {
                     Some(o.target.child) == tabs.choice(choice)
@@ -139,9 +140,9 @@ pub(crate) fn footer(
             } else {
                 "open"
             },
-            Some(ChooserAction::Open(choice)),
+            can_open.then_some(ChooserAction::Open(choice)),
         ),
-        (
+        button(
             hint(ListAction::Cancel),
             if tabs
                 .opening
@@ -153,23 +154,15 @@ pub(crate) fn footer(
             },
             Some(ChooserAction::Back),
         ),
-        (
-            selected_file
-                .filter(|_| visible && file_path_key_available(keymap))
-                .map(|_| "p".to_owned()),
+        button(
+            file_path_key_available(keymap).then(|| "p".to_owned()),
             "path",
-            Some(ChooserAction::FilePath),
+            (visible && selected_file.is_some()).then_some(ChooserAction::FilePath),
         ),
-        ((!movement.is_empty()).then_some(movement), "move", None),
-        (hide, "hide pane", Some(ChooserAction::Hide)),
-    ]
-    .into_iter()
-    .filter_map(|(keys, label, action)| Some((footer_hint::shortcut(&keys?, label), action)))
-    .unzip();
-    (
-        footer_hint::HintLine::new(hints, body_row(area, area.y).width),
-        actions,
-    )
+        (!movement.is_empty()).then(|| Hint::Key(movement, "move".into())),
+        button(hide, "hide pane", Some(ChooserAction::Hide)),
+    ];
+    focus.render_row(hints.into_iter().flatten(), width)
 }
 
 #[derive(Default)]
@@ -574,23 +567,18 @@ pub(crate) fn row_targets(
 
 pub(crate) fn footer_targets(
     area: Rect,
-    hints: &footer_hint::HintLine,
-    actions: Vec<Option<ChooserAction>>,
+    hints: &HintLine<ChooserAction>,
 ) -> impl Iterator<Item = (ChooserAction, Rect)> + '_ {
     let row = body_row(area, area.bottom().saturating_sub(1));
-    hints
-        .items
-        .iter()
-        .zip(actions)
-        .filter_map(move |(range, action)| {
-            if area.height < 2 {
-                return None;
-            }
-            Some((
-                action?,
-                Rect::new(row.x + range.start, row.y, range.end - range.start, 1),
-            ))
-        })
+    hints.targets.iter().filter_map(move |(range, action)| {
+        if area.height < 2 {
+            return None;
+        }
+        Some((
+            *action,
+            Rect::new(row.x + range.start, row.y, range.end - range.start, 1),
+        ))
+    })
 }
 
 pub(crate) fn file_path_key_available(keymap: &RuntimeKeymap) -> bool {
