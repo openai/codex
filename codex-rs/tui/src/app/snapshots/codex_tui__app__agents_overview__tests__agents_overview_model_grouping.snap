@@ -25,4 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_disp
                                                           │
                                                           │
                                                           │
-  ? help  esc back  ↑/↓ move  enter open  n new
+  ? help · esc back · ↑/↓ move · enter open · n new

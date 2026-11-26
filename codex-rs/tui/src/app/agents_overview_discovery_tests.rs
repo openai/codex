@@ -307,7 +307,7 @@ async fn overview_return_to_current_chat_cancels_the_cloud_list_and_allows_reope
     let screen = crate::app::test_support::side_frame(&mut app, &mut tui, size)?;
     assert!(!screen.contains("Loading tasks"));
     assert!(!screen.contains("Loading additional tasks"));
-    assert!(screen.contains("? help  esc back"));
+    assert!(screen.contains("? help · esc back"));
     assert_eq!(app.overview_selected_thread_id(), Some(thread_id));
     assert!(!app.agents_overview.refresh_failed_backends.contains(&owner));
     assert_eq!(

@@ -2,8 +2,8 @@
 source: tui/src/app/agent_center_tests.rs
 expression: "screen(&view, 100, 24)"
 ---
-  Agent command center  Group: Project  g
-   All 1   Needs you 0   Working 0   Ready 1   Inactive 0                          tab/⇧tab filter
+  Agent command center  Group: Project
+   All 1   Needs you 0   Working 0   Ready 1   Inactive 0
   ────────────────────────────────────────────────────────────────────────────────────────────────
   Task shortcuts
 

@@ -3,8 +3,8 @@ source: tui/src/app/agent_center_tests.rs
 assertion_line: 328
 expression: "screen(&view, width, height)"
 ---
-  Agent command center  Group: Project  g
-   All 3   Needs you 1   Working 0   Ready 1   Inactive 1                          tab/⇧tab filter
+  Agent command center  Group: Project
+   All 3   Needs you 1   Working 0   Ready 1   Inactive 1
   ────────────────────────────────────────────────────────────────────────────────────────────────
   Task shortcuts
 

@@ -518,10 +518,10 @@ async fn daemon_startup(command: &str) -> Result<()> {
                     && text.contains(ready)
                 {
                     if command == "agents-untrusted" && *ready == "Notasksyet" {
-                        if !text.contains("enteropennnew") {
+                        initial_agents_screen = screen.screen().contents();
+                        if !initial_agents_screen.contains("n new") {
                             continue;
                         }
-                        initial_agents_screen = screen.screen().contents();
                     }
                     if command == "discovered" {
                         if *ready == "Restartbackgroundserver?" {

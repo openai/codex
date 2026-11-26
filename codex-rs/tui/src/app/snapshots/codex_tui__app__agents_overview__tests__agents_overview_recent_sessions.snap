@@ -25,4 +25,4 @@ expression: "age.replace_all(&rendered, \" [age]\")"
 
 
 
-  ? help  ↑/↓ move  enter open  n new
+  ? help · ↑/↓ move · enter open · n new

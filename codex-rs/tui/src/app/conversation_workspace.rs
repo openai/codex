@@ -311,6 +311,7 @@ impl App {
         center: Rect,
         conversation: Option<Rect>,
         frames: &crate::tui::FrameRequester,
+        hint_focus: crate::footer_hint::HintFocus,
     ) {
         let center_focused = self.workspace_center_owns_input();
         frame
@@ -322,6 +323,7 @@ impl App {
         let area = center;
         if let Some(view) = &mut self.agents_overview.workspace.view {
             view.dock_focused = conversation.map(|_| center_focused);
+            view.hint_focus = hint_focus;
             view.dock_motion = Some((
                 crate::motion::MotionMode::from_animations_enabled(
                     self.local_settings.tui.animations,
@@ -329,7 +331,7 @@ impl App {
                 frames.clone(),
             ));
             view.render(area, frame.buffer);
-            if center_focused {
+            if hint_focus.is_active() {
                 frame.cursor_position = view.cursor_pos(area).map(Into::into);
                 frame.set_cursor_style(view.cursor_style(area));
             }

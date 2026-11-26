@@ -16,7 +16,7 @@ Wide Command Center
                                     │ › Keep this draft
                                     │
                                     │   gpt-test default · /tmp/project
-  ? help  esc back  ↑/↓ move  ent…  │
+  ? help · esc back · ↑/↓ move …    │
 
 Narrow Command Center
   Agent command center  Group: Project  g
@@ -32,4 +32,4 @@ Narrow Command Center
 
 
 
-  ? help  esc back  ↑/↓ move  enter open  n new
+  ? help · esc back · ↑/↓ move · enter open …

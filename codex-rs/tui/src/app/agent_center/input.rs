@@ -29,6 +29,14 @@ impl AgentsOverviewView {
                 _ => {}
             }
         }
+        if editing || self.rename_editor_owns_key(input, key) {
+            input.input(key);
+            return !crate::keymap::is_dispatch_token_event(key);
+        }
+        false
+    }
+
+    fn rename_editor_owns_key(&self, input: &TextArea, key: KeyEvent) -> bool {
         let editor_binding = crate::keymap::keymap_action_ids()
             .filter(|action| action.context == input.keymap_context())
             .any(|action| {
@@ -39,15 +47,40 @@ impl AgentsOverviewView {
                 )
                 .is_some_and(|bindings| bindings.is_pressed(key))
             });
-        if editing
-            || is_plain_text_key_event(key)
-            || editor_binding
-            || !self.center_shortcut_keys.is_pressed(key)
-        {
-            input.input(key);
-            return !crate::keymap::is_dispatch_token_event(key);
+        is_plain_text_key_event(key) || editor_binding || !self.center_shortcut_keys.is_pressed(key)
+    }
+
+    // Rename handles list accept/cancel before editor bindings. Search consumes
+    // printable keys before list accept or agent actions.
+    pub(super) fn editing_allows_hint(
+        &self,
+        state: &AgentsOverviewViewState,
+        hint: ShortcutHint,
+    ) -> bool {
+        if !state.editing_metadata() {
+            return true;
         }
-        false
+        let renaming = state.rename_target.is_some();
+        if renaming && state.input.is_vim_operator_pending() {
+            return false;
+        }
+        let ShortcutHint::Single(binding) = hint else {
+            return true;
+        };
+        let (code, modifiers) = binding.parts();
+        let key = KeyEvent::new(code, modifiers);
+        if renaming && state.input.should_handle_vim_insert_escape(key) {
+            return false;
+        }
+        match self.keymap.action_for(key) {
+            Some(ListAction::Cancel) => true,
+            Some(ListAction::Accept) => !is_plain_text_key_event(key),
+            _ if renaming => !self.rename_editor_owns_key(&state.input, key),
+            _ => {
+                !is_plain_text_key_event(key)
+                    && !(code == KeyCode::Backspace && modifiers.is_empty())
+            }
+        }
     }
 
     pub(super) fn search_sort_key(&self, key: KeyEvent) -> bool {

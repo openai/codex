@@ -249,6 +249,10 @@ impl AgentsOverviewViewState {
             })
     }
 
+    fn task_actions_blocked(&self) -> bool {
+        self.connection_notice.is_some() || self.creating_worktree || self.removal.is_some()
+    }
+
     pub(super) fn editing_metadata(&self) -> bool {
         self.searching || self.rename_target.is_some()
     }
@@ -258,6 +262,7 @@ pub(super) struct AgentsOverviewView {
     pub(super) dock_motion: Option<(crate::motion::MotionMode, crate::tui::FrameRequester)>,
     /// Some when shown beside the conversation. The value records keyboard focus.
     pub(super) dock_focused: Option<bool>,
+    pub(super) hint_focus: crate::footer_hint::HintFocus,
     use_theme_colors: bool,
     pub(super) rows: Vec<AgentsOverviewRow>,
     project_groups: Vec<AgentsOverviewProjectGroup>,
@@ -338,6 +343,7 @@ impl AgentsOverviewView {
         let mut view = Self {
             dock_motion: None,
             dock_focused: None,
+            hint_focus: crate::footer_hint::HintFocus::Active,
             editor_keymap: keymap.clone(),
             use_theme_colors,
             rows,
@@ -810,9 +816,7 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
 
-        if (self.state().connection_notice.is_some()
-            || self.state().creating_worktree
-            || self.state().removal.is_some())
+        if self.state().task_actions_blocked()
             && self.keymap.action_for(key) != Some(ListAction::Cancel)
         {
             match self.keymap.action_for(key) {

@@ -4,22 +4,6 @@ use super::*;
 use crate::key_hint;
 use crate::shortcut_help::Group;
 use crate::shortcut_help::Shortcut;
-use crate::style::footer_hint_label_style;
-
-pub(super) fn hint_line(items: &[(String, String)]) -> Line<'static> {
-    let mut line = Line::default();
-    for (key, label) in items.iter().filter(|(key, _)| !key.is_empty()) {
-        if !line.spans.is_empty() {
-            line.spans.push("  ".dim());
-        }
-        line.spans.extend(key_hint::key_label_spans(key));
-        line.spans.push(Span::styled(
-            format!(" {label}"),
-            footer_hint_label_style().not_bold(),
-        ));
-    }
-    line
-}
 
 impl AgentsOverviewView {
     fn center_list_hint(&self, action: ListAction) -> Option<ShortcutHint> {
@@ -195,7 +179,7 @@ impl AgentsOverviewView {
         } else {
             None
         };
-        if let Some(hint) = cancel {
+        if let Some(hint) = cancel.filter(|hint| self.editing_allows_hint(&state, *hint)) {
             hints.push((hint.display_label(), "back".into()));
         }
         if state.help {
@@ -212,7 +196,10 @@ impl AgentsOverviewView {
                 hints.push((navigation, "move".into()));
             }
         }
-        if let Some(hint) = self.center_list_hint(ListAction::Accept) {
+        if let Some(hint) = self
+            .center_list_hint(ListAction::Accept)
+            .filter(|hint| self.editing_allows_hint(&state, *hint))
+        {
             let action = match self.selected {
                 _ if state.rename_target.is_some() => "rename",
                 _ => "open",

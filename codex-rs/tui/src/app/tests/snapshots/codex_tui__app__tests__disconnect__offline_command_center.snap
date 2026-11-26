@@ -2,7 +2,7 @@
 source: tui/src/app/tests/disconnect_tests.rs
 expression: searching
 ---
-  Agent command center  Group: Project  g
+  Agent command center  Group: Project
    All 0   Needs you 0   Working 0   Ready 0   Inactive 0
   ────────────────────────────────────────────────────────────────────────────────────────────────
   Search › search query!                                  │

@@ -2,7 +2,7 @@
 source: tui/src/app/agents_overview_action_progress_tests.rs
 expression: "age.replace_all(&text, \" [age]\")"
 ---
-"  Agent command center  Group: Project  g                                       "
+"  Agent command center  Group: Project                                          "
 "   All 2   Needs you 0   Working 0   Ready 0   Inactive 2                       "
 "  ────────────────────────────────────────────────────────────────────────────  "
 "      Tasks                                                Status     Updated   "

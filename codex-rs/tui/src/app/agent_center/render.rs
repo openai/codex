@@ -1,8 +1,9 @@
 //! Status tabs, task rows, the rename editor and details share a wide/narrow layout.
 
-use super::hints::hint_line;
 use super::*;
 use crate::bottom_pane::render_filled_tab_bar;
+use crate::footer_hint::Hint;
+use crate::footer_hint::shortcut;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::LOADING_FRAME_INTERVAL;
 use crate::motion::loading_glyph_with_delay;
@@ -135,10 +136,11 @@ impl Renderable for AgentsOverviewView {
         let footer_hints = self.center_footer_hints();
         let mut state = self.state();
         state.row_hits.clear();
-        let filter_keys = if state.editing_metadata() {
-            String::new()
-        } else {
+        let header_active = self.hint_focus.is_active() && !state.help;
+        let filter_keys = if header_active && !state.editing_metadata() {
             self.center_filter_hint()
+        } else {
+            String::new()
         };
         let grouping = match state.grouping {
             AgentsOverviewGrouping::Project => "Project",
@@ -149,6 +151,8 @@ impl Renderable for AgentsOverviewView {
         let group_key = self
             .agents_keymap
             .primary_hint("toggle_grouping", &self.agents_keymap.toggle_grouping)
+            .filter(|_| header_active && !state.task_actions_blocked())
+            .filter(|hint| self.editing_allows_hint(&state, *hint))
             .map(ShortcutHint::display_label)
             .unwrap_or_default();
         line(
@@ -173,8 +177,8 @@ impl Renderable for AgentsOverviewView {
             })
             .collect::<Vec<_>>();
         let mut tabs = inset(row(layout.header, /*offset*/ 1, /*height*/ 1));
-        let filter_hint = hint_line(&[(filter_keys, "filter".into())]);
-        if tabs.width >= 80 && filter_hint.width() > 0 {
+        if tabs.width >= 80 && !filter_keys.is_empty() {
+            let filter_hint = shortcut(&filter_keys, "filter");
             let hint_width = filter_hint.width() as u16;
             filter_hint.render(
                 Rect::new(tabs.right() - hint_width, tabs.y, hint_width, tabs.height),
@@ -281,7 +285,11 @@ impl Renderable for AgentsOverviewView {
         } else if let Some(notice) = notice.filter(|_| !state.help) {
             line(notice.dim(), footer, buf);
         } else {
-            line(hint_line(&footer_hints), footer, buf);
+            let hints = footer_hints
+                .into_iter()
+                .map(|(key, label)| Hint::key(key, label));
+            let row = self.hint_focus.render_row(hints, footer.width);
+            line(row.line, footer, buf);
         }
         let help = state.help;
         drop(state);

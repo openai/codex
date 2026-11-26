@@ -20,7 +20,7 @@ Initial display:
       Working                                             │ Prompt
                                                           │ Alpha
   ↓                                                       │
-  ? help  esc back  ↑/↓ move  enter open  n new
+  ? help · esc back · ↑/↓ move · enter open · n new
 
 After subagents fail under Alpha and Ready task:
   Agent command center  Group: Status  g
@@ -40,4 +40,4 @@ After subagents fail under Alpha and Ready task:
       Working                                             │ Prompt
                                                           │ Progress update 3
   ↓                                                       │
-  ? help  esc back  ↑/↓ move  enter open  n new
+  ? help · esc back · ↑/↓ move · enter open · n new

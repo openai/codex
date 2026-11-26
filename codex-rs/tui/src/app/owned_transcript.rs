@@ -372,6 +372,13 @@ impl App {
             });
             binding.map_or(HintFocus::Inactive, |key| HintFocus::Focusable(key, label))
         };
+        let center_hints = if center_focused && !blocked {
+            HintFocus::Active
+        } else if center.is_some() && conversation_available {
+            focus_hint("open_agents", "focus Command Center")
+        } else {
+            HintFocus::Inactive
+        };
         let hint_focus = match panel {
             Some(PaneFocus::Sidebar) if conversation_available => HintFocus::Active,
             Some(PaneFocus::Main) if conversation_available => {
@@ -704,7 +711,7 @@ impl App {
                 super::link_hover::paint_hover_foreground(area, frame.buffer);
             }
             if let Some(center) = center {
-                self.paint_command_center(frame, center, available, &frames);
+                self.paint_command_center(frame, center, available, &frames, center_hints);
                 if available.is_some() {
                     side_pane::paint_divider(
                         frame,
