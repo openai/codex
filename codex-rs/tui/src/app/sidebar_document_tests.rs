@@ -220,7 +220,7 @@ async fn document_preview_scenario() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(visible, @"
-    guide.md × +
+    guide.md × + ›
     # Guide
     First section.
     ");
@@ -539,7 +539,7 @@ async fn document_preview_scenario() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(preview, @"
-    guide.md       ×   main.rs        ×                           +
+    guide.md       ×   main.rs        ×                        +  ›
     3 let value = 3;                                               ↑
     esc clear highlight · c copy path · p show path · ↑/↓ read
     f3 find · Tab link · f8 select
@@ -726,7 +726,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹  f…eA/g…d ×   f…eB/g…d ×    +");
+    insta::assert_snapshot!(narrow_labels, @"‹  fe…eB/g…md ×            +  ›");
     let long_file = "Before the fold.\n\n".repeat(24);
     for directory in ["feature-alpha-build", "feature-beta-build"] {
         std::fs::create_dir_all(dir.path().join(directory))?;
@@ -753,7 +753,7 @@ size 123
         .sidebar_tab_strip()
         .expect("tab strip");
     let narrow_labels = visible_sidebar_row(&tui, strip, strip.y);
-    insta::assert_snapshot!(narrow_labels, @"‹  1:f…d/…d ×   2:f…d/…d ×    +");
+    insta::assert_snapshot!(narrow_labels, @"‹  2:f…ld/g…d ×            +  ›");
     // If resolution itself fails, there is no new tab in which to show the path.
     let tab_count = app.sidebar().unwrap().documents.len();
     app.open_document(
@@ -822,6 +822,45 @@ size 123
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!("refreshed_sidebar_at_reading_position", visible);
+    let document = app.sidebar().unwrap().visible_content();
+    for target in [
+        sidebar_input::SidebarTarget::Tab(crate::sidebar_tab_strip::TabTarget::Hide),
+        sidebar_input::SidebarTarget::Restore,
+    ] {
+        let area = app
+            .conversation_frame
+            .sidebar_targets
+            .iter()
+            .find_map(|(candidate, area)| (*candidate == target).then_some(*area))
+            .expect("painted sidebar control");
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let event = MouseEvent {
+                kind,
+                column: area.x + 1,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            };
+            Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(event))).await?;
+        }
+        side_frame(&mut app, &mut tui, size)?;
+        if target == sidebar_input::SidebarTarget::Tab(crate::sidebar_tab_strip::TabTarget::Hide) {
+            app.chat_widget.apply_external_edit("/m".into());
+            side_frame(&mut app, &mut tui, size)?;
+            assert!(!app.chat_widget.no_modal_or_popup_active());
+            assert!(
+                !app.conversation_frame
+                    .sidebar_targets
+                    .iter()
+                    .any(|(target, _)| *target == sidebar_input::SidebarTarget::Restore)
+            );
+            app.chat_widget.apply_external_edit(String::new());
+            side_frame(&mut app, &mut tui, size)?;
+        }
+    }
+    assert!(app.sidebar().unwrap().visible_content() == document);
     server.shutdown().await?;
     Ok(())
 }

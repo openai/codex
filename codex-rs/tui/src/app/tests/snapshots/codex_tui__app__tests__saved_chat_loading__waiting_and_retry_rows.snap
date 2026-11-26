@@ -1,10 +1,9 @@
 ---
 source: tui/src/app/tests/saved_chat_loading_tests.rs
-assertion_line: 138
 expression: "format!(\"Waiting\\n{waiting}\\n\\nRetry\\n{retry}\")"
 ---
 Waiting
-                                                                  +
+                                                               +  ›
  Open in sidebar
    + New side chat                    Start from this conversation
  Side chats  4
@@ -15,7 +14,7 @@ Waiting
  enter open · esc cancel opening · ↑/↓ move · ⌃x - hide pane
 
 Retry
-                                                                  +
+                                                               +  ›
  Open in sidebar
    + New side chat                    Start from this conversation
  Side chats  4

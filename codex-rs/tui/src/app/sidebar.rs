@@ -82,6 +82,7 @@ pub(super) struct SidebarInputState {
     pub(super) choice: ChooserSelection,
     scroll: ChooserScroll,
     content: SidebarContent,
+    focus: Option<PaneFocus>,
     showing_file_path: bool,
     file_path_scroll: usize,
 }
@@ -117,6 +118,7 @@ pub(super) struct SidebarPane {
     pub(super) file_preview_unavailable: Option<&'static str>,
     pub(super) tabs_revision: usize,
     focus: Option<PaneFocus>,
+    hidden: bool,
     motion: PaneMotion,
 }
 
@@ -160,6 +162,8 @@ impl SidebarPane {
     }
 
     pub(super) fn show(&mut self, content: SidebarContent, focus: PaneFocus) {
+        let resume_chooser = self.hidden && self.content == SidebarContent::Chooser;
+        self.hidden = false;
         if self.content != content {
             self.cancel_hidden_document_primary(/*visible*/ false);
         }
@@ -174,7 +178,9 @@ impl SidebarPane {
                 self.visit(SidebarTab::Chat(id));
             }
             SidebarContent::Chooser
-                if self.focus.is_none() || matches!(self.content, SidebarContent::Chat(_)) =>
+                if !resume_chooser
+                    && (self.focus.is_none()
+                        || matches!(self.content, SidebarContent::Chat(_))) =>
             {
                 self.reset_choice();
             }
@@ -465,6 +471,7 @@ impl SidebarPane {
             choice,
             scroll: self.chooser_scroll,
             content: self.content,
+            focus: self.focus,
             showing_file_path: self.showing_file_path,
             file_path_scroll: self.file_path_scroll,
         }
@@ -497,6 +504,7 @@ impl SidebarPane {
     }
 
     pub(super) fn hide(&mut self) {
+        self.hidden |= self.focus.is_some();
         self.cancel_hidden_document_primary(/*visible*/ false);
         self.focus_document_request = None;
         self.agents.pending_link = None;
@@ -556,6 +564,10 @@ impl SidebarPane {
             }
             self.tabs_revision += 1;
         }
+    }
+
+    pub(super) fn hidden_content(&self) -> Option<SidebarContent> {
+        (self.hidden && self.focus.is_none()).then_some(self.content)
     }
 
     pub(super) fn visible_content(&self) -> Option<SidebarContent> {

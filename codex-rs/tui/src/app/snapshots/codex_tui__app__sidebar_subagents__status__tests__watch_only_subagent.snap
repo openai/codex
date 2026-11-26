@@ -2,7 +2,7 @@
 source: tui/src/app/sidebar_agent_status_tests.rs
 expression: "crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(screen.replace(&child.to_string(),\n\"[agent id]\"))"
 ---
-                                                                                                                       │ reviewer      ×                                         +
+                                                                                                                       │ reviewer      ×                                      +  ›
   >_ OpenAI Codex (v0.0.0)                                                                                             │esc back to agents · Watch only
      /tmp/project                                                                                                      │
                                                                                                                        │  >_ OpenAI Codex (v0.0.0)

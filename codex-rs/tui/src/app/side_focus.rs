@@ -378,33 +378,31 @@ impl App {
             self.zoomed_thread = (self.zoomed_thread != Some(target)).then_some(target);
             tui.frame_requester().schedule_frame();
             self.refresh_owned_transcript(tui)
+        } else if panel_focus.is_some()
+            && (hide || (sidebar && panel_focus == Some(PaneFocus::Sidebar)))
+        {
+            self.hide_sidebar(tui, app_server).await
         } else if panel_focus.is_some() {
-            if hide || (sidebar && panel_focus == Some(PaneFocus::Sidebar)) {
-                self.zoomed_thread = None;
+            if main {
                 self.focus_current_parent_view(tui);
-                self.sidebar_mut().hide();
+            }
+            let focus = if main || left {
+                PaneFocus::Main
             } else {
-                if main {
-                    self.focus_current_parent_view(tui);
-                }
-                let focus = if main || left {
-                    PaneFocus::Main
-                } else {
-                    PaneFocus::Sidebar
-                };
-                if focus == PaneFocus::Main
-                    && matches!(
-                        self.sidebar()
-                            .and_then(sidebar::SidebarPane::visible_content),
-                        Some(SidebarContent::Document(_))
-                    )
-                {
-                    self.zoomed_thread = None;
-                }
-                let pane = self.sidebar_mut();
-                if let Some(content) = pane.visible_content() {
-                    pane.show(content, focus);
-                }
+                PaneFocus::Sidebar
+            };
+            if focus == PaneFocus::Main
+                && matches!(
+                    self.sidebar()
+                        .and_then(sidebar::SidebarPane::visible_content),
+                    Some(SidebarContent::Document(_))
+                )
+            {
+                self.zoomed_thread = None;
+            }
+            let pane = self.sidebar_mut();
+            if let Some(content) = pane.visible_content() {
+                pane.show(content, focus);
             }
             tui.frame_requester().schedule_frame();
             Ok(())
@@ -428,8 +426,8 @@ impl App {
         } else if sidebar && child.is_none() {
             self.focus_current_parent_view(tui);
             self.open_sidebar_tabs(tui, app_server).await
-        } else if hide || sidebar {
-            self.hide_focused_side_pane(tui, app_server).await
+        } else if (hide || sidebar) && on_child {
+            self.hide_sidebar(tui, app_server).await
         } else {
             // A direction with no reachable neighbor leaves the current interaction intact.
             Ok(())
@@ -474,7 +472,7 @@ impl App {
         Ok(())
     }
 
-    fn focus_current_parent_view(&mut self, tui: &mut tui::Tui) {
+    pub(super) fn focus_current_parent_view(&mut self, tui: &mut tui::Tui) {
         if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent()) {
             pane.agents.pending_link = None;
         }

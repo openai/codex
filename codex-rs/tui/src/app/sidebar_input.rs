@@ -17,6 +17,7 @@ pub(super) enum SidebarTarget {
     Tab(TabTarget<SidebarTab>),
     Row(usize),
     Footer(ChooserAction),
+    Restore,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,8 @@ enum SidebarAction {
     ActivateTab(SidebarTab),
     CloseTab(SidebarTab),
     OpenChooser,
+    Hide,
+    Restore,
 }
 
 impl App {
@@ -71,6 +74,8 @@ impl App {
                             self.close_sidebar_tab(tui, server, id).await
                         }
                         SidebarAction::OpenChooser => self.open_sidebar_tabs(tui, server).await,
+                        SidebarAction::Hide => self.hide_sidebar(tui, server).await,
+                        SidebarAction::Restore => self.restore_sidebar(tui, server).await,
                     };
                     if let Err(err) = result {
                         self.chat_widget.add_error_message(err.to_string());
@@ -114,6 +119,9 @@ impl App {
         let over_strip = frame
             .sidebar_tab_strip()
             .is_some_and(|area| area.contains(point));
+        let over_restore = frame
+            .restore_header
+            .is_some_and(|area| area.contains(point));
         let over_chooser = self.chooser_focus().is_some()
             && frame.panel_area().is_some_and(|area| area.contains(point));
         if tui.shortcut_hud_contains(mouse) {
@@ -146,7 +154,7 @@ impl App {
         {
             let down = matches!(mouse.kind, MouseEventKind::Down(_));
             let pressed = self.sidebar_press.take();
-            if over_strip || over_chooser || pressed.is_some() {
+            if over_strip || over_chooser || over_restore || pressed.is_some() {
                 let current = self.sidebar().map(sidebar::SidebarPane::input_state);
                 let hit = frame
                     .sidebar_targets
@@ -197,9 +205,13 @@ impl App {
                                 MouseButton::Left,
                                 TabTarget::Tab(id) | TabTarget::Overflow { tab: id, .. },
                             ) => SidebarAction::ActivateTab(id),
+                            (MouseButton::Left, TabTarget::Hide) => SidebarAction::Hide,
                             _ => return PointerResult::Consumed,
                         };
                         return PointerResult::Action(action);
+                    }
+                    SidebarTarget::Restore if button == MouseButton::Left => {
+                        return PointerResult::Action(SidebarAction::Restore);
                     }
                     SidebarTarget::Row(index) if button == MouseButton::Left => {
                         return PointerResult::Chooser(ChooserAction::Open(index));

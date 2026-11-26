@@ -44,6 +44,7 @@ pub(super) struct ConversationFrame {
     pub(super) command_center: Option<Rect>,
     pub(super) sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
+    pub(super) restore_header: Option<Rect>,
     pub(super) sidebar_input: Option<sidebar::SidebarInputState>,
     pub(super) sidebar_targets: Vec<(SidebarTarget, Rect)>,
     pub(super) close_buttons: [Rect; 2],
@@ -58,6 +59,7 @@ impl ConversationFrame {
             && self.command_center.is_none()
             && self.sidebar.is_none()
             && self.chat_strip.is_none()
+            && self.restore_header.is_none()
     }
 
     pub(super) fn side_pane(&self) -> Option<&side_pane::SidePaneLayout> {
@@ -261,6 +263,7 @@ impl App {
         if self.conversation_frame.command_center.is_some()
             || self.conversation_frame.sidebar.is_some()
             || self.conversation_frame.chat_strip.is_some()
+            || self.conversation_frame.restore_header.is_some()
         {
             // Recompute our own inset on every frame, including the first narrow frame.
             self.conversation_frame = ConversationFrame::default();
@@ -313,13 +316,32 @@ impl App {
             }
             None => (None, None),
         };
+        let restore_header = (layout.is_none()
+            && strip.is_none()
+            && caller_inset.is_none()
+            && content.width >= 4
+            && content.height >= 2
+            && self.conversation_focus_available(tui)
+            && !self.reconnect.offline
+            && self.chat_widget.sidebar_chooser_available()
+            && self.sidebar().is_some_and(|pane| {
+                pane.hidden_content().is_some()
+                    || (self.zoomed_thread.is_none()
+                        && content.width < side_pane::MIN_SPLIT_WIDTH
+                        && pane.visible_content().is_some())
+            }))
+        .then(|| side_pane::tab_and_body(content));
         let mut prepared = self.prepare_conversation(
             viewport,
-            caller_inset.or(live).or(center.map(|_| content)),
+            caller_inset
+                .or(live)
+                .or(restore_header.map(|areas| areas[1]))
+                .or(center.map(|_| content)),
             &frames,
         );
         self.conversation_frame.sidebar = layout;
         self.conversation_frame.chat_strip = strip;
+        self.conversation_frame.restore_header = restore_header.map(|areas| areas[0]);
         self.conversation_frame.sidebar_input =
             self.sidebar().map(sidebar::SidebarPane::input_state);
         let divider = self.conversation_frame.divider_area();
@@ -667,6 +689,17 @@ impl App {
                     .map(|(target, area)| (SidebarTarget::Tab(target), area)),
                 );
             }
+            if let Some([header, _]) = restore_header {
+                ratatui::widgets::Clear.render(header, frame.buffer);
+                let area = Rect::new(header.right() - 4, header.y, 3, 1);
+                crate::sidebar_tab_strip::paint_toggle(
+                    "‹",
+                    area,
+                    pointer.is_some_and(|point| area.contains(point)),
+                    frame.buffer,
+                );
+                sidebar_targets.push((SidebarTarget::Restore, area));
+            }
             if let Some(point) = pointer {
                 for &(target, area) in &sidebar_targets {
                     if matches!(target, SidebarTarget::Footer(_)) && area.contains(point) {
@@ -740,6 +773,7 @@ impl App {
         self.conversation_frame.inset = conversation_inset;
         self.conversation_frame.sidebar = None;
         self.conversation_frame.chat_strip = None;
+        self.conversation_frame.restore_header = None;
         let area = self.conversation_area(viewport);
         if let Some((previous, reflowed)) = self.chat_widget.resize_owned_conversation(area.width) {
             self.transcript_view

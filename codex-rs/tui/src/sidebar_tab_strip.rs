@@ -1,5 +1,5 @@
 //! Draw sidebar tabs and hit-test the same visible cells. When space runs out,
-//! keep the selected tab visible and reserve the add button at the right edge.
+//! keep the selected tab visible and reserve the add and hide buttons at the right edge.
 //! A one-column gap separates tabs and is excluded from their click targets.
 
 use ratatui::buffer::Buffer;
@@ -42,6 +42,7 @@ pub(crate) enum TabTarget<Id> {
     Close(Id),
     Overflow { tab: Id, glyph: &'static str },
     Add,
+    Hide,
 }
 
 impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
@@ -51,8 +52,9 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
 
     pub(crate) fn strip_targets(self, area: Rect) -> Vec<(TabTarget<Id>, Rect)> {
         let width = area.width.saturating_sub(1);
-        let plus = width.min(3);
-        let available = width - plus;
+        let hide = width.min(3);
+        let plus = (width - hide).min(3);
+        let available = width - plus - hide;
         let height = area.height.min(1);
         let rect = |offset, width| Rect::new(area.x + offset, area.y, width, height);
         let mut targets = Vec::new();
@@ -102,7 +104,12 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                 ));
             }
         }
-        targets.push((TabTarget::Add, rect(available, plus)));
+        if plus > 0 {
+            targets.push((TabTarget::Add, rect(available, plus)));
+        }
+        if hide > 0 {
+            targets.push((TabTarget::Hide, rect(available + plus, hide)));
+        }
         targets
     }
 
@@ -163,14 +170,36 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                     let add = match (hovered, add_state) {
                         (true, TabState::Active) => crate::style::hover_style(style(add_state)),
                         (true, TabState::Inactive | TabState::Absent) => hover,
-                        (false, TabState::Active | TabState::Inactive | TabState::Absent) => {
-                            style(add_state)
-                        }
+                        (false, _) => style(add_state),
                     };
-                    Line::from(" + ").style(add).render(rect, buf);
+                    paint_control("+", rect, add, buf);
                 }
+                TabTarget::Hide => paint_toggle("›", rect, hovered, buf),
             }
         }
         targets
     }
+}
+
+/// Paint a sidebar visibility control using the same style in open and collapsed layouts.
+pub(crate) fn paint_toggle(glyph: &str, area: Rect, hovered: bool, buf: &mut Buffer) {
+    let normal = crate::style::secondary_text_style()
+        .bg(Color::Reset)
+        .not_underlined()
+        .not_reversed();
+    let style = if hovered {
+        crate::style::hover_style(normal.fg(Color::Reset))
+    } else {
+        normal
+    };
+    paint_control(glyph, area, style, buf);
+}
+
+fn paint_control(glyph: &str, area: Rect, style: Style, buf: &mut Buffer) {
+    let text = if area.width >= 3 {
+        format!(" {glyph} ")
+    } else {
+        glyph.to_owned()
+    };
+    Line::from(text).style(style).render(area, buf);
 }

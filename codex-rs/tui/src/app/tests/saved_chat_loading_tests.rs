@@ -4,6 +4,115 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn docked_replay_finishes_while_skills_refresh_is_pending() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let parent = ThreadId::new();
+    let side = ThreadId::new();
+    app.side_threads
+        .insert(side, side::SideThreadState::new(parent));
+    enable_side_retention(&mut app)?;
+    let _ = app.config.features.disable(Feature::Plugins);
+    app.chat_widget.sync_plugin_mentions_config(&app.config);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let mut session = test_thread_session(parent, app.config.cwd.to_path_buf());
+    session.cwd = codex_utils_path_uri::PathUri::parse("file:///D:/Workspace")?;
+    app.chat_widget.handle_thread_session(session);
+    let cwd = codex_utils_path_uri::PathUri::parse("file:///D:/workspace")?;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+    let (pending_tx, mut pending_rx) = tokio::sync::mpsc::unbounded_channel();
+    let proxy = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let socket = tokio_tungstenite::accept_async(stream).await?;
+        disconnect::serve_reconnect_requests(socket, |request| {
+            assert_eq!(request.method, "skills/list");
+            let (release, wait) = tokio::sync::oneshot::channel();
+            pending_tx
+                .send((request.params, release))
+                .expect("test is running");
+            async move {
+                wait.await.expect("release the pending skills refresh");
+                Some(serde_json::json!({"result": {"data": []}}))
+            }
+        })
+        .await
+    });
+    let mut app_server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        crate::connect_remote_app_server(endpoint).await?,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+    );
+    let deadline = std::time::Duration::from_secs(/*secs*/ 5);
+    while events.try_recv().is_ok() {}
+
+    for thread_id in [side, parent] {
+        app.active_thread_id = Some(thread_id);
+        app.pending_thread_switch_resets = 1;
+        app.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::list_skills(
+                cwd.clone(),
+                /*force_reload*/ true,
+            )));
+        app.app_event_tx
+            .send(AppEvent::SideReplayFinished(thread_id));
+
+        time::timeout(
+            deadline,
+            drain_app_events(&mut app, &mut tui, &mut app_server, &mut events),
+        )
+        .await??;
+        let (params, release) = time::timeout(deadline, pending_rx.recv())
+            .await?
+            .expect("skills/list should be requested");
+        assert_eq!(
+            params,
+            Some(serde_json::json!({"cwds": [r"D:\workspace"], "forceReload": true}))
+        );
+        assert!(!app.awaiting_side_replay(&tui));
+
+        release
+            .send(())
+            .expect("skills/list should still be pending");
+        let event = time::timeout(deadline, events.recv())
+            .await?
+            .expect("receive the skills refresh");
+        assert!(matches!(
+            &event,
+            AppEvent::SideReplaySkillsLoaded { thread_id: loaded_thread_id, result: Ok(_), .. }
+                if *loaded_thread_id == thread_id
+        ));
+        boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
+        assert_eq!(app_server.pending_side_skills_refresh, None);
+    }
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn sidebar_reopens_saved_side_chat_after_restart() -> Result<()> {
+    boxed_future!(reopen_saved_side_chat(DuringOpen::Navigate)).await
+}
+
+#[tokio::test]
+async fn closed_saved_chat_keeps_its_live_read_receipt_during_install() -> Result<()> {
+    boxed_future!(reopen_saved_side_chat(DuringOpen::Close)).await
+}
+
+#[tokio::test]
+async fn saved_chat_replays_approval_after_a_stale_runtime_close() -> Result<()> {
+    boxed_future!(reopen_saved_side_chat(DuringOpen::Approval)).await
+}
+
+#[tokio::test]
+async fn fork_releases_a_provisional_saved_chat_on_its_original_connection() -> Result<()> {
+    boxed_future!(reopen_saved_side_chat(DuringOpen::Fork)).await
+}
+
+#[tokio::test]
 async fn saved_chat_retry_and_supersession_with_pending_requests() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let parent = ThreadId::new();

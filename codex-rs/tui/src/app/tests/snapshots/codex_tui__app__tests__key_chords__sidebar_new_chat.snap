@@ -1,9 +1,8 @@
 ---
 source: tui/src/app/tests/key_chords.rs
-assertion_line: 1372
 expression: frame
 ---
-                                                                               │                                     +
+                                                                               │                                  +  ›
                                                                                │
                                                                                │ Open in sidebar
                                                                                │

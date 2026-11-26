@@ -297,6 +297,7 @@ mod sidebar_model_documents;
 #[path = "app/sidebar_open_in_codex_tests.rs"]
 mod sidebar_open_in_codex_tests;
 mod sidebar_subagents;
+mod sidebar_visibility;
 mod startup;
 pub(crate) mod startup_bootstrap;
 mod startup_prompts;

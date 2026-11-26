@@ -1488,7 +1488,17 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
     .await?;
     tui.screen_size_for_event(&TuiEvent::Resize(wide))?;
     app.render_chat_widget_frame(&mut tui, wide)?;
-    assert_eq!(buffer_text(tui.terminal.previous_buffer()), before);
+    let returned = buffer_text(tui.terminal.previous_buffer());
+    let (header, body) = returned.split_once('\n').expect("restore header");
+    assert_eq!(header.trim(), "‹");
+    // The restore header replaces the last visible transcript row, without moving its start.
+    let mut original = before.lines().collect::<Vec<_>>();
+    let transcript_rows = original
+        .iter()
+        .take_while(|row| row.starts_with("Response row "))
+        .count();
+    original.remove(transcript_rows - 1);
+    assert_eq!(body, original.join("\n"));
 
     app.local_settings.tui.keymap = serde_json::from_value(serde_json::json!({
         "global":{"leader":"f12","open_agents":"leader a","focus_main_composer":["leader c", "f10"]},

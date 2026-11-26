@@ -3,6 +3,7 @@ source: tui/src/app/tests.rs
 expression: "frames.join(\"\\n\\n\")"
 ---
 100 columns, hidden
+                                                                                                 ‹
 parent-24
 
 parent-25
@@ -14,7 +15,6 @@ parent-27
 parent-28
 
 parent-29
-
                                New activity · ↓ Back to bottom · esc
 
 › parent draft
@@ -23,7 +23,7 @@ parent-29
   New activity · esc latest
 
 100 columns, reopened
-parent-24                                                      │ Side chat  ×                    +
+parent-24                                                      │ Side chat  ×                 +  ›
                                                                │
 parent-25                                                      │child-25
                                                                │
@@ -43,7 +43,7 @@ parent-29                                                      │child-29
                                                                │
 
 99 columns, reopened
- Side chat            ×                                                                         +
+ Side chat            ×                                                                      +  ›
 
 child-25
 
