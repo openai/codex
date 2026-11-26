@@ -142,22 +142,23 @@ where
             // The existing viewport is immediately replaced in the same draw pass. Clear it
             // before terminal scrolling can move composer contents into scrollback.
             terminal.clear_after_position(area.as_position())?;
-            let writer = terminal.backend_mut();
-            queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
-            for (index, line) in wrapped.iter().enumerate() {
-                if index > 0 {
-                    queue!(writer, Print("\r\n"))?;
+            write_buffered(terminal.backend_mut(), |writer| {
+                queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
+                for (index, line) in wrapped.iter().enumerate() {
+                    if index > 0 {
+                        queue!(writer, Print("\r\n"))?;
+                    }
+                    write_history_line(writer, line, wrap_width)?;
                 }
-                write_history_line(writer, line, wrap_width)?;
-            }
 
-            // Writing raw source text through the terminal preserves its soft-wrap metadata.
-            // Advance through empty rows for the viewport so history ends immediately above the
-            // composer even when a replay batch is taller than the visible history region.
-            for _ in 0..area.height {
-                queue!(writer, Print("\r\n"), Clear(ClearType::UntilNewLine))?;
-            }
-            queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+                // Writing raw source text through the terminal preserves its soft-wrap metadata.
+                // Advance through empty rows for the viewport so history ends immediately above the
+                // composer even when a replay batch is taller than the visible history region.
+                for _ in 0..area.height {
+                    queue!(writer, Print("\r\n"), Clear(ClearType::UntilNewLine))?;
+                }
+                queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))
+            })?;
 
             let viewport_top = area
                 .top()
@@ -213,13 +214,18 @@ where
             // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
             queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
 
-            for line in &wrapped {
-                queue!(writer, Print("\r\n"))?;
-                write_history_line(writer, line, wrap_width)?;
-            }
+            write_buffered(writer, |writer| {
+                for line in &wrapped {
+                    queue!(writer, Print("\r\n"))?;
+                    write_history_line(writer, line, wrap_width)?;
+                }
 
-            queue!(writer, ResetScrollRegion)?;
-            queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+                queue!(
+                    writer,
+                    ResetScrollRegion,
+                    MoveTo(last_cursor_pos.x, last_cursor_pos.y)
+                )
+            })?;
         }
     }
 
@@ -231,6 +237,19 @@ where
     }
 
     Ok(())
+}
+
+/// Coalesce newlines before they reach line-buffered stdout without buffering the entire replay.
+fn write_buffered<W: Write>(
+    backend: &mut W,
+    write: impl FnOnce(&mut io::BufWriter<&mut W>) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut writer = io::BufWriter::new(backend);
+    let result = write(&mut writer);
+    // Disarm BufWriter's drop-time retry on error. On success, drain without flushing stdout.
+    let (backend, remaining) = writer.into_parts();
+    result?;
+    backend.write_all(&remaining.map_err(io::Error::other)?)
 }
 
 pub(crate) fn wrap_history_hyperlink_lines(
@@ -437,6 +456,36 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+
+    #[test]
+    fn long_history_batches_newlines_and_restores_the_cursor() {
+        let width = 20;
+        let height = 8;
+        for mode in [InsertHistoryMode::Standard, InsertHistoryMode::FullScreen] {
+            let backend = VT100Backend::new(width, height);
+            let mut term = crate::custom_terminal::Terminal::with_options(backend).unwrap();
+            term.set_viewport_area(Rect::new(0, height - 2, width, 2));
+            term.set_cursor_position((3, height - 1)).unwrap();
+            let cursor = term.backend().vt100().screen().cursor_position();
+            let lines = (0..500).map(|i| Line::from(format!("row {i}"))).collect();
+            insert_history_lines_with_mode_and_wrap_policy(
+                &mut term,
+                lines,
+                mode,
+                HistoryLineWrapPolicy::PreWrap,
+            )
+            .unwrap();
+
+            let screen = term.backend().vt100().screen();
+            pretty_assertions::assert_eq!(screen.cursor_position(), cursor);
+            pretty_assertions::assert_eq!(screen.rows(0, width).nth(5).unwrap(), "row 499");
+            let writes = term.backend().newline_writes;
+            assert!(
+                writes < 50,
+                "{mode:?} sent 500 rows in {writes} newline writes"
+            );
+        }
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {
