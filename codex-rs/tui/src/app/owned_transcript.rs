@@ -258,6 +258,15 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: Size,
     ) -> Result<Rect> {
+        self.render_owned_frame(tui, screen_size, /*preserve_pet*/ true)
+    }
+
+    pub(super) fn render_owned_frame(
+        &mut self,
+        tui: &mut tui::Tui,
+        screen_size: Size,
+        preserve_pet: bool,
+    ) -> Result<Rect> {
         self.transcript_view.image_protocol = self.prepare_frame_images(tui);
         let frames = tui.frame_requester();
         if self.conversation_frame.command_center.is_some()
@@ -428,6 +437,8 @@ impl App {
             hud.viewport = caller_inset;
         }
         prepared.floating_shortcuts = hud.is_some();
+        let virtual_pet =
+            preserve_pet && tui.terminal.virtual_image_base.is_some() && hud.is_none();
         let mut painted = PaintedConversation::default();
         self.chat_widget.begin_steer_hint_draw();
         tui.draw_with_shortcut_hud(screen_size.height, hud, |frame| {
@@ -755,6 +766,17 @@ impl App {
                 }
             }
             self.paint_centered_dialog(frame);
+            if virtual_pet
+                && let Some(pet) = self
+                    .chat_widget
+                    .ambient_pet_request(prepared.area, painted.bottom_area.bottom())
+            {
+                // The image pass replaces these cells. Keep the text pass (including
+                // clear-to-end-of-line) from erasing the currently visible frame.
+                for pos in pet.area().intersection(frame.area()).positions() {
+                    frame.buffer[pos].set_diff_option(ratatui::buffer::CellDiffOption::Skip);
+                }
+            }
         })?;
         self.chat_widget.finish_steer_hint_draw();
         // A shortcut HUD is painted after the conversation and can move over a stationary pointer.

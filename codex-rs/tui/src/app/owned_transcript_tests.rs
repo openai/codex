@@ -853,6 +853,51 @@ async fn owned_transcript_keeps_text_out_of_the_pet_columns() -> Result<()> {
             assert_eq!(buffer[(x, y)].symbol(), " ");
         }
     }
+    let text = buffer_text(buffer);
+    tui.terminal.virtual_image_base = Some(0x80_0000);
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    assert_eq!(buffer_text(buffer), text);
+    let reserved = buffer
+        .content
+        .chunks(usize::from(size.width))
+        .map(|row| {
+            row[usize::from(width)..]
+                .iter()
+                .map(|cell| {
+                    if cell.diff_option == ratatui::buffer::CellDiffOption::Skip {
+                        '█'
+                    } else {
+                        ' '
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|row| row.contains('█'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("virtual_pet_columns", reserved);
+    // The fork progress frame paints text without a subsequent pet image pass.
+    app.chat_widget.fork_in_progress = true;
+    app.render_chat_widget_frame(&mut tui, Size::new(/*width*/ 28, size.height))?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let visible: String = buffer
+        .content
+        .iter()
+        .filter(|cell| cell.diff_option != ratatui::buffer::CellDiffOption::Skip)
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert!(visible.contains("Forking conversation…"));
+    app.chat_widget.fork_in_progress = false;
+    app.chat_widget.disable_ambient_pet_for_session();
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    assert!(
+        buffer
+            .content
+            .iter()
+            .all(|cell| cell.diff_option != ratatui::buffer::CellDiffOption::Skip)
+    );
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

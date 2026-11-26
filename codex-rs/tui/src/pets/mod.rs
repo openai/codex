@@ -127,13 +127,21 @@ impl From<std::io::Error> for PetImageRenderError {
     }
 }
 
+// The last three pane slots hold two ambient frames and the static picker preview.
+pub(crate) const FIRST_PET_SLOT: u32 = 253;
+const AMBIENT_IMAGE_ID: u32 = 0xC0DE;
+
 pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,
     state: &mut PetImageRenderState,
     request: Option<AmbientPetDraw>,
 ) -> std::result::Result<(), PetImageRenderError> {
     render_pet_image(
-        writer, state, /*image_id*/ 0xC0DE, /*pane_slot*/ 254, request,
+        writer,
+        state,
+        AMBIENT_IMAGE_ID,
+        crate::tui::fullscreen_virtual_image_base().map(|base| base + FIRST_PET_SLOT),
+        request,
     )
 }
 
@@ -143,7 +151,11 @@ pub(crate) fn render_pet_picker_preview_image(
     request: Option<AmbientPetDraw>,
 ) -> std::result::Result<(), PetImageRenderError> {
     render_pet_image(
-        writer, state, /*image_id*/ 0xC0DF, /*pane_slot*/ 255, request,
+        writer,
+        state,
+        /*image_id*/ 0xC0DF,
+        crate::tui::fullscreen_virtual_image_base().map(|base| base + 255),
+        request,
     )
 }
 
@@ -151,13 +163,14 @@ pub(crate) fn render_pet_picker_preview_image(
 pub(crate) struct PetImageRenderState {
     last_sixel_clear_area: Option<SixelClearArea>,
     last_kitty_id: Option<u32>,
+    spare_kitty_id: Option<u32>,
 }
 
 fn render_pet_image(
     writer: &mut impl Write,
     state: &mut PetImageRenderState,
     image_id: u32,
-    pane_slot: u32,
+    virtual_id: Option<u32>,
     request: Option<AmbientPetDraw>,
 ) -> std::result::Result<(), PetImageRenderError> {
     use crossterm::cursor::RestorePosition;
@@ -165,6 +178,9 @@ fn render_pet_image(
     use crossterm::queue;
     use image_protocol::ImageProtocol;
 
+    if let Some(id) = state.spare_kitty_id.take() {
+        write!(writer, "{}", image_protocol::kitty_delete_image(id))?;
+    }
     let Some(request) = request else {
         if let Some(image_id) = state.last_kitty_id.take() {
             write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
@@ -178,17 +194,29 @@ fn render_pet_image(
         return Ok(());
     };
 
-    let pane_base = crate::tui::fullscreen_virtual_image_base();
-    let image_id = pane_base.map_or(image_id, |base| base + pane_slot);
-    let placement = if pane_base.is_some() {
-        KittyPlacement::Virtual(image_id)
-    } else {
-        KittyPlacement::Cursor(image_id)
-    };
-    let current_id = is_kitty_protocol(request.protocol).then_some(image_id);
-    if let Some(id) = std::mem::replace(&mut state.last_kitty_id, current_id).or(current_id) {
-        write!(writer, "{}", image_protocol::kitty_delete_image(id))?;
+    let mut id = virtual_id.unwrap_or(image_id);
+    let kitty = is_kitty_protocol(request.protocol);
+    // Passthrough deletes can reach the client before the pane's new placeholder
+    // cells. Keep the displayed frame alive until the next redraw reuses its slot.
+    if kitty
+        && image_id == AMBIENT_IMAGE_ID
+        && virtual_id.is_some()
+        && let Some(previous) = state.last_kitty_id
+        && (id..=id + 1).contains(&previous)
+    {
+        state.spare_kitty_id = Some(previous);
+        if previous == id {
+            id += 1;
+        }
+    } else if let Some(old) = state.last_kitty_id.or(kitty.then_some(id)) {
+        write!(writer, "{}", image_protocol::kitty_delete_image(old))?;
     }
+    state.last_kitty_id = kitty.then_some(id);
+    let placement = if virtual_id.is_some() {
+        KittyPlacement::Virtual(id)
+    } else {
+        KittyPlacement::Cursor(id)
+    };
     let payload = match request.protocol {
         ImageProtocol::Kitty => image_protocol::kitty_transmit_png_with_id(
             &request.frame,
@@ -334,7 +362,7 @@ mod tests {
         let mut output = Vec::new();
         let mut state = PetImageRenderState::default();
 
-        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
+        render_ambient_pet_image(&mut output, &mut state, Some(request.clone())).unwrap();
         output.clear();
         render_ambient_pet_image(&mut output, &mut state, /*request*/ None).unwrap();
 
@@ -343,6 +371,34 @@ mod tests {
         assert!(!output.contains("\x1b7"));
         assert!(!output.contains("\x1b["));
         assert!(!output.contains("\x1b8"));
+
+        // Reuse a slot only after the placeholder switched away from it.
+        let first = 0x80_0000 + FIRST_PET_SLOT;
+        let mut previous = None;
+        for id in [first, first + 1, first] {
+            let mut bytes = Vec::new();
+            render_pet_image(
+                &mut bytes,
+                &mut state,
+                AMBIENT_IMAGE_ID,
+                Some(first),
+                Some(request.clone()),
+            )
+            .unwrap();
+            let output = String::from_utf8(bytes).unwrap();
+            assert!(output.contains(&format!("i={id},U=1")));
+            assert!(output.contains(&format!("\x1b[38;2;128;0;{}m", id & 255)));
+            if let Some(visible) = previous {
+                assert!(!output.contains(&format!("d=I,i={visible},")));
+            }
+            previous = Some(id);
+        }
+        let mut bytes = Vec::new();
+        render_ambient_pet_image(&mut bytes, &mut state, /*request*/ None).unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+        for id in [first, first + 1] {
+            assert!(output.contains(&format!("d=I,i={id},")));
+        }
     }
 
     #[test]

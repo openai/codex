@@ -1487,7 +1487,8 @@ impl App {
                     }
                     self.chat_widget.pre_draw_tick();
                     self.refresh_agents_overview_usage(app_server, tui.frame_requester());
-                    let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
+                    let rendered_area =
+                        self.render_chat_frame(tui, screen_size, /*preserve_pet*/ true)?;
                     if tui.is_owned_screen()
                         && self.transcript_view.history
                             != crate::pager_overlay::TranscriptHistoryState::Failed
@@ -1591,11 +1592,20 @@ impl App {
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        self.render_chat_frame(tui, screen_size, /*preserve_pet*/ false)
+    }
+
+    fn render_chat_frame(
+        &mut self,
+        tui: &mut tui::Tui,
+        screen_size: Size,
+        preserve_pet: bool,
+    ) -> Result<Rect> {
         self.chat_widget.bidi_layout = tui.terminal.bidi_layout;
         self.chat_widget
             .set_sparkle_terminal_focus(tui.is_terminal_focused());
         if tui.is_owned_screen() {
-            return self.render_owned_transcript(tui, screen_size);
+            return self.render_owned_frame(tui, screen_size, preserve_pet);
         }
         self.prepare_frame_images(tui);
         self.chat_widget

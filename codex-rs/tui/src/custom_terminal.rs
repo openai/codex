@@ -419,7 +419,7 @@ where
         let cursor_style = frame.cursor_style;
         let mut images = std::mem::take(&mut frame.image_placements);
         let first_id = if let Some(base) = self.virtual_image_base {
-            images.truncate(254); // The last two pane IDs belong to the pet and picker.
+            images.truncate(crate::pets::FIRST_PET_SLOT as usize);
             base
         } else {
             crate::transcript_image::FIRST_IMAGE_ID
@@ -733,12 +733,14 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         while column < row.len() {
             let cell = &row[column];
             let width = usize::from(cell.cell_width());
-            // Keep AlwaysUpdate blanks in the drawable prefix; otherwise filtering the tail
-            // would discard the repaint explicitly requested by Ratatui.
+            // A trailing clear must neither swallow a forced repaint nor erase skipped cells.
             if cell.symbol() != " "
                 || cell.bg != bg
                 || cell.modifier != Modifier::empty()
-                || cell.diff_option == CellDiffOption::AlwaysUpdate
+                || matches!(
+                    cell.diff_option,
+                    CellDiffOption::AlwaysUpdate | CellDiffOption::Skip
+                )
             {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
@@ -1570,6 +1572,8 @@ mod tests {
                     .any(|command| matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
                 "expected the always-update cell in {text:?} to be emitted; commands: {commands:?}"
             );
+            next[(1, 0)].set_diff_option(CellDiffOption::Skip);
+            assert!(diff_buffers(&previous, &next).is_empty());
         }
     }
 

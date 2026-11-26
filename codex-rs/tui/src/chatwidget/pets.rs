@@ -125,6 +125,19 @@ impl ChatWidget {
         composer_bottom_y: u16,
         shortcut_hud_area: Option<Rect>,
     ) -> Option<crate::pets::AmbientPetDraw> {
+        let draw = self.ambient_pet_request(area, composer_bottom_y)?;
+        if shortcut_hud_area.is_some_and(|hud| hud.intersects(draw.area())) {
+            return None;
+        }
+        self.ambient_pet.as_ref()?.schedule_next_frame();
+        Some(draw)
+    }
+
+    pub(crate) fn ambient_pet_request(
+        &self,
+        area: Rect,
+        composer_bottom_y: u16,
+    ) -> Option<crate::pets::AmbientPetDraw> {
         if !self.bottom_pane.no_modal_or_popup_active() {
             return None;
         }
@@ -134,12 +147,7 @@ impl ChatWidget {
             TuiPetAnchor::ScreenBottom => area.bottom(),
         };
         let pet = self.ambient_pet.as_ref()?;
-        let draw = pet.draw_request(area, anchor_bottom_y)?;
-        if shortcut_hud_area.is_some_and(|hud| hud.intersects(draw.area())) {
-            return None;
-        }
-        pet.schedule_next_frame();
-        Some(draw)
+        pet.draw_request(area, anchor_bottom_y)
     }
 
     pub(super) fn ambient_pet_wrap_reserved_cols(&self) -> u16 {
