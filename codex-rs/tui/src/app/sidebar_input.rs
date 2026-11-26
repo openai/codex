@@ -9,6 +9,9 @@ use crate::sidebar_chooser::ChooserAction;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::sidebar_tab_strip::TabTarget;
 
+#[path = "sidebar_input_chooser.rs"]
+mod chooser;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SidebarTarget {
     Tab(TabTarget<SidebarTab>),
