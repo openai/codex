@@ -116,6 +116,7 @@ agent_message_board_mcp = true
 The MCP flag defaults off and takes precedence over `agent_message_board`.
 No plugin or endpoint configuration is needed. Boards are temporary and use the
 existing launcher lifecycle; explicit host-supplied board connections are unchanged.
+The automatic launcher delivers notices through the host's `notify` callback.
 
 A runner calls `launch_in_memory()`, then registers each tree with
 `server.add_board(session_id, host)`. It supplies the existing `MessageBoardHost`
@@ -123,6 +124,10 @@ for membership and notification delivery. Timestamps use the MCP backend's syste
 clock, as in the standalone SQLite server. Configure the same MCP server
 with `server.url()` and the `Authorization` header from `server.authorization()`;
 this overrides the plugin endpoint through normal configuration.
+
+Runners with a separate app-server can pass an `AppServerNotifications` connection
+to `launch_in_memory_with_app_server` to deliver notices through `thread/inject_items`,
+just like SQLite with `--app-server`. The host still supplies membership.
 
 The launcher reuses `serve_http` and `InMemoryAgentMessageBoard` without a SQLite
 registry or new Core hooks. Keep its handle alive for the run. Dropping it cancels

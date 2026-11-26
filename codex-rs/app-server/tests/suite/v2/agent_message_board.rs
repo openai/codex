@@ -105,7 +105,7 @@ async fn board_tools_share_multi_agent_namespace(
         result,
         json!({"results": [], "n_returned": 0, "has_more": false, "next_cursor": null})
     );
-    // Detached delivery is independent of the configured native tool namespace.
+    // Exercise MCP delivery once, independently of the native tool namespace.
     if configured_namespace.is_some() {
         return Ok(());
     }
@@ -152,7 +152,7 @@ async fn board_tools_share_multi_agent_namespace(
     let (restarted, _) = websocket::spawn_websocket_server_with_args(
         codex_home.path(),
         &format!("ws://{address}"),
-        &[],
+        &["-c".into(), "features.agent_message_board_mcp=true".into()],
     )
     .await?;
     app_process = restarted;
@@ -230,7 +230,27 @@ async fn board_tools_share_multi_agent_namespace(
         .bind_agent(root_id.into(), child_id, host.clone())
         .await?;
 
-    let mut notifications = Vec::new();
+    // The automatic in-memory board uses the host callback. The two detached
+    // boards below use thread/inject_items to reach the same worker.
+    let text = "A notice from the automatic in-memory board.";
+    websocket::send_request(
+        &mut ws,
+        "mcpServer/tool/call",
+        /*id*/ 4,
+        Some(json!({
+            "threadId": root,
+            "server": "codex_message_board",
+            "tool": "post",
+            "arguments": {"new_channel_name": "delivery", "text": text, "agents_to_notify": ["/root/worker"]},
+            "_meta": {"sessionId": root}
+        })),
+    )
+    .await?;
+    let posted = websocket::read_response_for_id(&mut ws, /*id*/ 4)
+        .await?
+        .result;
+    assert_ne!(posted["isError"], true, "{posted:?}");
+    let mut posts = vec![(text.to_string(), posted["structuredContent"].clone())];
     for (backend, url, token) in [
         (
             "SQLite",
@@ -281,11 +301,7 @@ async fn board_tools_share_multi_agent_namespace(
             .await?;
         assert_ne!(posted.is_error, Some(true), "{posted:?}");
         let post = posted.structured_content.context("posted metadata")?;
-        notifications.push(format!(
-            "Message Type: CHANNEL_POST\nSender: /root\nChannel: delivery\nMessage ID: {}\nThread ID: {}\nPayload:\n{text}",
-            post["message_id"].as_str().context("message id")?,
-            post["thread_id"].as_str().context("thread id")?,
-        ));
+        posts.push((text, post));
         client.shutdown().await;
     }
 
@@ -316,7 +332,7 @@ async fn board_tools_share_multi_agent_namespace(
     websocket::send_request(
         &mut ws,
         "turn/start",
-        /*id*/ 4,
+        /*id*/ 5,
         Some(
             json!({"threadId":root,"input":[{"type":"text","text":"Follow up with the worker."}]}),
         ),
@@ -332,20 +348,31 @@ async fn board_tools_share_multi_agent_namespace(
     let delivered_items = delivered
         .requests()
         .into_iter()
-        .flat_map(|request| request.inputs_of_type("agent_message"))
-        .map(responses::strip_metadata_from_json)
-        .map(responses::strip_response_item_ids_from_json)
+        .flat_map(|request| {
+            request
+                .inputs_of_type("agent_message")
+                .into_iter()
+                .map(responses::strip_metadata_from_json)
+                .map(responses::strip_response_item_ids_from_json)
+                .map(move |item| (request.header("thread-id"), item))
+        })
         .collect::<Vec<_>>();
-    for notification in notifications {
+    for (text, post) in posts {
+        let notification = format!(
+            "Message Type: CHANNEL_POST\nSender: /root\nChannel: delivery\nMessage ID: {}\nThread ID: {}\nPayload:\n{text}",
+            post["message_id"].as_str().context("message id")?,
+            post["thread_id"].as_str().context("thread id")?,
+        );
+        let expected = json!({
+            "type":"agent_message","author":"/root","recipient":"/root/worker",
+            "content":[{"type":"input_text","text":notification}]
+        });
         assert_eq!(
             delivered_items
                 .iter()
-                .filter(|item| item["content"] == json!([{"type":"input_text","text":notification}]))
+                .filter(|(_, item)| item["content"] == expected["content"])
                 .collect::<Vec<_>>(),
-            vec![&json!({
-                "type":"agent_message","author":"/root","recipient":"/root/worker",
-                "content":[{"type":"input_text","text":notification}]
-            })],
+            vec![&(Some(child_id.to_string()), expected)],
         );
     }
     in_memory.shutdown().await?;
