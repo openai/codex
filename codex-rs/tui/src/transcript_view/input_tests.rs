@@ -269,7 +269,7 @@ fn workspace_file_links_show_the_title_with_subtle_hover_and_open_the_same_locat
             link,
             FileLink {
                 path: "./guide.md".to_string(),
-                location: Some(SourceLocation { line: 3, column: 2 }),
+                location: Some(SourceLocation::single(/*line*/ 3, Some(2))),
             },
         );
     }
@@ -557,5 +557,63 @@ fn modified_clicks_still_open_immediately() {
         };
         assert_eq!(url, "https://example.com/docs");
         assert!(view.selection.is_none());
+    }
+}
+
+#[test]
+fn file_ranges_open_from_wrapped_prose_and_table_fragments() {
+    use crate::markdown_render::sidebar_file_link;
+    use crate::terminal_hyperlinks::ReaderLink;
+    use ratatui::style::Modifier;
+
+    crate::markdown_render::preferences::set_document_links(/*enabled*/ true);
+    let left = "src/app/(auth)/search_results.tsx:42-44";
+    let right = "src/components/search_filters.tsx#L5-L7";
+    let explicit = format!("[{right}]({right})");
+    let prose = format!("See ({left}).\n\n{explicit}");
+    let table = format!("| File | Related |\n|---|---|\n| ({left}). | {explicit} |");
+    for (source, width) in [(&prose, 36), (&table, 36), (&table, 54)] {
+        let (mut view, cells) = transcript(source, width);
+        view.document_links = true;
+        let area = view.area;
+        let mut selected = None;
+        let mut hit_rows = [Vec::new(), Vec::new()];
+        for (index, path) in [left, right].into_iter().enumerate() {
+            selected = view.cycle_document_link(&cells, selected, /*forward*/ true);
+            assert_eq!(selected, Some(index));
+            let expected = sidebar_file_link(path).unwrap();
+            let link = ReaderLink::Document(expected.clone());
+            assert_eq!(view.document_link(&cells, index).as_ref(), Some(&link));
+            let mut highlight = Buffer::empty(area);
+            view.paint_document_link(&cells, index, &mut highlight);
+            for y in area.y..area.bottom() {
+                let mut first = None;
+                for x in area.x..area.right() {
+                    let hit = view.reader_link_at(x, y).as_ref() == Some(&link);
+                    let focused = highlight[(x, y)].modifier.contains(Modifier::REVERSED);
+                    assert_eq!(focused, hit, "focus at {x},{y} for {path} at width {width}");
+                    if hit {
+                        first.get_or_insert(x);
+                    }
+                }
+                if let Some(x) = first {
+                    let press = mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+                    let release = mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+                    view.handle_mouse(press, &cells);
+                    assert!(matches!(view.handle_mouse(release, &cells),
+                        Some(ViewAction::OpenDocument(file)) if file == expected));
+                    hit_rows[index].push(y);
+                }
+            }
+            assert!(hit_rows[index].len() >= 2, "expected wrapped {path}");
+        }
+        for (forward, index) in [(true, 0), (false, 1)] {
+            selected = view.cycle_document_link(&cells, selected, forward);
+            assert_eq!(selected, Some(index));
+        }
+        if width == 54 {
+            // Both columns contribute a fragment to each of the first two rows.
+            assert_eq!(hit_rows[0][..2], hit_rows[1][..2]);
+        }
     }
 }

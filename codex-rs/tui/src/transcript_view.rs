@@ -12,6 +12,7 @@ mod copy_mode;
 mod disclosure;
 mod document;
 pub(crate) use document::DocumentPosition;
+pub(crate) use document::DocumentTarget;
 mod follow_control;
 mod footer;
 mod input;

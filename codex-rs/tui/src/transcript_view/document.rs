@@ -1,6 +1,8 @@
 //! Render source locations in the file reader using the transcript's wrapped rows.
 
+use ratatui::style::Color;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
@@ -12,6 +14,40 @@ use super::*;
 pub(crate) enum DocumentPosition {
     Offset(usize),
     Latest,
+}
+
+/// Resolved logical lines and the grapheme-aligned byte offset used for scrolling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentTarget {
+    pub(crate) first_line: usize,
+    pub(crate) last_line: usize,
+    pub(crate) offset: usize,
+    pub(crate) mark_column: bool,
+}
+
+/// A terminal may not report its background. Pair the syntax theme's canvas with
+/// its text color for unstyled glyphs, and preserve syntax-specific foregrounds.
+fn source_highlight() -> (Style, Option<Color>) {
+    use crate::render::highlight::convert_syntect_color;
+    let (background, foreground) = match crate::terminal_palette::default_bg() {
+        Some(bg) => (Some(bg), None),
+        None => crate::render::highlight::with_syntax_theme(|theme| {
+            let background = match theme.settings.background.and_then(convert_syntect_color) {
+                Some(Color::Rgb(r, g, b)) => Some((r, g, b)),
+                _ => None,
+            };
+            (
+                background,
+                theme.settings.foreground.and_then(convert_syntect_color),
+            )
+        }),
+    };
+    let style = crate::style::user_message_style_for(background);
+    if matches!(style.bg, None | Some(Color::Reset)) {
+        (crate::style::selection_style(), None)
+    } else {
+        (style, foreground)
+    }
 }
 
 impl TranscriptView {
@@ -33,7 +69,7 @@ impl TranscriptView {
         buf: &mut Buffer,
         cells: &[Arc<dyn HistoryCell>],
         line_starts: &[usize],
-        target: Option<(usize, usize)>,
+        target: Option<DocumentTarget>,
     ) {
         let digits = line_starts
             .len()
@@ -49,6 +85,7 @@ impl TranscriptView {
         if line_starts.is_empty() {
             return;
         }
+        let highlight = target.map(|target| (target, source_highlight()));
         for (y, visible) in (area.top()..area.bottom()).zip(&self.visible) {
             let offset = visible.layout.position_at(visible.row, /*column*/ 0);
             let line = line_starts.partition_point(|start| *start <= offset);
@@ -58,18 +95,25 @@ impl TranscriptView {
                     .right_aligned()
                     .render(Rect::new(area.x, y, digits, /*height*/ 1), buf);
             }
-            if let Some((target_line, target_offset)) = target
-                && line == target_line
+            if let Some((target, (style, foreground))) = highlight
+                && (target.first_line..=target.last_line).contains(&line)
             {
-                let mut style = crate::style::user_message_style();
-                if style.bg.is_none() {
-                    style = crate::style::selection_style();
+                for x in text.left()..text.right() {
+                    let cell = &mut buf[(x, y)];
+                    cell.set_style(style);
+                    if let Some(fg) = foreground
+                        && cell.fg == Color::Reset
+                    {
+                        cell.set_fg(fg);
+                    }
                 }
-                buf.set_style(Rect::new(text.x, y, text.width, /*height*/ 1), style);
-                if visible.row == visible.layout.row_for_offset(target_offset) {
+                if target.mark_column
+                    && line == target.first_line
+                    && visible.row == visible.layout.row_for_offset(target.offset)
+                {
                     let x = text
                         .x
-                        .saturating_add(visible.layout.column_for_offset(target_offset));
+                        .saturating_add(visible.layout.column_for_offset(target.offset));
                     if x < text.right() {
                         let cell = &mut buf[(x, y)];
                         let style = cell.style();

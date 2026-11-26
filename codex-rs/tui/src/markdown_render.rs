@@ -116,24 +116,41 @@ pub(crate) use web_links::hide_web_link_destination;
 pub(crate) fn file_links(input: &str, cwd: Option<&Path>) -> Vec<FileLink> {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
     let directives = InlineDirectives::new(input, options);
-    directives
-        .events(
-            Parser::new_ext(&directives.markdown, options).into_offset_iter(),
-            cwd,
-        )
-        .filter_map(|(event, _)| match event {
+    let mut links = Vec::new();
+    let mut literal_depth = 0usize;
+    let events = directives.events(
+        Parser::new_ext(&directives.markdown, options).into_offset_iter(),
+        cwd,
+    );
+    for (event, range) in DecodedTextMerge::new(events) {
+        match event {
             Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
-                sidebar_file_link(&dest_url)
+                links.extend(sidebar_file_link(&dest_url));
+                literal_depth += 1;
             }
-            _ => None,
-        })
-        .collect()
+            Event::Start(Tag::CodeBlock(_)) => literal_depth += 1,
+            Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                literal_depth = literal_depth.saturating_sub(1);
+            }
+            Event::Text(text) if literal_depth == 0 => {
+                links.extend(
+                    local_links::bare_file_ranges(
+                        &text,
+                        input.get(..range.start).unwrap_or_default(),
+                    )
+                    .map(|(_, file)| file),
+                );
+            }
+            _ => {}
+        }
+    }
+    links
 }
 
 pub(crate) fn hide_reader_link_destination(destination: &str) -> bool {
     hide_web_link_destination(destination) || local_links::sidebar_file_link(destination).is_some()
 }
-use web_links::style_bare_web_urls;
+use web_links::style_bare_links;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -648,7 +665,8 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             self.transformed_code_source = source;
         }
         self.prepare_for_event(&event);
-        let copy_inline = crate::markdown_copy::Inline::from_event(&event);
+        let copy_inline =
+            crate::markdown_copy::Inline::from_event(&event, self.is_hidden_link_destination);
         if let Some(inline) = &copy_inline {
             self.copy_inline.push(inline.clone());
         }
@@ -682,7 +700,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     self.code_block_content.start = self.code_block_content.start.min(range.start);
                     self.code_block_content.end = range.end;
                 }
-                self.text(text);
+                self.text(text, range.start);
             }
             Event::Code(code) => self.code(code),
             Event::SoftBreak => self.soft_break(),
@@ -947,7 +965,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         self.needs_newline = true;
     }
 
-    fn text(&mut self, text: CowStr<'a>) {
+    fn text(&mut self, text: CowStr<'a>, mut source: usize) {
         if self.collecting_local_link_label() {
             let style = self.inline_styles.last().copied().unwrap_or_default();
             for (index, line) in text.lines().enumerate() {
@@ -960,7 +978,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         }
         self.line_ends_with_local_link_target = false;
         if self.in_table_cell() {
-            self.push_text_to_table_cell(&text);
+            self.push_text_to_table_cell(&text, source);
             return;
         }
 
@@ -1001,9 +1019,10 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             if i > 0 {
                 self.push_line(Line::default());
             }
-            let content = line.to_string();
             let style = self.inline_styles.last().copied().unwrap_or_default();
-            self.push_text_spans(&content, style);
+            let annotated = self.annotate_text_span(line, style, source);
+            self.push_annotated(annotated);
+            source += line.len() + 1;
         }
         self.needs_newline = false;
     }
@@ -1479,13 +1498,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         }
     }
 
-    fn push_text_to_table_cell(&mut self, text: &str) {
+    fn push_text_to_table_cell(&mut self, text: &str, mut source: usize) {
         let style = self.inline_styles.last().copied().unwrap_or_default();
         for (i, line) in text.lines().enumerate() {
             if i > 0 {
                 self.push_table_cell_hard_break();
             }
-            let annotated = self.annotate_text_span(line, style);
+            let annotated = self.annotate_text_span(line, style, source);
+            source += line.len() + 1;
             if let Some(table_state) = self.table_state.as_mut()
                 && let Some(cell) = table_state.current_cell.as_mut()
             {
@@ -2707,12 +2727,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         }
     }
 
-    fn push_text_spans(&mut self, text: &str, style: Style) {
-        let annotated = self.annotate_text_span(text, style);
-        self.push_annotated(annotated);
-    }
-
-    fn annotate_text_span(&mut self, text: &str, style: Style) -> HyperlinkLine {
+    fn annotate_text_span(&mut self, text: &str, style: Style, source: usize) -> HyperlinkLine {
         let span = self.style_link_label(Span::styled(text.to_string(), style));
         let destination = self
             .link
@@ -2730,7 +2745,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
-            style_bare_web_urls(span, self.styles.link)
+            style_bare_links(
+                span,
+                self.styles.link,
+                self.is_hidden_link_destination,
+                self.input.get(..source).unwrap_or_default(),
+            )
         }
     }
 

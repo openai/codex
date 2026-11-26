@@ -501,7 +501,7 @@ async fn document_preview_scenario() -> Result<()> {
         dir.path().join("main.rs"),
         "// first\r\n// second\r\nlet value = 3;\r\n",
     )?;
-    for location in [None, Some(SourceLocation { line: 3, column: 5 })] {
+    for location in [None, Some(SourceLocation::single(/*line*/ 3, Some(5)))] {
         app.open_document(
             &mut tui,
             &mut server,
@@ -569,6 +569,25 @@ async fn document_preview_scenario() -> Result<()> {
         .reader()
         .unwrap();
     assert!(view.begin_select_mode(cells));
+    let range = crate::markdown_render::sidebar_file_link("./main.rs#L1-L2").unwrap();
+    app.open_document(&mut tui, &mut server, parent, range)
+        .await?;
+    Box::pin(app.handle_event(&mut tui, &mut server, next_document_event(true).await)).await?;
+    assert_eq!(app.sidebar().unwrap().documents.len(), 2);
+    let doc = app.sidebar_mut().documents.get_mut(&id).unwrap();
+    assert!(!doc.reader().unwrap().0.has_active_interaction());
+    let lines = |doc: &Document| match &doc.state {
+        State::Ready {
+            target: Some(target),
+            ..
+        } => target.first_line..=target.last_line,
+        _ => panic!("expected highlighted source"),
+    };
+    assert_eq!(lines(doc), 1..=2);
+    doc.loaded(Ok(DocumentContent::Text("shorter".into())));
+    assert_eq!(lines(doc), 1..=1);
+    let (view, cells) = doc.reader().unwrap();
+    assert!(view.begin_select_mode(cells));
     Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
         .await?;
     let State::Ready { view, target, .. } = &app.sidebar().unwrap().documents[&id].state else {
@@ -581,6 +600,13 @@ async fn document_preview_scenario() -> Result<()> {
         Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into())))
             .await?;
         assert_eq!(app.sidebar().unwrap().documents.len(), remaining);
+        if remaining == 2 {
+            let doc = app.sidebar_mut().documents.get_mut(&id).unwrap();
+            doc.loaded(Ok(DocumentContent::Text(String::new())));
+            doc.loaded(Err(eyre!("temporary read failure")));
+            doc.loaded(Ok(DocumentContent::Text("changed again\nsecond".into())));
+            assert!(matches!(&doc.state, State::Ready { target: None, .. }));
+        }
     }
     app.chat_widget
         .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
@@ -908,4 +934,86 @@ fn preview_error_keeps_the_filename_visible_in_a_narrow_pane() -> Result<()> {
     assert_eq!(thread_error.lines().next(), Some("Could not open file"));
     assert!(message("fs/readFile", "Storage offline").ends_with("Storage offline"));
     Ok(())
+}
+
+#[test]
+fn file_ranges_clamp_to_source_and_keep_grapheme_offsets() {
+    let source = "abc\r\ne\u{301}x\r\nlast";
+    for (dest, expected) in [
+        ("f.rs:2:2-99:8", (2..=3, 4, true)),
+        ("f.rs#L99-L101", (3..=3, 9, false)),
+    ] {
+        let location = crate::markdown_render::sidebar_file_link(dest)
+            .unwrap()
+            .location
+            .unwrap();
+        let target = source_target(source, &[0, 4, 9], location).unwrap();
+        let lines = target.first_line..=target.last_line;
+        assert_eq!((lines, target.offset, target.mark_column), expected);
+        assert_eq!(source_target("", &[], location), None);
+    }
+}
+
+fn range_buffers(width: u16, bg: Option<(u8, u8, u8)>) -> [ratatui::buffer::Buffer; 2] {
+    use crate::terminal_palette::DefaultColors;
+    let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(FileCell {
+        source: "before\nlet answer = 42;\n\nlast\nafter".into(),
+        language: Some("rs".into()),
+    })];
+    let target = DocumentTarget {
+        first_line: 2,
+        last_line: 4,
+        offset: 7,
+        mark_column: false,
+    };
+    let area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 8);
+    let starts = [0, 7, 24, 25, 30];
+    let colors = bg.map(|bg| DefaultColors { fg: None, bg });
+    crate::terminal_palette::with_test_palette(colors, || {
+        [None, Some(target)].map(|location| {
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            TranscriptView::default().render_document(area, &mut buf, &cells, &starts, location);
+            buf
+        })
+    })
+}
+
+#[test]
+fn file_ranges_highlight_wrapped_rows_and_blank_lines() {
+    let frames = [10, 52].map(|width| {
+        let [plain, painted] = range_buffers(width, /*bg*/ None);
+        let mut frame = vec![format!("width {width}")];
+        for y in 0..painted.area.height {
+            let text: String = (0..width).map(|x| painted[(x, y)].symbol()).collect();
+            let tinted = painted[(width - 1, y)].bg != plain[(width - 1, y)].bg;
+            if tinted || !text.trim().is_empty() {
+                let mark = if tinted { "+" } else { "." };
+                frame.push(format!("{mark} {text}").trim_end().to_owned());
+            }
+        }
+        frame.join("\n")
+    });
+    insta::assert_snapshot!(frames.join("\n\n"));
+}
+
+#[test]
+fn file_ranges_keep_syntax_foregrounds_on_light_dark_and_unknown_backgrounds() {
+    use ratatui::style::Color;
+    for bg in [Some((20, 20, 20)), Some((246, 246, 246)), None] {
+        let [plain, painted] = range_buffers(/*width*/ 32, bg);
+        let tint = painted[(0, 1)].bg;
+        assert_ne!(tint, plain[(0, 1)].bg);
+        for x in 0..painted.area.width {
+            let cell = &painted[(x, 1)];
+            let fg = plain[(x, 1)].fg;
+            if fg == Color::Reset && bg.is_none() {
+                assert_ne!(cell.fg, Color::Reset);
+            } else {
+                assert_eq!(cell.fg, fg);
+            }
+            assert!(!cell.modifier.contains(Modifier::REVERSED));
+            assert_eq!(cell.bg, tint);
+            assert_eq!(painted[(x, 0)], plain[(x, 0)]);
+        }
+    }
 }

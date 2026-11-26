@@ -1006,9 +1006,10 @@ impl TextLayout {
         }
     }
 
-    pub(super) fn document_links(&self) -> Vec<(Range<usize>, ReaderLink)> {
-        let mut stops: Vec<(Range<usize>, ReaderLink)> = Vec::new();
-        let mut previous_source = None;
+    pub(super) fn document_links(&self) -> Vec<(Vec<Range<usize>>, ReaderLink)> {
+        // Wrapped table cells can interleave fragments of different links on each row.
+        let mut stops: Vec<(Vec<Range<usize>>, ReaderLink)> = Vec::new();
+        let mut occurrences = std::collections::HashMap::new();
         for (index, row) in self.rows.iter().enumerate() {
             let inset = row.first_column - row.prefix_columns;
             for link in &row.line.hyperlinks {
@@ -1022,21 +1023,26 @@ impl TextLayout {
                 if range.is_empty() {
                     continue;
                 }
-                if let Some((previous, previous_destination)) = stops.last_mut()
+                let index = occurrences
+                    .entry(link.markdown_source)
+                    .or_insert(stops.len());
+                if let Some((ranges, previous_destination)) = stops.get_mut(*index)
                     && *previous_destination == destination
-                    && previous_source == link.markdown_source
-                    && (previous.end == range.start
-                        || (previous_source.is_some()
-                            && self
-                                .text
-                                .get(previous.end..range.start)
-                                .is_some_and(|gap| gap.chars().all(char::is_whitespace))))
                 {
-                    previous.end = range.end;
-                } else {
-                    previous_source = link.markdown_source;
-                    stops.push((range, destination));
+                    // Without a Markdown source offset only touching fragments identify one link.
+                    if let Some(previous) = ranges.last_mut()
+                        && previous.end == range.start
+                    {
+                        previous.end = range.end;
+                        continue;
+                    }
+                    if link.markdown_source.is_some() {
+                        ranges.push(range);
+                        continue;
+                    }
                 }
+                *index = stops.len();
+                stops.push((vec![range], destination));
             }
         }
         stops

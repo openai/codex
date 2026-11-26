@@ -111,10 +111,7 @@ pub(crate) async fn execute(
         .resolve_thread_file(thread_id, &original_path)
         .await
         .map_err(|_| McpError::invalid_params("File preview is unavailable for this path", None))?;
-    let location = line.map(|line| SourceLocation {
-        line: line.get(),
-        column: 1,
-    });
+    let location = line.map(|line| SourceLocation::single(line.get(), /*column*/ None));
     events
         .app_event_tx
         .send(AppEvent::OpenModelSidebarDocument {

@@ -49,7 +49,7 @@ pub(crate) struct TerminalHyperlink {
     pub(crate) columns: Range<usize>,
     pub(crate) destination: String,
     destination_kind: DestinationKind,
-    /// Byte offset of an explicit Markdown link, preserved through wrapping.
+    /// Source offset identifying one Markdown link occurrence across wrapped rows.
     pub(crate) markdown_source: Option<usize>,
 }
 

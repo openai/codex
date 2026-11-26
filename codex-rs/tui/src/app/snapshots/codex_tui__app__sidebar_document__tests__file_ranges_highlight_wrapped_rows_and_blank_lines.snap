@@ -1,0 +1,18 @@
+---
+source: tui/src/app/sidebar_document_tests.rs
+expression: "frames.join(\"\\n\\n\")"
+---
+width 10
+. before
++ let answer
++ = 42;
++
++ last
+. after
+
+width 52
+. 1 before
++ 2 let answer = 42;
++ 3
++ 4 last
+. 5 after

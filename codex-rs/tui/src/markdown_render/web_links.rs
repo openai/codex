@@ -1,4 +1,4 @@
-//! Styling and destination visibility for web links in semantic Markdown output.
+//! Styling bare links and controlling web destination visibility in semantic Markdown output.
 //!
 //! Terminal identity is a conservative heuristic, not end-to-end capability negotiation. Unknown
 //! terminals and multiplexers retain the destination so a label never hides the only usable URL.
@@ -13,13 +13,36 @@ use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::annotate_web_urls_in_line;
+use crate::terminal_hyperlinks::source_text_width;
 use crate::terminal_hyperlinks::web_destination;
 use crate::width::display_width;
 
-/// Give detected URLs the same affordance as explicit Markdown links, preserving surrounding text.
-pub(super) fn style_bare_web_urls(span: Span<'static>, link_style: Style) -> HyperlinkLine {
+/// Give detected links the same affordance as explicit Markdown links, preserving surrounding text.
+pub(super) fn style_bare_links(
+    span: Span<'static>,
+    link_style: Style,
+    is_hidden_destination: &dyn Fn(&str) -> bool,
+    prefix: &str,
+) -> HyperlinkLine {
     let mut line = annotate_web_urls_in_line(Line::from(span));
+    let text = &line.line.spans[0].content;
+    let mut previous_byte = 0;
+    let mut previous_column = 0;
+    for (range, file) in super::local_links::bare_file_ranges(text, prefix) {
+        if !is_hidden_destination(&text[range]) {
+            continue;
+        }
+        let start = previous_column + source_text_width(&text[previous_byte..range.start]);
+        let end = start + source_text_width(&text[range]);
+        previous_byte = range.end;
+        previous_column = end;
+        let mut link = TerminalHyperlink::document(start..end, file);
+        link.markdown_source = Some(prefix.len() + range.start);
+        line.hyperlinks.push(link);
+    }
+    line.hyperlinks.sort_by_key(|link| link.columns.start);
     if line.hyperlinks.is_empty() {
         return line;
     }

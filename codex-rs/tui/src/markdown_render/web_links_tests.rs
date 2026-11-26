@@ -41,17 +41,20 @@ fn bare_urls_are_styled_without_coloring_surrounding_prose() {
 }
 
 #[test]
-fn bare_url_styling_preserves_tabs_and_unicode() {
-    let line = super::style_bare_web_urls(
-        "界\t(https://example.com).".bold(),
+fn bare_link_styling_preserves_tabs_and_unicode() {
+    let line = super::style_bare_links(
+        "界\t(https://example.com). لا src/a.ts:2-3".bold(),
         Style::new().fg(accent_color()).underlined(),
+        &|_| true,
+        "",
     );
     assert_eq!(
         line.line,
         Line::from(vec![
             "界\t(".bold(),
             "https://example.com".bold().fg(accent_color()).underlined(),
-            ").".bold(),
+            "). لا ".bold(),
+            "src/a.ts:2-3".bold().fg(accent_color()).underlined(),
         ]),
     );
 }
@@ -260,8 +263,8 @@ fn label_only_web_links_keep_targets_after_prose_and_table_wrapping() {
 
 #[test]
 fn streaming_and_full_render_agree_with_label_only_links() {
-    let markdown = "See [**label**](https://example.com).\n\n| Resource |\n| --- |\n| [`code`](https://example.com/code) |\n\nTrailing text.";
-    let display = WebLinkDisplay::LabelOnly;
+    let markdown = "See [**label**](https://example.com) and src/f.ts:42-44.\n\n| Resource |\n| --- |\n| [`code`](https://example.com/code) |\n| [source](./src/f.ts#L42-L44) |\n\nTrailing text.";
+    let hide_destination = &|_: &str| true;
     for width in [12, 40] {
         for end in 1..=markdown.len() {
             let prefix = &markdown[..end];
@@ -269,10 +272,16 @@ fn streaming_and_full_render_agree_with_label_only_links() {
                 prefix,
                 Some(width),
                 /*cwd*/ None,
-                &|destination| display.hide_destination(destination),
+                hide_destination,
                 crate::markdown_render::ListSpacing::AfterMultiline,
             );
-            assert_eq!(streamed.lines, render(prefix, width, display));
+            let full = render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
+                prefix,
+                Some(width),
+                /*cwd*/ None,
+                hide_destination,
+            );
+            assert_eq!(streamed.lines, full);
         }
     }
 }

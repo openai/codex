@@ -93,14 +93,21 @@ pub(crate) enum Inline {
 }
 
 impl Inline {
-    pub(crate) fn from_event(event: &Event<'_>) -> Option<Self> {
+    pub(crate) fn from_event(
+        event: &Event<'_>,
+        is_hidden_destination: &dyn Fn(&str) -> bool,
+    ) -> Option<Self> {
         match event {
             Event::Start(Tag::Emphasis) => Some(Self::Delimiter("_")),
             Event::Start(Tag::Strong) => Some(Self::Delimiter("**")),
             Event::Start(Tag::Strikethrough) => Some(Self::Delimiter("~~")),
             Event::Start(Tag::Link { dest_url, .. }) => Some(
-                if crate::terminal_hyperlinks::web_destination(dest_url).is_some()
-                    && !dest_url.starts_with(crate::inline_visualization::LINK_PLACEHOLDER_PREFIX)
+                if (crate::terminal_hyperlinks::web_destination(dest_url).is_some()
+                    && !dest_url.starts_with(crate::inline_visualization::LINK_PLACEHOLDER_PREFIX))
+                    || (is_hidden_destination(dest_url)
+                        && crate::markdown_render::sidebar_file_link(dest_url)
+                            .and_then(|link| link.location)
+                            .is_some_and(|location| location.end.is_some()))
                 {
                     Self::Link(dest_url.as_ref().into())
                 } else {

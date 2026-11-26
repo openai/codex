@@ -476,7 +476,13 @@ fn document_link_navigation_preserves_occurrences_across_wraps() {
         let links = layout
             .document_links()
             .into_iter()
-            .map(|(range, _)| &layout.text()[range])
+            .map(|(ranges, _)| {
+                ranges
+                    .into_iter()
+                    .map(|range| &layout.text()[range])
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
             .collect::<Vec<_>>();
         assert_eq!(links, ["first link wraps", "second link"]);
     }

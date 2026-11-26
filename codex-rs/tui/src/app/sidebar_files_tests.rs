@@ -498,10 +498,7 @@ fn sidebar_files_keeps_remote_paths_for_the_owning_reader() {
         files.entries,
         vec![FileLink {
             path,
-            location: Some(SourceLocation {
-                line: 12,
-                column: 4
-            }),
+            location: Some(SourceLocation::single(/*line*/ 12, Some(4))),
         }],
     );
 }

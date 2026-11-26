@@ -162,7 +162,7 @@ impl TranscriptView {
             None if forward => 0,
             None => count - 1,
         };
-        let offset = links[index].0.start;
+        let offset = links[index].0.first()?.start;
         let row = layout.row_for_offset(offset);
         if !self
             .visible
@@ -195,17 +195,17 @@ impl TranscriptView {
         let Some(layout) = self.layout(cells, /*index*/ 0) else {
             return;
         };
-        let Some((range, _)) = layout.document_links().into_iter().nth(index) else {
+        let Some((ranges, _)) = layout.document_links().into_iter().nth(index) else {
             return;
         };
-        for (row, visible) in self.visible.iter().enumerate() {
+        for (y, visible) in (self.area.top()..self.area.bottom()).zip(&self.visible) {
             if visible.index == 0 {
-                visible.layout.highlight(
-                    range.clone(),
-                    Rect::new(self.area.x, self.area.y + row as u16, self.area.width, 1),
-                    buf,
-                    visible.row,
-                );
+                let area = Rect::new(self.area.x, y, self.area.width, /*height*/ 1);
+                for range in &ranges {
+                    visible
+                        .layout
+                        .highlight(range.clone(), area, buf, visible.row);
+                }
             }
         }
     }

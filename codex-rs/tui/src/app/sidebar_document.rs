@@ -25,6 +25,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::ReaderLink;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::transcript_view::DocumentPosition;
+use crate::transcript_view::DocumentTarget;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
 use codex_app_server_client::AppServerPath;
@@ -138,6 +139,7 @@ pub(super) struct Document {
     pub(super) backend: crate::backend_id::BackendId,
     link: Option<usize>,
     location: Option<SourceLocation>,
+    highlight_dismissed: bool,
     state: State,
     pub(super) path_actions: PathActions,
     access: DocumentAccess,
@@ -155,7 +157,7 @@ enum State {
         view: Box<TranscriptView>,
         cells: [Arc<dyn HistoryCell>; 1],
         line_starts: Vec<usize>,
-        target: Option<(usize, usize)>,
+        target: Option<DocumentTarget>,
     },
 }
 
@@ -336,6 +338,7 @@ impl Document {
                 });
                 let target = self
                     .location
+                    .filter(|_| !self.highlight_dismissed)
                     .and_then(|loc| source_target(&source, &line_starts, loc));
                 let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(FileCell { source, language })];
                 let mut view = Box::<TranscriptView>::default();
@@ -344,7 +347,7 @@ impl Document {
                 match position {
                     Some(DocumentPosition::Latest) => view.jump_to_latest(),
                     Some(DocumentPosition::Offset(offset)) => view.jump_to_offset(&cells, offset),
-                    None => view.jump_to_offset(&cells, target.map_or(0, |(_, offset)| offset)),
+                    None => view.jump_to_offset(&cells, target.map_or(0, |target| target.offset)),
                 }
                 State::Ready {
                     view,
@@ -358,11 +361,11 @@ impl Document {
     }
 
     fn go_to(&mut self, location: Option<SourceLocation>) {
-        let was_located = self.location.is_some();
         let restore_markdown = location.is_none()
-            && was_located
+            && self.location.is_some()
             && crate::markdown_render::is_markdown_file(&self.title());
         self.location = location;
+        self.highlight_dismissed = false;
         self.link = None;
         self.path_actions.dismiss();
         let State::Ready {
@@ -384,10 +387,11 @@ impl Document {
             self.loaded(Ok(DocumentContent::Text(source)));
         } else {
             *target = location.and_then(|location| source_target(source, line_starts, location));
-            if let Some((_, offset)) = target {
-                view.cancel_search();
+            if let Some(target) = target {
+                view.end_select_mode();
                 view.end_selection(cells);
-                view.jump_to_offset(cells, *offset);
+                view.cancel_search();
+                view.jump_to_offset(cells, target.offset);
             }
         }
     }
@@ -491,7 +495,7 @@ impl Document {
                 let path =
                     crate::history_cell::sanitize_user_text(path.into()).replace(['\n', '\t'], " ");
                 let title = match self.location {
-                    Some(location) => format!("Open {path} at line {}?", location.line),
+                    Some(location) => format!("Open {path} at line {}?", location.start.line),
                     None => format!("Open {path}?"),
                 };
                 let mut lines = textwrap::wrap(&title, usize::from(body.width).max(1))
@@ -641,13 +645,13 @@ fn source_target(
     source: &str,
     starts: &[usize],
     location: SourceLocation,
-) -> Option<(usize, usize)> {
-    let index = (location.line - 1).min(starts.len().saturating_sub(1));
+) -> Option<DocumentTarget> {
+    let index = (location.start.line - 1).min(starts.len().saturating_sub(1));
     let start = *starts.get(index)?;
     let line = source.lines().nth(index)?;
     let column = line
         .char_indices()
-        .nth(location.column - 1)
+        .nth(location.start.column.unwrap_or(1) - 1)
         .map_or(line.len(), |(byte, _)| byte);
     let column = if column == line.len() {
         column
@@ -657,7 +661,14 @@ fn source_target(
             .last()
             .map_or(0, |(byte, _)| byte)
     };
-    Some((index + 1, start + column))
+    Some(DocumentTarget {
+        first_line: index + 1,
+        last_line: location
+            .end
+            .map_or(index + 1, |end| end.line.min(starts.len())),
+        offset: start + column,
+        mark_column: location.end.is_none() || location.start.column.is_some(),
+    })
 }
 
 impl App {
@@ -905,6 +916,7 @@ impl App {
             backend: backend_id,
             link: None,
             location,
+            highlight_dismissed: false,
             state,
             access,
             path_actions: PathActions::default(),
@@ -999,10 +1011,10 @@ impl App {
                         view.cancel_search();
                         view.end_selection(cells);
                         None
-                    } else if escape
-                        && (doc.link.take().is_some()
-                            || (!view.has_active_interaction() && target.take().is_some()))
-                    {
+                    } else if escape && doc.link.take().is_some() {
+                        None
+                    } else if escape && !view.has_active_interaction() && target.take().is_some() {
+                        doc.highlight_dismissed = true;
                         None
                     } else if !view.is_search_editing()
                         && (self.keymap.app.find_transcript.is_pressed(*key)

@@ -878,3 +878,19 @@ fn selected_list_and_code_containers_keep_their_structure() {
         );
     }
 }
+
+#[test]
+fn file_ranges_keep_hidden_destinations_when_copying_markdown() {
+    crate::markdown_render::preferences::set_document_links(/*enabled*/ true);
+    for dest in ["./src/search.ts#L42-L44", "./src/search.ts:42:5-44:10"] {
+        let link = format!("[src/search.ts:42-44](<{dest}>)");
+        for source in [&link, &format!("| Location |\n|---|\n| {link} |")] {
+            for width in [12, 80] {
+                let layout = markdown_layout(source, width);
+                let (copied, _) = payload(&layout, 0..layout.text().len());
+                assert_eq!(copied.matches(&link).count(), 1, "{copied}");
+                assert!(!layout.text().contains(dest));
+            }
+        }
+    }
+}

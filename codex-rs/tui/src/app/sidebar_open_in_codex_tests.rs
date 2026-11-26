@@ -380,7 +380,10 @@ async fn open_in_codex_scenario() -> Result<()> {
         .show(SidebarContent::Chooser, PaneFocus::Main);
     let mut revisit = preview("note.md");
     if let AppEvent::OpenModelSidebarDocument { document, .. } = &mut revisit {
-        document.location = Some(crate::markdown_render::SourceLocation { line: 1, column: 1 });
+        document.location = Some(crate::markdown_render::SourceLocation::single(
+            /*line*/ 1,
+            Some(1),
+        ));
     }
     boxed_future!(app.handle_event(&mut tui, &mut server, revisit)).await?;
     boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)).await?;
