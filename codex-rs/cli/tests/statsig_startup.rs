@@ -211,7 +211,7 @@ async fn harness_startup_requests_statsig_evaluations() -> Result<()> {
                 "{mode} did not POST {endpoint}\n{}",
                 String::from_utf8_lossy(&output),
             );
-            child.session.terminate();
+            drop(child.session);
             let _ = child.exit_rx.await;
             if let Some(daemon) = daemon {
                 daemon.session.signal(codex_utils_pty::ProcessSignal::Interrupt)?;
