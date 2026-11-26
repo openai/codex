@@ -22,6 +22,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use crate::key_hint;
 use crate::text_formatting::truncate_text;
+use codex_utils_fuzzy_match::fold_for_match;
 use codex_utils_fuzzy_match::fuzzy_match;
 
 #[derive(Clone, Debug)]
@@ -71,18 +72,16 @@ impl MentionItem {
         }
     }
 
-    fn match_tier(&self, lowercase_query: &str) -> MatchTier {
-        let display_name = self.display_name.to_lowercase();
-        let insert_name = self
-            .insert_text
-            .strip_prefix('$')
-            .unwrap_or(&self.insert_text)
-            .to_lowercase();
-        if display_name == lowercase_query || insert_name == lowercase_query {
+    fn match_tier(&self, folded_query: &str) -> MatchTier {
+        let display_name = fold_for_match(&self.display_name);
+        let insert_name = fold_for_match(
+            self.insert_text
+                .strip_prefix('$')
+                .unwrap_or(&self.insert_text),
+        );
+        if display_name == folded_query || insert_name == folded_query {
             MatchTier::Exact
-        } else if display_name.starts_with(lowercase_query)
-            || insert_name.starts_with(lowercase_query)
-        {
+        } else if display_name.starts_with(folded_query) || insert_name.starts_with(folded_query) {
             MatchTier::Prefix
         } else {
             MatchTier::Fuzzy
@@ -235,7 +234,7 @@ impl SkillPopup {
 
     fn filtered(&self) -> Vec<(usize, Option<Vec<usize>>, i32)> {
         let filter = self.query.trim();
-        let lowercase_filter = filter.to_lowercase();
+        let folded_filter = fold_for_match(filter);
         let mut out: Vec<(usize, Option<Vec<usize>>, i32)> = Vec::new();
 
         for (idx, mention) in self.mentions.iter().enumerate() {
@@ -254,7 +253,7 @@ impl SkillPopup {
             let tier = if filter.is_empty() {
                 MatchTier::Fuzzy
             } else {
-                mention.match_tier(&lowercase_filter)
+                mention.match_tier(&folded_filter)
             };
             let frequency = mention
                 .path
@@ -510,6 +509,8 @@ mod tests {
                 &["logging-best-practices", "Logging Best Practices"],
             ),
             named_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"]),
+            named_mention_item("tool-οστ", &[]),
+            named_mention_item("tool-ος", &[]),
         ]);
         popup.frequencies.insert("plugin://github".to_owned(), 50);
         popup.set_query("pr");
@@ -539,6 +540,12 @@ mod tests {
                     Some("[Skill]".to_string())
                 ),
             ]
+        );
+
+        popup.set_query("tool-οσ");
+        insta::assert_snapshot!(
+            "skill_popup_folded_name",
+            render_popup(&popup, /*width*/ 48)
         );
     }
 }

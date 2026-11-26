@@ -5653,6 +5653,9 @@ version = "0.0.0"
 [[package]]
 name = "codex-utils-fuzzy-match"
 version = "0.0.0"
+dependencies = [
+ "nucleo",
+]
 
 [[package]]
 name = "codex-utils-git-discovery"

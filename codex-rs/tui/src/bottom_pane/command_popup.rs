@@ -11,9 +11,11 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows_with_col_width_mode;
 use super::slash_commands::BuiltinCommandFlags;
+use super::slash_commands::CommandMatch;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
-use super::slash_commands::commands_for_input;
+use super::slash_commands::commands_for_popup;
+use super::slash_commands::match_command_name;
 use crate::slash_command::SlashCommand;
 
 // Hide alias commands in the default popup list so each unique action appears once.
@@ -81,21 +83,13 @@ impl CommandPopup {
         service_tier_commands: Vec<ServiceTierCommand>,
     ) -> Self {
         // Keep built-in availability in sync with the composer.
-        let commands = commands_for_input(
-            BuiltinCommandFlags {
-                side_conversation_active: false,
-                ..flags.into()
-            },
-            &service_tier_commands,
-        )
-        .into_iter()
-        .filter_map(|command| match command {
-            SlashCommandItem::Builtin(cmd) => (!cmd.command().starts_with("debug")
-                && cmd != SlashCommand::Apps)
-                .then_some(CommandItem::Builtin(cmd)),
-            SlashCommandItem::ServiceTier(command) => Some(CommandItem::ServiceTier(command)),
-        })
-        .collect();
+        let commands = commands_for_popup(flags.into(), &service_tier_commands)
+            .into_iter()
+            .map(|command| match command {
+                SlashCommandItem::Builtin(cmd) => CommandItem::Builtin(cmd),
+                SlashCommandItem::ServiceTier(command) => CommandItem::ServiceTier(command),
+            })
+            .collect();
         Self {
             disconnected: flags.disconnected,
             command_filter: None,
@@ -174,37 +168,16 @@ impl CommandPopup {
 
         let filter_lower = filter.to_lowercase();
         let filter_chars = filter.chars().count();
-        let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
-        let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
-        let indices_for = |offset| Some((offset..offset + filter_chars).collect());
-
-        let mut push_match =
-            |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
-                let display_lower = display.to_lowercase();
-                let name_lower = name.map(str::to_lowercase);
-                let display_exact = display_lower == filter_lower;
-                let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
-                if display_exact || name_exact {
-                    let offset = if display_exact { 0 } else { name_offset };
-                    exact.push((item, indices_for(offset)));
-                    return;
-                }
-                let display_prefix = display_lower.starts_with(&filter_lower);
-                let name_prefix = name_lower
-                    .as_ref()
-                    .is_some_and(|name| name.starts_with(&filter_lower));
-                if display_prefix || name_prefix {
-                    let offset = if display_prefix { 0 } else { name_offset };
-                    prefix.push((item, indices_for(offset)));
-                }
+        let mut prefix = Vec::new();
+        for command in &self.commands {
+            let matches = match match_command_name(command.command(), &filter_lower) {
+                Some(CommandMatch::Exact) => &mut out,
+                Some(CommandMatch::Prefix) => &mut prefix,
+                None => continue,
             };
-
-        for command in self.commands.iter() {
-            let display = command.command();
-            push_match(command.clone(), display, None, 0);
+            matches.push((command.clone(), Some((0..filter_chars).collect())));
         }
 
-        out.extend(exact);
         out.extend(prefix);
         if self.side_conversation_active || self.disconnected {
             out.sort_by_key(|(item, _)| self.unavailable_reason(item).is_some());

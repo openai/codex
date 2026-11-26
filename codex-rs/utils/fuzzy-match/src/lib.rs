@@ -17,13 +17,13 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
     let mut lowered_chars: Vec<char> = Vec::new();
     let mut lowered_to_orig_char_idx: Vec<usize> = Vec::new();
     for (orig_idx, ch) in haystack.chars().enumerate() {
-        for lc in ch.to_lowercase() {
+        for lc in fold_char(ch) {
             lowered_chars.push(lc);
             lowered_to_orig_char_idx.push(orig_idx);
         }
     }
 
-    let lowered_needle: Vec<char> = needle.to_lowercase().chars().collect();
+    let lowered_needle: Vec<char> = needle.chars().flat_map(fold_char).collect();
 
     let mut result_orig_indices: Vec<usize> = Vec::with_capacity(lowered_needle.len());
     let mut first_lower_pos: Option<usize> = None;
@@ -61,6 +61,22 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
     result_orig_indices.sort_unstable();
     result_orig_indices.dedup();
     Some((result_orig_indices, score))
+}
+
+/// Normalize text for exact and prefix comparisons consistent with [`fuzzy_match`].
+pub fn fold_for_match(text: &str) -> String {
+    text.chars().flat_map(fold_char).collect()
+}
+
+// Simple case folding equates variants without expanding ß to ss. Lowercasing
+// afterwards preserves existing expansions such as İ → i̇.
+fn fold_char(ch: char) -> std::char::ToLowercase {
+    let ch = if ch.is_ascii() {
+        ch
+    } else {
+        nucleo::chars::to_lower_case(ch)
+    };
+    ch.to_lowercase()
 }
 
 #[cfg(test)]
@@ -139,14 +155,12 @@ mod tests {
     }
 
     #[test]
-    fn case_insensitive_matching_basic() {
-        let (idx, score) = match fuzzy_match("FooBar", "foO") {
-            Some(v) => v,
-            None => panic!("expected a match"),
-        };
-        assert_eq!(idx, vec![0, 1, 2]);
-        // Contiguous prefix match (case-insensitive) -> window 0 with bonus
-        assert_eq!(score, -100);
+    fn case_insensitive_matching() {
+        assert_eq!(fuzzy_match("FooBar", "foO"), Some((vec![0, 1, 2], -100)));
+        assert_eq!(fuzzy_match("ΟΣ", "ΟΣ"), Some((vec![0, 1], -100)));
+        assert_eq!(fuzzy_match("ΟΣ", "ος"), Some((vec![0, 1], -100)));
+        assert_eq!(fuzzy_match("ος", "σ"), Some((vec![1], 0)));
+        assert_eq!(fuzzy_match("ſ", "s"), Some((vec![0], -100)));
     }
 
     #[test]

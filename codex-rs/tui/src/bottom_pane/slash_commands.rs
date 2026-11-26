@@ -5,8 +5,6 @@
 //! and ensures they stay in sync.
 use std::str::FromStr;
 
-use codex_utils_fuzzy_match::fuzzy_match;
-
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 
@@ -34,13 +32,6 @@ impl SlashCommandItem {
     pub(crate) fn supports_inline_args(&self) -> bool {
         match self {
             Self::Builtin(cmd) => cmd.supports_inline_args(),
-            Self::ServiceTier(_) => false,
-        }
-    }
-
-    pub(crate) fn available_in_side_conversation(&self) -> bool {
-        match self {
-            Self::Builtin(cmd) => cmd.available_in_side_conversation(),
             Self::ServiceTier(_) => false,
         }
     }
@@ -87,13 +78,20 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .collect()
 }
 
-pub(crate) fn commands_for_input(
+pub(crate) fn commands_for_popup(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
 ) -> Vec<SlashCommandItem> {
     let mut commands = Vec::new();
     let tiers_enabled = flags.service_tier_commands_enabled;
-    for (_, cmd) in builtins_for_input(flags) {
+    // Side conversations show unavailable commands without enabling dispatch.
+    for (_, cmd) in builtins_for_input(BuiltinCommandFlags {
+        side_conversation_active: false,
+        ..flags
+    }) {
+        if cmd.command().starts_with("debug") || cmd == SlashCommand::Apps {
+            continue;
+        }
         commands.push(SlashCommandItem::Builtin(cmd));
         if cmd == SlashCommand::Model && tiers_enabled {
             commands.extend(
@@ -105,9 +103,6 @@ pub(crate) fn commands_for_input(
         }
     }
     commands
-        .into_iter()
-        .filter(|cmd| !flags.side_conversation_active || cmd.available_in_side_conversation())
-        .collect()
 }
 
 /// Find a single built-in command by a recognized name or alias, after applying feature gating.
@@ -158,17 +153,26 @@ pub(crate) fn has_slash_command_prefix(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
 ) -> bool {
-    // A side conversation can describe a known command as unavailable in the
-    // popup, even though dispatch must continue to reject it.
-    commands_for_input(
-        BuiltinCommandFlags {
-            side_conversation_active: false,
-            ..flags
-        },
-        service_tier_commands,
-    )
-    .into_iter()
-    .any(|command| fuzzy_match(command.command(), name).is_some())
+    let filter = name.to_lowercase();
+    commands_for_popup(flags, service_tier_commands)
+        .iter()
+        .any(|command| match_command_name(command.command(), &filter).is_some())
+}
+
+pub(super) enum CommandMatch {
+    Exact,
+    Prefix,
+}
+
+pub(super) fn match_command_name(command: &str, lowercase_filter: &str) -> Option<CommandMatch> {
+    let name = command.to_lowercase();
+    if name == lowercase_filter {
+        Some(CommandMatch::Exact)
+    } else if name.starts_with(lowercase_filter) {
+        Some(CommandMatch::Prefix)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -271,7 +275,7 @@ mod tests {
             },
         ];
 
-        let items = commands_for_input(all_enabled_flags(), &commands);
+        let items = commands_for_popup(all_enabled_flags(), &commands);
         let model_idx = items
             .iter()
             .position(|item| matches!(item, SlashCommandItem::Builtin(SlashCommand::Model)))

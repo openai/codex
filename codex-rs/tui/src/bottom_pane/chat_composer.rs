@@ -12291,16 +12291,15 @@ mod tests {
             "'/re' should activate slash popup via prefix match"
         );
 
-        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
-        composer.set_text_content("/ac".to_string(), Vec::new(), Vec::new());
-        assert!(
-            matches!(composer.popups.active, ActivePopup::Command(_)),
-            "'/ac' should activate slash popup via fuzzy match"
-        );
+        // A fuzzy-only match must leave the arrow keys available for editing.
+        let draft = "/ſtatus\nexample";
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        composer.handle_paste(draft.to_string());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), "/ſtatus".len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), draft.len());
 
-        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command; our current logic will not open popup.
-        // Verify that explicitly.
         composer.set_text_content("/zzz".to_string(), Vec::new(), Vec::new());
         assert!(
             matches!(composer.popups.active, ActivePopup::None),

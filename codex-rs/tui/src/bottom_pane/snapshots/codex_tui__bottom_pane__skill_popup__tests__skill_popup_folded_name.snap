@@ -1,0 +1,30 @@
+---
+source: tui/src/bottom_pane/skill_popup.rs
+expression: "render_popup(&popup, 48)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 48, height: 5 },
+    content: [
+        "                                                ",
+        "› tool-ος   [Skill]                             ",
+        "  tool-οστ  [Skill]                             ",
+        "                                                ",
+        "  enter insert · esc close                      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 12, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 19, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 9, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 12, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 19, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
