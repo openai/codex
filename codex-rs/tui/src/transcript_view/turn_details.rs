@@ -199,6 +199,9 @@ impl TurnDetails {
         let mut hidden_count = 0;
         let mut searches = std::collections::HashSet::new();
         for (index, cell) in cells.iter().enumerate().rev() {
+            if crate::thread_transcript::is_hidden_activity_detail(cell) {
+                continue;
+            }
             // Keep older calls outside the group whose disclosure is pinned on screen.
             if group.anchor.is_some_and(|anchor| {
                 snapshot
@@ -241,9 +244,7 @@ impl TurnDetails {
                 && (!calls.is_empty()
                     || markdown.is_some()
                     || any.is::<AgentMessageCell>()
-                    || any
-                        .downcast_ref::<ReasoningSummaryCell>()
-                        .is_some_and(|reasoning| !reasoning.is_transcript_only()))
+                    || any.is::<ReasoningSummaryCell>())
             {
                 rows[index].parent = Some(start);
                 hidden_count += calls.len().max(1);

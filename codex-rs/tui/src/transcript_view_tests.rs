@@ -1475,6 +1475,32 @@ fn collapsing_tool_group_refills_viewport() {
 }
 
 #[test]
+fn hidden_reasoning_keeps_the_next_command_in_the_same_tool_group() {
+    let [mut first, next] = ["lint", "test"].map(|id| {
+        crate::exec_cell::new_active_exec_command(
+            id.into(),
+            vec!["just".into(), id.into()],
+            Vec::new(),
+            codex_app_server_protocol::CommandExecutionSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        )
+    });
+    first.complete_call(
+        "lint",
+        crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, String::new()),
+        std::time::Duration::ZERO,
+    );
+    let reasoning = crate::history_cell::new_reasoning_summary_block(
+        vec!["**Checking tests**".into()],
+        std::path::Path::new("."),
+    );
+    let cells: &[Arc<dyn HistoryCell>] = &[Arc::new(first), Arc::new(*reasoning)];
+    let screen = parked_screen(&mut TranscriptView::default(), cells, Some(&next));
+    insta::assert_snapshot!(screen, @"    ▸ 2 tool calls · Running just test");
+}
+
+#[test]
 fn late_command_completion_keeps_tool_groups_independent() {
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_protocol::models::MessagePhase::Commentary;
