@@ -103,6 +103,16 @@ fn partial_markup_is_balanced_and_preserves_selected_characters() {
             "ment",                          // codespell:ignore ment
             "[ment](<https://example.com>)", // codespell:ignore ment
         ),
+        (
+            "before [`guide`.md:2-4](guide.md:2-4) after",
+            "guide.md:2-4",
+            "`guide`.md:2-4",
+        ),
+        (
+            "before [**guide**.md:2-4](guide.md:2-4) after",
+            "guide",
+            "**guide**",
+        ),
         ("[**label**](/repo/file.rs)", "label", "**label**"),
         (
             "escaped \\*literal\\* &amp; `code`",
@@ -166,8 +176,8 @@ fn inline_code_selection_copies_only_selected_content() {
 #[test]
 fn mixed_file_targets_preserve_markdown_escaping() {
     for (source, expected) in [
-        ("before [+](/+) after", "before + (+) after"),
-        ("before [1.)](</1.)>) after", "before 1.) (1.)) after"),
+        ("before [+](/+) after", "before + after"),
+        ("before [number](</1.)>) after", "before number (1.)) after"),
         (
             "| File |\n|---|\n| [`foo_bar!`](/repo/foo_bar!) |",
             "| File |\n|---|\n| `foo_bar!` (repo/foo\\_bar\\!) |",
