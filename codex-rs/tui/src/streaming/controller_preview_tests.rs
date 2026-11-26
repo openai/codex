@@ -484,13 +484,46 @@ fn long_unicode_preview_keeps_recent_text_and_finalizes_full_source() {
 fn prose_preview_resumes_after_fenced_code() {
     let cwd = std::env::temp_dir();
     let mut controller = StreamController::new(Some(40), &cwd, HistoryRenderMode::Rich);
-    controller.push("```rust\nlet x = 1;\n```\n");
+    controller.push("```rust\n> ```\n");
+    let tail = controller.current_tail_lines();
+    controller.push("let x = 1;");
+    assert_eq!(controller.current_tail_lines(), tail);
+    controller.push("\n| A | B |\n| --- | --- |\n");
+    let (code, _) = controller.on_commit_tick_batch(usize::MAX);
+    let lines = code.unwrap().display_lines(/*width*/ 40);
+    insta::assert_debug_snapshot!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), @r#"
+    [
+        "• > ```",
+        "  let x = 1;",
+        "  | A | B |",
+        "  | --- | --- |",
+    ]
+    "#);
+    controller.push("```\n");
     controller.on_commit_tick_batch(usize::MAX);
     controller.push("prose after code");
     assert_eq!(
         visible_lines(controller.current_tail_lines()),
         vec![Line::from("prose after code")],
     );
+}
+
+#[test]
+fn adjacent_fences_resume_preview_when_the_blockquote_ends() {
+    let cwd = std::env::temp_dir();
+    let mut controller = StreamController::new(Some(40), &cwd, HistoryRenderMode::Rich);
+    controller.push("> ```text\n> quoted code\n");
+    controller.push("```rust\nlet x = 1;\n```\n");
+    controller.on_commit_tick_batch(usize::MAX);
+
+    controller.push("City");
+    insta::assert_debug_snapshot!(visible_lines(controller.current_tail_lines()), @r#"
+    [
+        Line::from("City"),
+    ]
+    "#);
+    controller.push(" | Count\n--- | ---\nOslo | 2\n");
+    assert_eq!(controller.queued_lines(), 0);
 }
 
 #[test]

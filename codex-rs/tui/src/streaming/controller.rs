@@ -2066,14 +2066,15 @@ mod tests {
 
     #[test]
     fn table_holdback_state_treats_indented_fence_text_as_plain_content() {
-        let source = "    ```sh\n| Key | Description |\n| --- | --- |\n";
-        assert!(
-            matches!(
-                table_holdback_state(source),
-                TableHoldbackState::Confirmed { .. }
-            ),
-            "indented fence-like text should not open a fence and should not block table detection",
-        );
+        for prefix in ["    ```sh\n", "\t```sh\n"] {
+            let source = format!("{prefix}| Key | Description |\n| --- | --- |\n");
+            assert_eq!(
+                table_holdback_state(&source),
+                TableHoldbackState::Confirmed {
+                    table_start: prefix.len()
+                }
+            );
+        }
     }
 
     #[test]

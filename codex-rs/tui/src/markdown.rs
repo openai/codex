@@ -34,6 +34,8 @@ use crate::inline_visualization::InlineVisualizationContext;
 use crate::inline_visualization::rewrite_inline_visualizations;
 use crate::markdown_render::ListSpacing;
 use crate::table_detect;
+use crate::table_detect::Fence;
+use crate::table_detect::FenceKind;
 use crate::terminal_hyperlinks::HyperlinkLine;
 
 /// Render Markdown for a widget that measures its height in terminal rows.
@@ -320,78 +322,6 @@ fn unwrap_markdown_fences_with_sources<'a>(
         return Cow::Borrowed(markdown_source);
     }
 
-    #[derive(Clone, Copy)]
-    struct Fence {
-        marker: u8,
-        len: usize,
-        is_blockquoted: bool,
-    }
-
-    // Strip a trailing newline and up to 3 leading spaces, returning the
-    // trimmed slice.  Returns `None` when the line has 4+ leading spaces
-    // (which makes it an indented code line per CommonMark).
-    fn strip_line_indent(line: &str) -> Option<&str> {
-        let without_newline = line.strip_suffix('\n').unwrap_or(line);
-        let mut byte_idx = 0usize;
-        let mut column = 0usize;
-        for b in without_newline.as_bytes() {
-            match b {
-                b' ' => {
-                    byte_idx += 1;
-                    column += 1;
-                }
-                b'\t' => {
-                    byte_idx += 1;
-                    column += 4;
-                }
-                _ => break,
-            }
-            if column >= 4 {
-                return None;
-            }
-        }
-        Some(&without_newline[byte_idx..])
-    }
-
-    // Parse an opening fence line, returning the fence metadata and whether
-    // the fence info string indicates markdown content.
-    fn parse_open_fence(line: &str) -> Option<(Fence, bool)> {
-        let trimmed = strip_line_indent(line)?;
-        let is_blockquoted = trimmed.trim_start().starts_with('>');
-        let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
-        let (marker, len) = table_detect::parse_fence_marker(fence_scan_text)?;
-        let is_markdown = table_detect::is_markdown_fence_info(fence_scan_text, len);
-        Some((
-            Fence {
-                marker: marker as u8,
-                len,
-                is_blockquoted,
-            },
-            is_markdown,
-        ))
-    }
-
-    fn is_close_fence(line: &str, fence: Fence) -> bool {
-        let Some(trimmed) = strip_line_indent(line) else {
-            return false;
-        };
-        let fence_scan_text = if fence.is_blockquoted {
-            if !trimmed.trim_start().starts_with('>') {
-                return false;
-            }
-            table_detect::strip_blockquote_prefix(trimmed)
-        } else {
-            trimmed
-        };
-        if let Some((marker, len)) = table_detect::parse_fence_marker(fence_scan_text) {
-            marker as u8 == fence.marker
-                && len >= fence.len
-                && fence_scan_text[len..].trim().is_empty()
-        } else {
-            false
-        }
-    }
-
     fn markdown_fence_contains_table(content: &str, is_blockquoted_fence: bool) -> bool {
         let mut previous_line: Option<&str> = None;
         for line in content.lines() {
@@ -459,12 +389,12 @@ fn unwrap_markdown_fences_with_sources<'a>(
             match active {
                 ActiveFence::Passthrough(fence) => {
                     push_source_range(&mut out, line_range);
-                    if !is_close_fence(line, fence) {
+                    if !fence.closes(line) {
                         active_fence = Some(ActiveFence::Passthrough(fence));
                     }
                 }
                 ActiveFence::MarkdownCandidate(mut data) => {
-                    if is_close_fence(line, data.fence) {
+                    if data.fence.closes(line) {
                         if markdown_fence_contains_table(
                             &content_from_ranges(markdown_source, &data.content_ranges),
                             data.fence.is_blockquoted,
@@ -500,8 +430,8 @@ fn unwrap_markdown_fences_with_sources<'a>(
             continue;
         }
 
-        if let Some((fence, is_markdown)) = parse_open_fence(line) {
-            if is_markdown {
+        if let Some(fence) = Fence::open(line) {
+            if fence.kind == FenceKind::Markdown {
                 active_fence = Some(ActiveFence::MarkdownCandidate(Box::new(
                     MarkdownCandidateData {
                         fence,

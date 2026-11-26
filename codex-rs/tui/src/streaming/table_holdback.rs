@@ -109,7 +109,8 @@ impl TableHoldbackScanner {
             TableHoldbackState::PendingHeader { header_start } => Some(header_start),
             TableHoldbackState::None => None,
         };
-        if self.source_offset < completed_source_len
+        // A new block can start exactly at the next delta, implicitly ending a quoted fence.
+        if self.source_offset <= completed_source_len
             || holdback_start.is_some_and(|start| start < completed_source_len)
         {
             self.reset();

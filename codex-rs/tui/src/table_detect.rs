@@ -130,18 +130,59 @@ pub(crate) enum FenceKind {
     Other,
 }
 
-/// Incremental tracker for fenced-code-block open/close transitions.
-///
-/// Feed lines one at a time via [`advance`](Self::advance); query the current
-/// context with [`kind`](Self::kind).  The tracker handles leading-whitespace
-/// limits (>3 spaces → not a fence), blockquote prefix stripping, and
-/// backtick/tilde marker matching.
-///
-/// The tracker reports the fence context that applies to the current line
-/// before that line mutates the state. Callers rely on that when deciding
-/// whether the current raw line can open or continue a table.
+/// An opening fence shared by the Markdown unwrapper and the streaming scanner.
+#[derive(Clone, Copy)]
+pub(crate) struct Fence {
+    marker: char,
+    len: usize,
+    pub(crate) is_blockquoted: bool,
+    pub(crate) kind: FenceKind,
+}
+
+impl Fence {
+    pub(crate) fn open(line: &str) -> Option<Self> {
+        let line = strip_line_indent(line)?;
+        let text = strip_blockquote_prefix(line);
+        let (marker, len) = parse_fence_marker(text)?;
+        Some(Self {
+            marker,
+            len,
+            is_blockquoted: line.trim_start().starts_with('>'),
+            kind: if is_markdown_fence_info(text, len) {
+                FenceKind::Markdown
+            } else {
+                FenceKind::Other
+            },
+        })
+    }
+
+    pub(crate) fn closes(self, line: &str) -> bool {
+        let Some(line) = strip_line_indent(line) else {
+            return false;
+        };
+        let text = if self.is_blockquoted {
+            if !line.trim_start().starts_with('>') {
+                return false;
+            }
+            strip_blockquote_prefix(line)
+        } else {
+            line
+        };
+        parse_fence_marker(text).is_some_and(|(marker, len)| {
+            marker == self.marker && len >= self.len && text[len..].trim().is_empty()
+        })
+    }
+}
+
+/// Fences allow up to three leading spaces. A leading tab reaches at least column four.
+fn strip_line_indent(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start_matches(' ');
+    (line.len() - trimmed.len() < 4 && !trimmed.starts_with('\t')).then_some(trimmed)
+}
+
+/// Query the fence context before advancing past each raw source line.
 pub(crate) struct FenceTracker {
-    state: Option<(char, usize, FenceKind)>,
+    state: Option<Fence>,
 }
 
 impl FenceTracker {
@@ -150,47 +191,17 @@ impl FenceTracker {
         Self { state: None }
     }
 
-    /// Process one raw source line and update fence state.
-    ///
-    /// Lines with >3 leading spaces are ignored (indented code blocks, not
-    /// fences).  Blockquote prefixes (`>`) are stripped before scanning.
     pub(crate) fn advance(&mut self, raw_line: &str) {
-        let leading_spaces = raw_line
-            .as_bytes()
-            .iter()
-            .take_while(|byte| **byte == b' ')
-            .count();
-        if leading_spaces > 3 {
-            return;
-        }
-
-        let trimmed = &raw_line[leading_spaces..];
-        let fence_scan_text = strip_blockquote_prefix(trimmed);
-        if let Some((marker, len)) = parse_fence_marker(fence_scan_text) {
-            if let Some((open_char, open_len, _)) = self.state {
-                // Close the current fence if the marker matches.
-                if marker == open_char
-                    && len >= open_len
-                    && fence_scan_text[len..].trim().is_empty()
-                {
-                    self.state = None;
-                }
-            } else {
-                // Opening a new fence.
-                let kind = if is_markdown_fence_info(fence_scan_text, len) {
-                    FenceKind::Markdown
-                } else {
-                    FenceKind::Other
-                };
-                self.state = Some((marker, len, kind));
-            }
+        match self.state {
+            None => self.state = Fence::open(raw_line),
+            Some(fence) if fence.closes(raw_line) => self.state = None,
+            Some(_) => {}
         }
     }
 
-    /// Current fence context for the most-recently-advanced line.
     #[inline]
     pub(crate) fn kind(&self) -> FenceKind {
-        self.state.map_or(FenceKind::Outside, |(_, _, k)| k)
+        self.state.map_or(FenceKind::Outside, |fence| fence.kind)
     }
 }
 
@@ -200,7 +211,7 @@ impl FenceTracker {
 /// The input should already have leading whitespace and blockquote prefixes
 /// stripped.
 #[inline]
-pub(crate) fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
+fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
     let first = line.as_bytes().first().copied()?;
     if first != b'`' && first != b'~' {
         return None;
@@ -426,6 +437,8 @@ mod tests {
     fn fence_tracker_blockquote_prefix_stripped() {
         let mut tracker = FenceTracker::new();
         tracker.advance("> ```sh");
+        assert_eq!(tracker.kind(), FenceKind::Other);
+        tracker.advance("```");
         assert_eq!(tracker.kind(), FenceKind::Other);
         tracker.advance("> ```");
         assert_eq!(tracker.kind(), FenceKind::Outside);
