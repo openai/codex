@@ -36,7 +36,7 @@ async fn contribution_labels(
     let mut labels = Vec::new();
     let policy = codex_config::types::PluginsConfigToml::default();
     for plugin in contributor.selected_plugins(context, &policy).await {
-        if !plugin.enabled {
+        if plugin.enabled != codex_extension_api::PluginEnablement::Enabled {
             labels.push(format!("disabled:{}", plugin.plugin_id));
             continue;
         }

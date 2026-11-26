@@ -2081,6 +2081,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
             exec_policy: Some(codex_execpolicy::RequirementsExecPolicy::new(
                 codex_execpolicy::Policy::empty(),
             )),
+            plugins: Default::default(),
             mcp_policy: None,
             network_policy: None,
             selected_capability_roots: Vec::new(),
@@ -2369,7 +2370,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     identity: codex_core_plugins::PluginIdentity::Local {
                         plugin_id: plugin_id.clone(),
                     },
-                    enabled: true,
+                    enabled: codex_extension_api::PluginEnablement::Enabled,
                     mcp: Box::pin(async move {
                         mcp_loaded.fetch_add(1, Ordering::Relaxed);
                         codex_extension_api::SelectedPluginContribution {

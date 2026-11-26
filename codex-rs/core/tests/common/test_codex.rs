@@ -173,6 +173,7 @@ pub fn environment_config_for_selection(
         windows_sandbox_type: permissions.windows_sandbox_type,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         exec_policy: None,
+        plugins: Default::default(),
         mcp_policy: None,
         network_policy: None,
         selected_capability_roots: Vec::new(),

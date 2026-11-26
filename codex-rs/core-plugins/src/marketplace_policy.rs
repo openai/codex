@@ -213,50 +213,78 @@ pub(crate) fn policy_filtered_plugin_config(
     config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> Option<toml::Value> {
-    let mut effective_config = config_layer_stack.effective_config();
-    if effective_config.get("plugins").is_none() && effective_config.get("marketplaces").is_none() {
+    let mut config = config_layer_stack.effective_config();
+    if config.get("plugins").is_none() && config.get("marketplaces").is_none() {
         return None;
     }
-    let policy = MarketplacePolicy::from_requirements(config_layer_stack.requirements());
-    let allowed_marketplace_names =
-        allowed_configured_marketplace_names_with_policy(&effective_config, &policy, codex_home);
-    let configured_marketplace_names = effective_config
-        .get("marketplaces")
-        .and_then(toml::Value::as_table)
-        .map(|marketplaces| marketplaces.keys().cloned().collect::<HashSet<_>>())
-        .unwrap_or_default();
-
-    if let Some(marketplaces) = effective_config
+    let filter =
+        PluginMarketplaceFilter::new(&config, config_layer_stack.requirements(), codex_home);
+    if let Some(marketplaces) = config
         .get_mut("marketplaces")
         .and_then(toml::Value::as_table_mut)
     {
-        marketplaces
-            .retain(|marketplace_name, _| allowed_marketplace_names.contains(marketplace_name));
+        marketplaces.retain(|name, _| filter.allowed_marketplaces.contains(name));
     }
-    if let Some(plugins) = effective_config
-        .get_mut("plugins")
-        .and_then(toml::Value::as_table_mut)
-    {
-        plugins.retain(|plugin_key, _| {
-            if plugin_key == "_default" {
-                return true;
-            }
-            let Ok(plugin_id) = PluginId::parse(plugin_key) else {
-                return !policy.is_restricted();
-            };
-            let marketplace_name = &plugin_id.marketplace_name;
-            if configured_marketplace_names.contains(marketplace_name) {
-                return allowed_marketplace_names.contains(marketplace_name);
-            }
-            if is_openai_curated_marketplace_name(marketplace_name) {
-                return policy
-                    .validate_git_source(OPENAI_PLUGINS_GIT_URL, /*ref_name*/ None)
-                    .is_ok();
-            }
-            !policy.is_restricted()
-        });
+    filter.retain_plugins(&mut config);
+    Some(config)
+}
+
+/// Keep the original marketplace names so a blocked source cannot look unconfigured.
+pub(crate) struct PluginMarketplaceFilter {
+    policy: MarketplacePolicy,
+    allowed_marketplaces: HashSet<String>,
+    configured_marketplaces: HashSet<String>,
+}
+
+impl PluginMarketplaceFilter {
+    pub(crate) fn new(
+        config: &toml::Value,
+        requirements: &ConfigRequirements,
+        codex_home: &Path,
+    ) -> Self {
+        let policy = MarketplacePolicy::from_requirements(requirements);
+        let allowed_marketplaces =
+            allowed_configured_marketplace_names_with_policy(config, &policy, codex_home);
+        let configured_marketplaces = config
+            .get("marketplaces")
+            .and_then(toml::Value::as_table)
+            .map(|marketplaces| marketplaces.keys().cloned().collect())
+            .unwrap_or_default();
+        Self {
+            policy,
+            allowed_marketplaces,
+            configured_marketplaces,
+        }
     }
-    Some(effective_config)
+
+    pub(crate) fn retain_plugins(&self, config: &mut toml::Value) {
+        if let Some(plugins) = config
+            .get_mut("plugins")
+            .and_then(toml::Value::as_table_mut)
+        {
+            plugins.retain(|plugin_id, _| self.allows_marketplace_for(plugin_id));
+        }
+    }
+
+    pub(crate) fn allows_marketplace_for(&self, plugin_id: &str) -> bool {
+        if plugin_id == "_default" {
+            return true;
+        }
+        let Ok(plugin_id) = PluginId::parse(plugin_id) else {
+            return !self.policy.is_restricted();
+        };
+        let marketplace_name = &plugin_id.marketplace_name;
+        if self.configured_marketplaces.contains(marketplace_name) {
+            return self.allowed_marketplaces.contains(marketplace_name);
+        }
+        if is_openai_curated_marketplace_name(marketplace_name) {
+            return self
+                .policy
+                .validate_git_source(OPENAI_PLUGINS_GIT_URL, /*ref_name*/ None)
+                .is_ok();
+        }
+        !self.policy.is_restricted()
+    }
 }
 
 pub fn allowed_configured_marketplace_names(
@@ -299,18 +327,23 @@ pub fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> HashMap<String, PluginConfig> {
-    let Some(effective_config) = policy_filtered_plugin_config(config_layer_stack, codex_home)
-    else {
+    let Some(config) = policy_filtered_plugin_config(config_layer_stack, codex_home) else {
         return HashMap::new();
     };
-    let Some(plugins_value) = effective_config.get("plugins") else {
-        return HashMap::new();
+    parse_configured_plugins(config).unwrap_or_default()
+}
+
+pub(crate) fn parse_configured_plugins(
+    mut config: toml::Value,
+) -> Option<HashMap<String, PluginConfig>> {
+    let Some(plugins) = config.as_table_mut()?.remove("plugins") else {
+        return Some(HashMap::new());
     };
-    match PluginsConfigToml::deserialize(plugins_value.clone()) {
-        Ok(plugins) => plugins.plugins,
+    match PluginsConfigToml::deserialize(plugins) {
+        Ok(plugins) => Some(plugins.plugins),
         Err(err) => {
             tracing::warn!("invalid plugins config: {err}");
-            HashMap::new()
+            None
         }
     }
 }

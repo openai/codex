@@ -74,6 +74,7 @@ pub use contributors::McpServerContributor;
 pub use contributors::McpToolContext;
 pub use contributors::McpToolResultInput;
 pub use contributors::McpToolSource;
+pub use contributors::PluginEnablement;
 pub use contributors::PreviousWorldStateSection;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;

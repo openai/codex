@@ -18,6 +18,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_extension_api::PluginEnablement;
 use codex_extension_api::SelectedPlugin;
 use codex_extension_api::SelectedPluginIdentity;
 use codex_extension_api::SelectedPluginSnapshot;
@@ -259,11 +260,11 @@ impl McpManager {
         &self,
         context: McpServerContributionContext<'a, Config>,
         plugins_config: &PluginsConfigToml,
-        disabled_plugin_ids: &'a [String],
+        explicitly_disabled_plugin_ids: &'a [String],
     ) -> SelectedPluginSnapshot {
-        let context = context.with_disabled_plugin_ids(disabled_plugin_ids);
+        let context = context.with_disabled_plugin_ids(explicitly_disabled_plugin_ids);
         let mut selected = SelectedPluginSnapshot {
-            disabled_plugin_ids: disabled_plugin_ids.to_vec(),
+            disabled_plugin_ids: explicitly_disabled_plugin_ids.to_vec(),
             ..Default::default()
         };
         let available_roots = available_plugin_roots(context);
@@ -280,13 +281,21 @@ impl McpManager {
                 if !available_roots.contains(&selected_root_id) {
                     continue;
                 }
-                if !enabled
+                if enabled != PluginEnablement::Enabled
+                    || legacy_thread_disables_plugin(context, plugins_config, &plugin_id)
                     || !context.config().features.enabled(Feature::Plugins)
-                    || !plugins_config.allows_plugin(&plugin_id)
-                    || disabled_plugin_ids.contains(&plugin_id)
-                    || disabled_plugin_ids.iter().any(|id| id == identity.as_str())
+                    || explicitly_disabled_plugin_ids.contains(&plugin_id)
+                    || explicitly_disabled_plugin_ids
+                        .iter()
+                        .any(|id| id == identity.as_str())
                 {
                     selected.disabled_plugin_roots.push(selected_root_id);
+                    if enabled == PluginEnablement::DisabledForThread
+                        && context.executor_capability_discovery_v2().is_some()
+                        && !selected.disabled_plugin_ids.contains(&plugin_id)
+                    {
+                        selected.disabled_plugin_ids.push(plugin_id);
+                    }
                 } else {
                     selected.plugins.push(SelectedPluginIdentity {
                         selected_root_id: Some(selected_root_id),
@@ -296,7 +305,7 @@ impl McpManager {
             }
             if context.config().features.enabled(Feature::Plugins) {
                 for plugin_id in contributor.hosted_plugin_ids(context) {
-                    if !disabled_plugin_ids.contains(&plugin_id) {
+                    if !explicitly_disabled_plugin_ids.contains(&plugin_id) {
                         selected.plugins.push(SelectedPluginIdentity {
                             selected_root_id: None,
                             plugin_id: CatalogPluginIdentity::Remote {
@@ -315,7 +324,7 @@ impl McpManager {
         context: McpServerContributionContext<'_, Config>,
         originator: Option<&str>,
         environment_scope: McpEnvironmentScope<'_>,
-        disabled_plugin_ids: &[String],
+        explicitly_disabled_plugin_ids: &[String],
     ) -> McpRuntimeProjection {
         let config = context.config();
         if context
@@ -336,7 +345,7 @@ impl McpManager {
         let mut selected_plugin_registrations = Vec::new();
         let mut selected_plugins = Vec::new();
         let mut disabled_plugin_roots = Vec::new();
-        let mut suppressed_plugin_ids = disabled_plugin_ids.to_vec();
+        let mut thread_disabled_plugin_ids = explicitly_disabled_plugin_ids.to_vec();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
         // than enumerating contributors.
@@ -353,18 +362,30 @@ impl McpManager {
                 mcp,
             } in contributor.selected_plugins(context, plugins_config).await
             {
-                if !enabled || !plugins_config.allows_plugin(&plugin_id) {
+                let disabled_for_thread = enabled == PluginEnablement::DisabledForThread
+                    || legacy_thread_disables_plugin(context, plugins_config, &plugin_id);
+                let disabled_for_installation =
+                    enabled == PluginEnablement::DisabledForInstallation;
+                let excluded_by_plugin_id = explicitly_disabled_plugin_ids.contains(&plugin_id);
+                let excluded_by_caller = excluded_by_plugin_id
+                    || explicitly_disabled_plugin_ids
+                        .iter()
+                        .any(|id| id == identity.as_str());
+                // Apps needs the connector mapping when the caller excludes this plugin ID.
+                if (disabled_for_thread || disabled_for_installation) && !excluded_by_plugin_id {
                     disabled_plugin_roots.push(selected_root_id);
-                    suppressed_plugin_ids.push(plugin_id);
+                    if disabled_for_thread && !thread_disabled_plugin_ids.contains(&plugin_id) {
+                        thread_disabled_plugin_ids.push(plugin_id);
+                    }
                     continue;
                 }
                 let selection_order = plugin_selection_order;
                 plugin_selection_order += 1;
-                let disabled = disabled_plugin_ids.contains(&plugin_id)
-                    || disabled_plugin_ids.iter().any(|id| id == identity.as_str());
-                if !config.features.enabled(Feature::Plugins) || disabled {
+                if !config.features.enabled(Feature::Plugins) || excluded_by_caller {
                     disabled_plugin_roots.push(selected_root_id);
-                    suppressed_plugin_ids.push(plugin_id.clone());
+                    if !thread_disabled_plugin_ids.contains(&plugin_id) {
+                        thread_disabled_plugin_ids.push(plugin_id.clone());
+                    }
                 } else {
                     selected_plugins.push(SelectedPluginIdentity {
                         selected_root_id: Some(selected_root_id),
@@ -372,7 +393,7 @@ impl McpManager {
                     });
                 }
                 let contribution = mcp.await;
-                if !disabled {
+                if !excluded_by_caller {
                     for (name, server) in contribution.servers {
                         selected_plugin_registrations.push(
                             McpServerRegistration::from_selected_plugin(
@@ -464,7 +485,7 @@ impl McpManager {
                         connector_ids,
                     } => {
                         if config.features.enabled(Feature::Plugins) {
-                            if !disabled_plugin_ids.contains(&plugin_id) {
+                            if !explicitly_disabled_plugin_ids.contains(&plugin_id) {
                                 selected_plugins.push(SelectedPluginIdentity {
                                     selected_root_id: None,
                                     plugin_id: CatalogPluginIdentity::Remote {
@@ -506,12 +527,12 @@ impl McpManager {
         let connector_snapshot = if config.features.enabled(Feature::Plugins) {
             self.plugins_manager.connector_snapshot(
                 host_plugin_connector_sources.chain(selected_plugin_connector_sources),
-                disabled_plugin_ids,
+                explicitly_disabled_plugin_ids,
             )
         } else {
             Default::default()
         };
-        let loaded_plugins = loaded_plugins.without_plugins(disabled_plugin_ids);
+        let loaded_plugins = loaded_plugins.without_plugins(explicitly_disabled_plugin_ids);
         let plugins_available =
             !selected_plugins.is_empty() || !loaded_plugins.capability_summaries().is_empty();
         let mut mcp_config = config
@@ -572,7 +593,7 @@ impl McpManager {
             selected_plugins: SelectedPluginSnapshot {
                 plugins: selected_plugins,
                 disabled_plugin_roots,
-                disabled_plugin_ids: suppressed_plugin_ids,
+                disabled_plugin_ids: thread_disabled_plugin_ids,
             },
         }
     }
@@ -602,6 +623,16 @@ impl McpManager {
             .await;
         effective_mcp_servers(&mcp_config, auth)
     }
+}
+
+/// Only V1 and direct root selection need Core's thread-config check.
+/// V2 already includes the thread's settings in `SelectedPlugin::enabled`.
+fn legacy_thread_disables_plugin(
+    context: McpServerContributionContext<'_, Config>,
+    thread_plugins: &PluginsConfigToml,
+    plugin_id: &str,
+) -> bool {
+    context.executor_capability_discovery_v2().is_none() && !thread_plugins.allows_plugin(plugin_id)
 }
 
 fn available_plugin_roots(context: McpServerContributionContext<'_, Config>) -> HashSet<String> {

@@ -582,6 +582,7 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
                 windows_sandbox_type: harness.test().config.permissions.windows_sandbox_type,
                 use_legacy_landlock: harness.test().config.features.use_legacy_landlock(),
                 exec_policy: None,
+                plugins: Default::default(),
                 mcp_policy: None,
                 network_policy: None,
                 selected_capability_roots: Vec::new(),

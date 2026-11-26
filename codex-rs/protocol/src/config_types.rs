@@ -22,6 +22,18 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Default activation settings for installed plugins.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginsDefaultConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
 /// Limit for the text included in `codex.tool_result` log records.
 /// This does not affect model-visible output. Raising it can expose more tool data to logs.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema)]

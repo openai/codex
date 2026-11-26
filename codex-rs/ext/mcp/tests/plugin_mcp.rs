@@ -836,6 +836,7 @@ async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
                         windows_sandbox_type: test.config.permissions.windows_sandbox_type,
                         use_legacy_landlock: test.config.features.use_legacy_landlock(),
                         exec_policy: None,
+                        plugins: Default::default(),
                         mcp_policy: None,
                         network_policy: None,
                         selected_capability_roots: vec![SelectedCapabilityRoot {
@@ -938,6 +939,164 @@ async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
             "{case}"
         );
         test.codex.shutdown_and_wait().await?;
+    }
+    Ok(())
+}
+
+/// An empty entry lists only this executor's installation and inherits its default.
+/// A thread preference wins for listed installations. A default alone lists nothing.
+#[tokio::test]
+async fn executor_plugin_enablement_is_scoped_and_overridable() -> TestResult {
+    use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
+    use codex_extension_api::PluginEnablement::DisabledForInstallation;
+    use codex_extension_api::PluginEnablement::DisabledForThread;
+    use codex_extension_api::PluginEnablement::Enabled;
+    use codex_protocol::protocol::EnvironmentConfigState;
+    use codex_protocol::protocol::TurnEnvironmentSelection;
+    use core_test_support::test_codex::environment_config_for_selection;
+
+    let home = tempfile::tempdir()?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_plugins(
+        &mut builder,
+        Arc::new(EnvironmentManager::default_for_tests()),
+    );
+    let registry = builder.build();
+    let init = ExtensionDataInit::new();
+    let store = ExtensionData::new_with_init("test-thread", init.clone());
+    let inventory = Arc::new(serde_json::from_value(json!({
+        "plugins": [{
+            "id": "notes@market", "displayName": "Notes", "version": "1",
+            "root": "file:///notes", "remotePluginId": null,
+            "files": {"manifest": {"path": "file:///notes/.codex-plugin/plugin.json",
+                "contents": "{\"name\":\"notes\"}"}, "mcpConfig": null, "appsConfig": null},
+            "skills": []
+        }],
+        "skills": [], "warnings": []
+    }))?);
+    let executors = [
+        (
+            "opt-in",
+            json!({"_default": {"enabled": false}, "notes@market": {"enabled": true}}),
+        ),
+        (
+            "opt-out",
+            json!({"_default": {"enabled": true}, "notes@market": {"enabled": false}}),
+        ),
+        ("default-only", json!({"_default": {"enabled": true}})),
+        ("empty-entry", json!({"_default": {}, "notes@market": {}})),
+        (
+            "inherit-off",
+            json!({"_default": {"enabled": false}, "notes@market": {}}),
+        ),
+        ("no-default", json!({"notes@market": {}})),
+        ("invalid", json!({"_default": {}})),
+    ];
+    let snapshots = executors
+        .each_ref()
+        .map(|(id, _)| ExecutorCapabilityDiscoveryV2Snapshot {
+            environment_id: (*id).to_owned(),
+            result: Ok(Arc::clone(&inventory)),
+        });
+    for (thread, expected) in [
+        (
+            "",
+            [
+                Enabled,
+                DisabledForInstallation,
+                DisabledForInstallation,
+                Enabled,
+                DisabledForInstallation,
+                Enabled,
+                DisabledForInstallation,
+            ],
+        ),
+        (
+            r#"plugins."notes@market".enabled = true"#,
+            [
+                Enabled,
+                Enabled,
+                Enabled,
+                Enabled,
+                Enabled,
+                Enabled,
+                DisabledForInstallation,
+            ],
+        ),
+        (
+            r#"plugins."notes@market".enabled = false"#,
+            [DisabledForThread; 7],
+        ),
+        (
+            r#"plugins."notes@market".mcp_servers.notes.enabled = true"#,
+            [
+                Enabled,
+                DisabledForInstallation,
+                Enabled,
+                Enabled,
+                DisabledForInstallation,
+                Enabled,
+                DisabledForInstallation,
+            ],
+        ),
+        (
+            "plugins._default = {}",
+            [
+                Enabled,
+                Enabled,
+                DisabledForInstallation,
+                Enabled,
+                Enabled,
+                Enabled,
+                DisabledForInstallation,
+            ],
+        ),
+        ("plugins._default.enabled = false", [DisabledForThread; 7]),
+    ] {
+        fs::write(home.path().join("config.toml"), thread)?;
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await?;
+        let mut environments = Vec::new();
+        for (id, plugins) in &executors {
+            let mut selection = TurnEnvironmentSelection {
+                environment_id: (*id).to_owned(),
+                cwd: PathUri::parse("file:///workspace")?,
+                workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
+                selected_capability_roots: Default::default(),
+            };
+            let mut attachment = environment_config_for_selection(&config, &selection);
+            attachment.plugins = serde_json::from_value(plugins.clone())?;
+            if *id == "invalid" {
+                attachment
+                    .plugins
+                    .invalid_plugin_ids
+                    .insert("notes@market".to_owned());
+            }
+            selection.config = EnvironmentConfigState::Ready(attachment);
+            environments.push(selection);
+        }
+        let context = McpServerContributionContext::for_step(
+            &config,
+            &init,
+            &store,
+            "test",
+            &[],
+            /*executor_capability_discovery*/ None,
+            Some(&snapshots),
+        )
+        .with_selected_environments(&environments);
+        let plugins = registry.mcp_server_contributors()[0]
+            .selected_plugins(context, &config.plugins)
+            .await;
+        assert_eq!(
+            plugins.iter().map(|p| p.enabled).collect::<Vec<_>>(),
+            expected,
+            "{thread}"
+        );
     }
     Ok(())
 }

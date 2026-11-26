@@ -387,6 +387,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         permission_profile: PermissionProfileSnapshot::legacy(permission_profile),
         shell_environment_policy: ShellEnvironmentPolicy::default(),
         exec_policy: None,
+        plugins: Default::default(),
         mcp_policy: None,
         network_policy: None,
         selected_capability_roots: Vec::new(),

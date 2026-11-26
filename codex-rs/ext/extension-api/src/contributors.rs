@@ -34,6 +34,7 @@ pub use approval_review::SynchronousApprovalReviewer;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp::PluginEnablement;
 pub use mcp::SelectedPlugin;
 pub use mcp::SelectedPluginContribution;
 pub use mcp::SelectedPluginIdentity;

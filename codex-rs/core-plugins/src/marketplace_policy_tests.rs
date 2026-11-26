@@ -584,6 +584,28 @@ enabled = true
         vec!["sample@allowed".to_string()]
     );
 
+    let opt_ins = serde_json::from_value(serde_json::json!({
+        "sample@blocked": { "enabled": true },
+        "extra@allowed": {},
+        "extra@blocked": {},
+    }))
+    .expect("executor plugin settings");
+    let catalog = crate::PluginCatalogConfig::from_thread_and_executors(
+        &stack,
+        codex_home.path(),
+        [("a", &opt_ins), ("b", &opt_ins)],
+    );
+    // A shared policy decision for the same extra ID must preserve both opt-ins.
+    for environment in ["a", "b", "c"] {
+        assert!(catalog.includes(environment, "sample@allowed"));
+        assert!(!catalog.includes(environment, "sample@blocked"));
+        assert!(!catalog.includes(environment, "extra@blocked"));
+        assert_eq!(
+            catalog.includes(environment, "extra@allowed"),
+            environment != "c"
+        );
+    }
+
     let raw = stack.effective_user_config().expect("raw user config");
     assert!(raw["marketplaces"]["blocked"].is_table());
     assert!(raw["plugins"]["sample@blocked"].is_table());

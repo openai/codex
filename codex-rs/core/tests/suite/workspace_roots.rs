@@ -282,6 +282,7 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
                     windows_sandbox_type: SandboxType::WindowsRestrictedToken,
                     use_legacy_landlock: test.config.features.use_legacy_landlock(),
                     exec_policy: None,
+                    plugins: Default::default(),
                     mcp_policy: None,
                     network_policy: None,
                     selected_capability_roots: Vec::new(),

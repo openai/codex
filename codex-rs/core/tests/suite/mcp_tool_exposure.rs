@@ -1034,6 +1034,7 @@ async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
                 windows_sandbox_type: test.config.permissions.windows_sandbox_type,
                 use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: None,
+                plugins: Default::default(),
                 mcp_policy: None,
                 network_policy: None,
                 selected_capability_roots: vec![SelectedCapabilityRoot {

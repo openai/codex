@@ -1689,6 +1689,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                         .snapshot(),
                     shell_environment_policy: Default::default(),
                     exec_policy: None,
+                    plugins: Default::default(),
                     mcp_policy: None,
                     network_policy: None,
                     selected_capability_roots: Vec::new(),

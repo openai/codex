@@ -62,6 +62,7 @@ pub use app_mcp_routing::apps_route_available;
 pub use artifact_operation::ArtifactOperation;
 pub use artifact_operation::recognize_artifact_operation;
 pub use catalog::PluginCatalog;
+pub use catalog::PluginCatalogConfig;
 pub use catalog::PluginCatalogEntry;
 pub use catalog::PluginSourceLocation;
 pub use catalog::merge_catalogs;

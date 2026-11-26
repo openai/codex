@@ -221,6 +221,7 @@ impl SessionConfiguration {
                 .windows_sandbox_type_from_config(),
             use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
+            plugins: Default::default(),
             mcp_policy: None,
             network_policy: None,
             selected_capability_roots: Vec::new(),

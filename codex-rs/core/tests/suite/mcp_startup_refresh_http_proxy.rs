@@ -377,6 +377,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
         windows_sandbox_type: fixture.config.permissions.windows_sandbox_type,
         use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
         exec_policy: None,
+        plugins: Default::default(),
         mcp_policy: Some(EnvironmentMcpPolicy {
             servers: Some(BTreeMap::from([(
                 SERVER_NAME.to_string(),

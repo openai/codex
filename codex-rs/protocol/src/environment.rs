@@ -3,6 +3,7 @@
 
 use crate::capabilities::EnvironmentCapabilityRoots;
 use crate::capabilities::SelectedCapabilityRoot;
+use crate::config_types::PluginsDefaultConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::WindowsSandboxLevel;
 use crate::mcp_policy::EnvironmentMcpPolicy;
@@ -14,6 +15,10 @@ use codex_execpolicy_rules::RequirementsExecPolicy;
 use codex_network_policy_types::EnvironmentNetworkPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 /// An environment requested by a caller, before attaching the receiving thread's roots.
 ///
@@ -187,6 +192,26 @@ pub fn has_full_access<'a>(
         }
 }
 
+/// Activation preferences for installations on one executor.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EnvironmentPluginsConfig {
+    #[serde(default, rename = "_default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<PluginsDefaultConfig>,
+    #[serde(default, flatten)]
+    pub plugins: BTreeMap<String, EnvironmentPluginConfig>,
+    /// Rejected entries on this attachment. Thread preferences cannot enable these installations.
+    #[serde(skip)]
+    pub invalid_plugin_ids: BTreeSet<String>,
+}
+
+/// Naming a plugin lists this installation. An omitted flag inherits the default.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentPluginConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
 /// Resolved configuration for a thread/environment attachment.
 #[derive(Clone, PartialEq)]
 pub struct EnvironmentConfig {
@@ -208,6 +233,8 @@ pub struct EnvironmentConfig {
     pub use_legacy_landlock: bool,
     /// Additional managed command restrictions for this environment attachment.
     pub exec_policy: Option<RequirementsExecPolicy>,
+    /// Executor-local activation preferences. Thread settings take precedence.
+    pub plugins: EnvironmentPluginsConfig,
     /// Additional managed MCP restrictions for this environment attachment.
     pub mcp_policy: Option<EnvironmentMcpPolicy>,
     /// Owner-provided traffic restrictions. `None` keeps the existing controller policy.
@@ -229,6 +256,7 @@ impl std::fmt::Debug for EnvironmentConfig {
             .field("windows_sandbox_type", &self.windows_sandbox_type)
             .field("use_legacy_landlock", &self.use_legacy_landlock)
             .field("exec_policy", &self.exec_policy)
+            .field("plugins", &self.plugins.plugins.len())
             .field("mcp_policy", &self.mcp_policy)
             .field("network_policy", &self.network_policy)
             .field("selected_capability_roots", &self.selected_capability_roots)

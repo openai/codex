@@ -2,10 +2,9 @@ use codex_config::types::PluginsConfigToml;
 use codex_connectors_extension::PluginAppProvider;
 use codex_core::config::Config;
 use codex_core_plugins::ExecutorPluginProviderError;
+use codex_core_plugins::PluginCatalogConfig;
 use codex_core_plugins::PluginIdentity;
 use codex_core_plugins::PluginRootOwnership;
-use codex_core_plugins::PluginSourceLocation;
-use codex_core_plugins::configured_plugins_from_stack;
 use codex_core_plugins::loader::apply_configured_plugin_mcp_server_policies;
 use codex_core_plugins::merge_catalogs;
 use codex_exec_server::CapabilityRootDiscovery;
@@ -14,12 +13,15 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_extension_api::PluginEnablement;
 use codex_extension_api::SelectedPlugin;
 use codex_extension_api::SelectedPluginContribution;
 use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::EnvironmentConfigState;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use self::provider::PluginMcpProvider;
 use crate::PluginsThreadState;
@@ -275,32 +277,52 @@ impl McpServerContributor<Config> for PluginContributor {
                 for warning in &merged.warnings {
                     tracing::warn!(%warning, "plugin catalog merge reported a warning");
                 }
-                let configured = configured_plugins_from_stack(
+                let environments = context.selected_environments().unwrap_or_default();
+                let executor_plugin_configs = environments.iter().filter_map(|selection| {
+                    let EnvironmentConfigState::Ready(config) = &selection.config else {
+                        return None;
+                    };
+                    Some((selection.environment_id.as_str(), &config.plugins))
+                });
+                let catalog_config = PluginCatalogConfig::from_thread_and_executors(
                     &context.config().config_layer_stack,
                     context.config().codex_home.as_path(),
+                    executor_plugin_configs,
                 );
-                for entry in merged.entries {
-                    for location in &entry.locations {
-                        let PluginSourceLocation::Executor {
-                            environment_id,
-                            plugin_id,
-                            ..
-                        } = location
-                        else {
-                            continue;
-                        };
+                for mut entry in merged.entries {
+                    let allowed_by_catalog = entry.is_allowed_by(&catalog_config);
+                    let all_installations = discovery::filter_plugin_locations_for_mcp(
+                        &mut entry,
+                        plugins_config,
+                        environments,
+                        allowed_by_catalog,
+                    );
+                    let entry = Arc::new(entry);
+                    for (environment_id, plugin_id, enabled) in all_installations {
                         let selected_root_id = format!("{environment_id}:{plugin_id}");
                         let root_id = selected_root_id.clone();
-                        let plugin_id = plugin_id.clone();
                         let metadata_plugin_id = plugin_id.clone();
-                        let environment_id = environment_id.clone();
-                        let captured = entry.clone();
+                        let captured = Arc::clone(&entry);
                         plugins.push(SelectedPlugin {
                             selected_root_id,
                             plugin_id,
                             identity: entry.id.clone(),
-                            enabled: entry.is_enabled(&configured),
+                            enabled,
                             mcp: Box::pin(async move {
+                                // Disabled locations are absent from the server projection.
+                                // Eligible plugins still identify connectors that Apps must hide.
+                                if enabled != PluginEnablement::Enabled {
+                                    return SelectedPluginContribution {
+                                        plugin_display_name: captured.display_name.clone(),
+                                        source_environment_id: environment_id,
+                                        connector_ids: if allowed_by_catalog {
+                                            captured.connector_ids.clone()
+                                        } else {
+                                            Vec::new()
+                                        },
+                                        servers: Vec::new(),
+                                    };
+                                }
                                 let metadata = discovery::v2_metadata_from_catalog(
                                     &captured,
                                     &context.config().features,
@@ -376,7 +398,7 @@ impl McpServerContributor<Config> for PluginContributor {
                         identity: PluginIdentity::Local {
                             plugin_id: root.selected_root.id.clone(),
                         },
-                        enabled: true,
+                        enabled: PluginEnablement::Enabled,
                         mcp: Box::pin(async move {
                             let metadata = discovery::metadata_from_discovery(
                                 &root.selected_root,
@@ -421,7 +443,7 @@ impl McpServerContributor<Config> for PluginContributor {
                         identity: PluginIdentity::Local {
                             plugin_id: selected_root.id.clone(),
                         },
-                        enabled: true,
+                        enabled: PluginEnablement::Enabled,
                         mcp: Box::pin(async move {
                             project_metadata(
                                 context.config(),
@@ -452,7 +474,7 @@ fn denied_plugin(selected_root: &SelectedCapabilityRoot) -> SelectedPlugin<'stat
         identity: PluginIdentity::Local {
             plugin_id: selected_root.id.clone(),
         },
-        enabled: false,
+        enabled: PluginEnablement::DisabledForThread,
         mcp: Box::pin(async move { metadata }),
     }
 }

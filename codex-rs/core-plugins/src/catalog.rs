@@ -1,11 +1,70 @@
 //! Source-neutral plugin catalogs, reconciliation, and source-aware enablement policy.
 
-use codex_config::types::PluginConfig;
+use crate::marketplace_policy::PluginMarketplaceFilter;
+use crate::marketplace_policy::parse_configured_plugins;
+use codex_config::ConfigLayerStack;
 use codex_core_plugin_common::PluginIdentity;
+use codex_protocol::protocol::EnvironmentPluginsConfig;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Thread configuration shared by all installations, with executor entries scoped by environment.
+#[derive(Default)]
+pub struct PluginCatalogConfig<'a> {
+    thread_plugin_ids: HashSet<String>,
+    /// Environments that list each additional plugin ID.
+    executor_plugin_ids: HashMap<&'a str, HashSet<&'a str>>,
+}
+
+impl<'a> PluginCatalogConfig<'a> {
+    /// Resolve marketplace policy once and check each distinct plugin ID once per selection.
+    pub fn from_thread_and_executors(
+        stack: &ConfigLayerStack,
+        codex_home: &Path,
+        executor_plugin_configs: impl IntoIterator<Item = (&'a str, &'a EnvironmentPluginsConfig)>,
+    ) -> Self {
+        let mut config = stack.effective_config();
+        let thread_plugins = config.get("plugins").and_then(toml::Value::as_table);
+        let mut executor_plugin_ids: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for (environment_id, plugins) in executor_plugin_configs {
+            for id in plugins.plugins.keys() {
+                // Check the original thread keys so a filtered-out ID cannot be reintroduced.
+                if !thread_plugins.is_some_and(|plugins| plugins.contains_key(id)) {
+                    executor_plugin_ids
+                        .entry(id)
+                        .or_default()
+                        .insert(environment_id);
+                }
+            }
+        }
+        if thread_plugins.is_none() && executor_plugin_ids.is_empty() {
+            return Self::default();
+        }
+
+        let filter = PluginMarketplaceFilter::new(&config, stack.requirements(), codex_home);
+        filter.retain_plugins(&mut config);
+        let Some(thread) = parse_configured_plugins(config) else {
+            return Self::default();
+        };
+        executor_plugin_ids.retain(|plugin_id, _| filter.allows_marketplace_for(plugin_id));
+        Self {
+            thread_plugin_ids: thread.into_keys().collect(),
+            executor_plugin_ids,
+        }
+    }
+
+    pub(crate) fn includes(&self, environment_id: &str, plugin_id: &str) -> bool {
+        self.thread_plugin_ids.contains(plugin_id)
+            || self
+                .executor_plugin_ids
+                .get(plugin_id)
+                .is_some_and(|environments| environments.contains(environment_id))
+    }
+}
 
 /// One source's discovery snapshot; only a complete empty catalog establishes absence.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -30,11 +89,9 @@ pub struct PluginCatalogEntry {
 }
 
 impl PluginCatalogEntry {
-    /// Disabled entries never project. Otherwise Cloud membership supplies enablement;
-    /// executor-only entries require every installation's local plugin ID in the supplied
-    /// config, where omitted enablement retains the configured plugin's default.
-    /// A remote identity alone does not establish Cloud membership.
-    pub fn is_enabled(&self, configured_plugins: &HashMap<String, PluginConfig>) -> bool {
+    /// The source must enable the entry. Executor-only installations also
+    /// require a named entry that passes marketplace policy.
+    pub fn is_allowed_by(&self, config: &PluginCatalogConfig<'_>) -> bool {
         if !self.enabled {
             return false;
         }
@@ -44,9 +101,11 @@ impl PluginCatalogEntry {
             .any(|location| matches!(location, PluginSourceLocation::Cloud { .. }));
         is_cloud_plugin
             || self.locations.iter().all(|location| match location {
-                PluginSourceLocation::Executor { plugin_id, .. } => configured_plugins
-                    .get(plugin_id)
-                    .is_some_and(|plugin| plugin.enabled.unwrap_or(true)),
+                PluginSourceLocation::Executor {
+                    environment_id,
+                    plugin_id,
+                    ..
+                } => config.includes(environment_id, plugin_id),
                 PluginSourceLocation::Cloud { .. } => true,
             })
     }

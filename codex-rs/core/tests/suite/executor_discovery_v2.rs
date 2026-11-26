@@ -150,7 +150,7 @@ impl McpServerContributor<Config> for DiscoveryRecorder {
                         plugin_id: "inert-sentinel@market".to_string(),
                     },
                     plugin_id: "inert-sentinel@market".to_string(),
-                    enabled: true,
+                    enabled: codex_extension_api::PluginEnablement::Enabled,
                     mcp: Box::pin(async {
                         codex_extension_api::SelectedPluginContribution {
                             plugin_display_name: "Inert sentinel".to_string(),
@@ -1357,6 +1357,7 @@ pub(super) async fn check_acquisition(enabled: bool, version: &'static str) -> R
             windows_sandbox_type: test.config.permissions.windows_sandbox_type,
             use_legacy_landlock: test.config.features.use_legacy_landlock(),
             exec_policy: None,
+            plugins: Default::default(),
             mcp_policy: None,
             network_policy: None,
             selected_capability_roots: if acquires_v2 {
@@ -2134,11 +2135,180 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     Ok(())
 }
 
-#[test_case::test_case("Stop"; "stop")]
-#[test_case::test_case("Interrupt"; "interrupt")]
+#[test_case::test_case(true; "thread disable without a default")]
+#[test_case::test_case(false; "executor opt out")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_plugin_disable_preserves_scope(thread_denies: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    let model = responses::start_mock_server().await;
+    let home = Arc::new(tempfile::TempDir::new()?);
+    let plugin_id = "inert-sentinel@market";
+    let setting = if thread_denies { "enabled = false" } else { "" };
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!("[plugins.\"{plugin_id}\"]\n{setting}\n"),
+    )?;
+    let selected_plugins = Arc::new(Mutex::new(None));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.tool_contributor(Arc::new(DiscoveryRecorder {
+        mcp_projections: AtomicUsize::new(0),
+        snapshots: Arc::new(Mutex::new(Vec::new())),
+        selected_plugins: Arc::clone(&selected_plugins),
+    }));
+    codex_mcp_extension::install_plugins(
+        &mut extensions,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let test = test_codex()
+        .with_home(home)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_exec_server_url(executor.url.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("enable plugins");
+            config
+                .features
+                .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                .expect("enable V2");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let mut selection = test.executor_environment().selection().clone();
+    selection.environment_id = codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string();
+    let root_id = format!("{}:{plugin_id}", selection.environment_id);
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.plugins = serde_json::from_value(json!({ (plugin_id): { "enabled": thread_denies } }))?;
+    selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(config);
+    responses::mount_sse_once(
+        &model,
+        responses::sse(vec![
+            responses::ev_response_created("response"),
+            responses::ev_completed("response"),
+        ]),
+    )
+    .await;
+    test.submit_turn_with_environments("Hello", Some(vec![selection]))
+        .await?;
+    let snapshot = selected_plugins
+        .lock()
+        .await
+        .take()
+        .context("step plugin snapshot")?;
+    assert_eq!(snapshot.disabled_plugin_roots, vec![root_id]);
+    let expected_ids = if thread_denies {
+        vec![plugin_id.to_string()]
+    } else {
+        Vec::new()
+    };
+    assert_eq!(snapshot.disabled_plugin_ids, expected_ids);
+    Ok(())
+}
+
+/// An executor opt-out must not undo an explicit plugin ID exclusion from Apps tool search.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_executor_opt_out_preserves_disabled_plugin_connectors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    let plugin_id = "calendar@market";
+    *executor.inventory.lock().await = Some(json!({
+        "plugins": [{
+            "id": plugin_id, "displayName": "Calendar", "remotePluginId": null,
+            "version": "1", "root": "file:///calendar",
+            "files": {
+                "manifest": {"path": "file:///calendar/.codex-plugin/plugin.json",
+                    "contents": r#"{"name":"calendar"}"#},
+                "mcpConfig": null,
+                "appsConfig": {"path": "file:///calendar/.app.json",
+                    "contents": r#"{"apps":{"calendar":{"id":"calendar"}}}"#}
+            },
+            "skills": []
+        }],
+        "skills": [], "warnings": []
+    }));
+    let model = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount_with_connector_name(&model, "Google Calendar").await?;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_plugins(
+        &mut extensions,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(Arc::new(extensions.build()))
+        .with_exec_server_url(executor.url.clone())
+        .with_config(move |config| {
+            config.chatgpt_base_url = apps.chatgpt_base_url;
+            for feature in [
+                Feature::Apps,
+                Feature::Plugins,
+                Feature::ExecutorCapabilityDiscoveryV2,
+            ] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("enable Apps and executor plugin discovery");
+            }
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let mut selection = test.executor_environment().selection().clone();
+    selection.environment_id = codex_exec_server::REMOTE_ENVIRONMENT_ID.to_owned();
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.plugins = serde_json::from_value(json!({ (plugin_id): { "enabled": false } }))?;
+    selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(config);
+    for (call_id, disabled_ids, visible) in [
+        ("local-only", vec![], true),
+        ("explicit-disable", vec![plugin_id.to_owned()], false),
+    ] {
+        test.codex
+            .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
+                disabled_plugin_ids: Some(disabled_ids),
+                ..Default::default()
+            })
+            .await?;
+        let mock = responses::mount_sse_sequence(
+            &model,
+            vec![
+                responses::sse(vec![
+                    responses::ev_tool_search_call(
+                        call_id,
+                        &json!({"query": "create calendar event"}),
+                    ),
+                    responses::ev_completed("search"),
+                ]),
+                responses::sse(vec![responses::ev_completed("done")]),
+            ],
+        )
+        .await;
+        test.submit_turn_with_environments(
+            "Find the calendar tool.",
+            Some(vec![selection.clone()]),
+        )
+        .await?;
+        let output = mock.requests()[1].tool_search_output(call_id);
+        assert_eq!(
+            responses::namespace_child_tool(
+                &output,
+                "mcp__codex_apps__google_calendar",
+                core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL,
+            )
+            .is_some(),
+            visible
+        );
+    }
+    Ok(())
+}
+
+#[test_case::test_case("Stop", false; "stop")]
+#[test_case::test_case("Interrupt", false; "interrupt")]
+#[test_case::test_case("Stop", true; "executor opt in")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_cleanup_hooks_follow_plugin_selection_without_legacy_roots(
     hook_event: &'static str,
+    executor_opt_in: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let model = responses::start_mock_server().await;
@@ -2195,10 +2365,12 @@ async fn v2_cleanup_hooks_follow_plugin_selection_without_legacy_roots(
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let home = Arc::new(tempfile::TempDir::new()?);
-    std::fs::write(
-        home.path().join("config.toml"),
-        "[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n",
-    )?;
+    if !executor_opt_in {
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n",
+        )?;
+    }
     let test = test_codex()
         .with_home(home)
         .with_extensions(Arc::new(extensions.build()))
@@ -2231,6 +2403,12 @@ async fn v2_cleanup_hooks_follow_plugin_selection_without_legacy_roots(
     let mut selection = test.executor_environment().selection().clone();
     selection.environment_id = codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string();
     selection.selected_capability_roots = Default::default();
+    if executor_opt_in {
+        let mut config = environment_config_for_selection(&test.config, &selection);
+        config.plugins =
+            serde_json::from_value(json!({"computer-use@openai-bundled": {"enabled": true}}))?;
+        selection.config = codex_protocol::protocol::EnvironmentConfigState::Ready(config);
+    }
     for disabled in [false, true] {
         core_test_support::submit_thread_settings(
             &test.codex,

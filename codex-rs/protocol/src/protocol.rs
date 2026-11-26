@@ -106,6 +106,8 @@ pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::environment::EnvironmentConfig;
 pub use crate::environment::EnvironmentConfigState;
+pub use crate::environment::EnvironmentPluginConfig;
+pub use crate::environment::EnvironmentPluginsConfig;
 pub use crate::environment::TurnEnvironmentRequest;
 pub use crate::environment::TurnEnvironmentRequests;
 pub use crate::environment::TurnEnvironmentSelection;

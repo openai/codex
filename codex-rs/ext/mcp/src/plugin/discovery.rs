@@ -1,6 +1,7 @@
 use crate::cloud_plugin::MAX_CONNECTOR_IDS_PER_PLUGIN;
 use crate::cloud_plugin::MAX_PLUGIN_DISPLAY_NAME_CHARS;
 use crate::plugin_contributor_state::SelectedPluginMetadata;
+use codex_config::types::PluginsConfigToml;
 use codex_connectors::parse_plugin_app_config;
 use codex_core_plugins::PluginCatalogEntry;
 use codex_core_plugins::PluginSourceLocation;
@@ -8,6 +9,7 @@ use codex_core_plugins::manifest::UriPluginManifest;
 use codex_core_plugins::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::DiscoveredPluginFiles;
+use codex_extension_api::PluginEnablement;
 use codex_extension_api::SelectedPluginContribution;
 use codex_features::Feature;
 use codex_features::Features;
@@ -17,7 +19,90 @@ use codex_mcp::parse_executor_plugin_mcp_config;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::collections::HashSet;
+
+/// Record every installation for Core, retaining only enabled locations for deferred MCP setup.
+pub(super) fn filter_plugin_locations_for_mcp(
+    entry: &mut PluginCatalogEntry,
+    thread: &PluginsConfigToml,
+    environments: &[TurnEnvironmentSelection],
+    allowed_by_catalog: bool,
+) -> Vec<(String, String, PluginEnablement)> {
+    let mut all_installations = Vec::new();
+    entry.locations.retain(|location| {
+        let PluginSourceLocation::Executor {
+            environment_id,
+            plugin_id,
+            ..
+        } = location
+        else {
+            return true;
+        };
+        let enabled = plugin_enabled(
+            thread,
+            environments,
+            environment_id,
+            plugin_id,
+            allowed_by_catalog,
+        );
+        all_installations.push((environment_id.clone(), plugin_id.clone(), enabled));
+        enabled == PluginEnablement::Enabled
+    });
+    all_installations
+}
+
+/// A thread denial applies even when the source also rejects the installation.
+fn plugin_enabled(
+    thread: &PluginsConfigToml,
+    environments: &[TurnEnvironmentSelection],
+    environment_id: &str,
+    plugin_id: &str,
+    allowed_by_catalog: bool,
+) -> PluginEnablement {
+    let thread_enabled = thread
+        .plugins
+        .get(plugin_id)
+        .and_then(|plugin| plugin.enabled)
+        .or_else(|| thread.default.as_ref().map(|default| default.enabled));
+    if thread_enabled == Some(false) {
+        return PluginEnablement::DisabledForThread;
+    }
+    if !allowed_by_catalog {
+        return PluginEnablement::DisabledForInstallation;
+    }
+    let Some(EnvironmentConfigState::Ready(config)) = environments
+        .iter()
+        .find(|selection| selection.environment_id == environment_id)
+        .map(|selection| &selection.config)
+    else {
+        return PluginEnablement::Enabled;
+    };
+    if config.plugins.invalid_plugin_ids.contains(plugin_id) {
+        return PluginEnablement::DisabledForInstallation;
+    }
+    if thread_enabled == Some(true) {
+        return PluginEnablement::Enabled;
+    }
+    let executor_enabled = config
+        .plugins
+        .plugins
+        .get(plugin_id)
+        .and_then(|plugin| plugin.enabled)
+        .or_else(|| {
+            config
+                .plugins
+                .default
+                .as_ref()
+                .map(|default| default.enabled)
+        });
+    if executor_enabled == Some(false) {
+        PluginEnablement::DisabledForInstallation
+    } else {
+        PluginEnablement::Enabled
+    }
+}
 
 pub(super) fn manifest_from_discovery<'a>(
     selected_root: &SelectedCapabilityRoot,
@@ -175,7 +260,7 @@ pub(super) fn v2_metadata_from_catalog(
     let mut projections = Vec::new();
     for (index, (environment_id, plugin_id, root)) in installations.enumerate() {
         let root_id = format!("{environment_id}:{plugin_id}");
-        // Keep only the first installation's servers until environment-qualified names are enabled.
+        // Keep only the first enabled installation's servers until environment-qualified names are enabled.
         let servers = if index == 0 || features.enabled(Feature::MultiEnvironmentMcp) {
             let parsed = normalize_executor_plugin_mcp_declarations(
                 root,

@@ -2,7 +2,6 @@
 
 use super::*;
 use codex_config::McpServerTransportConfig;
-use codex_config::types::PluginsConfigToml;
 use codex_core::config::ConfigBuilder;
 use codex_core_plugins::PluginIdentity;
 use codex_extension_api::SelectedPluginContribution;
@@ -65,6 +64,31 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
             .collect::<Vec<_>>(),
         vec![1, 0, 0]
     );
+
+    // Opting out the first copy must leave the next eligible copy usable.
+    let mut executor = TurnEnvironmentSelection {
+        environment_id: "executor-b".to_string(),
+        cwd: PathUri::parse("file:///workspace")?,
+        workspace_roots: Vec::new(),
+        config: EnvironmentConfigState::FromThread,
+        selected_capability_roots: Default::default(),
+    };
+    let mut attachment =
+        core_test_support::test_codex::environment_config_for_selection(&config, &executor);
+    attachment.plugins = serde_json::from_value(serde_json::json!({
+        "example@acme": { "enabled": false }
+    }))?;
+    executor.config = EnvironmentConfigState::Ready(attachment);
+    let mut selected = entry.clone();
+    filter_plugin_locations_for_mcp(
+        &mut selected,
+        &config.plugins,
+        &[executor],
+        /*allowed_by_catalog*/ true,
+    );
+    let projections = v2_metadata_from_catalog(&selected, &config.features);
+    assert_eq!(projections[0].0, "executor-a:example@acme");
+    assert_eq!(projections[0].1.servers.len(), 1);
 
     // Qualified server names let both installations contribute their own executor paths.
     config.features.enable(Feature::MultiEnvironmentMcp)?;
@@ -138,5 +162,20 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
         entry.connector_ids.len(),
         (MAX_CONNECTOR_IDS_PER_PLUGIN + 1) * 2
     );
+    Ok(())
+}
+
+/// An explicit thread disable must also cover installations whose source supplies membership.
+#[test]
+fn explicit_thread_disable_without_default_denies_executor_plugin() -> anyhow::Result<()> {
+    let thread = serde_json::from_value(serde_json::json!({
+        "notes@market": { "enabled": false }
+    }))?;
+    for allowed_by_catalog in [true, false] {
+        assert_eq!(
+            plugin_enabled(&thread, &[], "local", "notes@market", allowed_by_catalog),
+            PluginEnablement::DisabledForThread,
+        );
+    }
     Ok(())
 }
