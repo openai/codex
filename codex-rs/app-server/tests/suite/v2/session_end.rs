@@ -75,6 +75,7 @@ async fn run_removal_session_end_test(operation: &str) -> Result<()> {
         let request_id = app_server
             .send_thread_delete_request(ThreadDeleteParams {
                 thread_id: thread_id.clone(),
+                saved_side_chat_ids: None,
             })
             .await?;
         let _: ThreadDeleteResponse =

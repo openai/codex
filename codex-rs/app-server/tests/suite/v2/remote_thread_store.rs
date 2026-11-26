@@ -742,7 +742,10 @@ async fn delete_thread(
     let response = client
         .request(ClientRequest::ThreadDelete {
             request_id: RequestId::Integer(request_id),
-            params: ThreadDeleteParams { thread_id },
+            params: ThreadDeleteParams {
+                thread_id,
+                saved_side_chat_ids: None,
+            },
         })
         .await?
         .map_err(|error| anyhow::anyhow!("thread/delete failed: {}", error.message))?;

@@ -77,6 +77,7 @@ async fn thread_delete_rejects_paginated_writer_owned_by_another_process() -> Re
     let request_id = other
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: thread_id.clone(),
+            saved_side_chat_ids: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -93,7 +94,10 @@ async fn thread_delete_rejects_paginated_writer_owned_by_another_process() -> Re
     let _: ThreadDeleteResponse = other
         .request(|request_id| ClientRequest::ThreadDelete {
             request_id,
-            params: ThreadDeleteParams { thread_id },
+            params: ThreadDeleteParams {
+                thread_id,
+                saved_side_chat_ids: None,
+            },
         })
         .await?;
     Ok(())
@@ -151,6 +155,7 @@ async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
             request_id,
             params: ThreadDeleteParams {
                 thread_id: parent_id.clone(),
+                saved_side_chat_ids: None,
             },
         })
         .await?;
@@ -251,6 +256,7 @@ async fn thread_delete_preflights_external_fork_references_for_spawned_subtrees(
     let delete_id = mcp
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: parent_id.clone(),
+            saved_side_chat_ids: None,
         })
         .await?;
     let delete_err: JSONRPCError = timeout(
@@ -318,6 +324,7 @@ async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()
             request_id,
             params: ThreadDeleteParams {
                 thread_id: persisted_thread.id,
+                saved_side_chat_ids: None,
             },
         })
         .await?;
@@ -332,6 +339,7 @@ async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()
     let delete_id = mcp
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: thread.id.clone(),
+            saved_side_chat_ids: None,
         })
         .await?;
     let delete_err: JSONRPCError = timeout(
@@ -461,6 +469,7 @@ async fn thread_delete_removes_persisted_boards_even_with_agent_feature_disabled
             request_id,
             params: ThreadDeleteParams {
                 thread_id: child_id,
+                saved_side_chat_ids: None,
             },
         })
         .await?;
@@ -492,6 +501,7 @@ async fn thread_delete_removes_persisted_boards_even_with_agent_feature_disabled
             request_id,
             params: ThreadDeleteParams {
                 thread_id: thread.id.clone(),
+                saved_side_chat_ids: None,
             },
         })
         .await?;
@@ -573,6 +583,7 @@ async fn thread_delete_recovers_only_corrupt_board_with_agent_feature_disabled(
     let request_id = app
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: thread_id.clone(),
+            saved_side_chat_ids: None,
         })
         .await?;
     let error = timeout(
@@ -601,6 +612,7 @@ async fn thread_delete_recovers_only_corrupt_board_with_agent_feature_disabled(
             request_id,
             params: ThreadDeleteParams {
                 thread_id: thread_id.clone(),
+                saved_side_chat_ids: None,
             },
         })
         .await?;

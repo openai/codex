@@ -216,7 +216,8 @@ enum ForkPresentation {
     SideConversation(SideChatStorage),
 }
 
-pub(crate) const ATTACHED_SIDE_CHAT_SOURCE: &str = "tui_side_chat";
+pub(crate) const ATTACHED_SIDE_CHAT_SOURCE: &str =
+    codex_protocol::protocol::ThreadSource::TUI_SIDE_CHAT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SideChatStorage {
@@ -392,6 +393,7 @@ pub(crate) struct AttachmentMetadata {
     unread_revision: Option<String>,
     history_support: ThreadHistorySupport,
     task_tools: bool,
+    side_chat_fork_name: Option<Option<String>>,
     pub(crate) subscribed: bool,
 }
 
@@ -719,6 +721,7 @@ impl AppServerSession {
             unread_revision: self.unread_revisions.remove(&id),
             history_support: self.history_support,
             task_tools: self.task_tools_available(id),
+            side_chat_fork_name: self.side_chat_fork_names.remove(&id),
             subscribed: self.attachment_subscribed == Some(true),
         }
     }
@@ -739,6 +742,9 @@ impl AppServerSession {
         }
         if metadata.task_tools {
             self.remember_task_tool_thread(id);
+        }
+        if let Some(name) = metadata.side_chat_fork_name {
+            self.side_chat_fork_names.insert(id, name);
         }
         if !observed_receipt {
             self.unread_revisions.remove(&id);
@@ -1169,6 +1175,14 @@ impl AppServerSession {
                         self.remember_read_state(id, Some(change.read_state.clone()));
                     }
                 }
+                codex_app_server_protocol::ServerNotification::ThreadNameUpdated(change) => {
+                    if let Ok(id) = ThreadId::from_string(&change.thread_id) {
+                        self.side_chat_fork_names.remove(&id);
+                        if let Some(gate) = self.automatic_name_writes.remove(&id) {
+                            gate.close();
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1498,11 +1512,11 @@ impl AppServerSession {
         }
     }
 
-    pub(crate) fn observe_sidebar_fork(&mut self, fork: &SidebarFork) {
+    pub(crate) fn observe_sidebar_fork(&mut self, fork: &mut SidebarFork) {
         if fork.storage == SideChatStorage::Attached && fork.boundary.is_ok() {
-            let child = &fork.thread.session;
+            let child = &mut fork.thread.session;
             self.side_chat_fork_names
-                .insert(child.thread_id, child.thread_name.clone());
+                .insert(child.thread_id, child.thread_name.take());
         }
         if fork.legacy {
             self.history_support = ThreadHistorySupport::LegacyOnly;
@@ -1862,17 +1876,31 @@ impl AppServerSession {
     }
 
     pub(crate) async fn thread_delete(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.delete_thread(thread_id, Vec::new()).await
+    }
+
+    async fn delete_thread(&mut self, thread_id: ThreadId, side_chats: Vec<String>) -> Result<()> {
+        let includes_side_chats = !side_chats.is_empty();
         let request_id = self.next_request_id();
-        let _: ThreadDeleteResponse = self
+        let result = self
             .request_handle
-            .request_typed(ClientRequest::ThreadDelete {
+            .request_typed::<ThreadDeleteResponse>(ClientRequest::ThreadDelete {
                 request_id,
                 params: ThreadDeleteParams {
                     thread_id: thread_id.to_string(),
+                    saved_side_chat_ids: includes_side_chats.then_some(side_chats),
                 },
             })
-            .await
-            .wrap_err("failed to delete session")?;
+            .await;
+        let compatibility_error = includes_side_chats
+            && !self.uses_embedded_app_server()
+            && matches!(&result, Err(TypedRequestError::Server { source, .. })
+                if source.message.ends_with("delete the attached thread first"));
+        result.wrap_err(if compatibility_error {
+            crate::daemon_startup::FAILURE_HINT
+        } else {
+            "failed to delete session"
+        })?;
         self.side_chat_fork_names.remove(&thread_id);
         Ok(())
     }

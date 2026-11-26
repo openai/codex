@@ -206,6 +206,7 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
     let id = mcp
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: independent.thread.id,
+            saved_side_chat_ids: None,
         })
         .await?;
     let _: ThreadDeleteResponse = mcp.read_response(id).await?;
@@ -289,6 +290,7 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
     let id = mcp
         .send_thread_delete_request(ThreadDeleteParams {
             thread_id: parent.clone(),
+            saved_side_chat_ids: None,
         })
         .await?;
     let error = mcp
@@ -310,12 +312,18 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
     );
     for child in children {
         let id = mcp
-            .send_thread_delete_request(ThreadDeleteParams { thread_id: child })
+            .send_thread_delete_request(ThreadDeleteParams {
+                thread_id: child,
+                saved_side_chat_ids: None,
+            })
             .await?;
         let _: ThreadDeleteResponse = mcp.read_response(id).await?;
     }
     let id = mcp
-        .send_thread_delete_request(ThreadDeleteParams { thread_id: parent })
+        .send_thread_delete_request(ThreadDeleteParams {
+            thread_id: parent,
+            saved_side_chat_ids: None,
+        })
         .await?;
     let _: ThreadDeleteResponse = mcp.read_response(id).await?;
     let id = mcp.send_raw_request("thread/list", Some(json!({}))).await?;

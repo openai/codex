@@ -297,6 +297,58 @@ async fn execute(
     Ok(())
 }
 
+impl App {
+    fn side_chat_parent(&self, target: ThreadId) -> Option<ThreadId> {
+        self.side_threads
+            .get(&target)
+            .map(|side| side.parent_thread_id)
+            .or_else(|| {
+                self.sidebars
+                    .iter()
+                    .find_map(|(parent, pane)| pane.chat_tabs().choice_index(target).and(*parent))
+            })
+    }
+
+    /// Returns true when the backend removed a chat and its parked input can be retired.
+    pub(super) fn observe_side_chat_notification(
+        &mut self,
+        server: &AppServerSession,
+        notification: &ServerNotification,
+        target: ThreadId,
+        displayed: bool,
+    ) -> bool {
+        let backend_id = server.backend_id();
+        let removed = match notification {
+            ServerNotification::ThreadArchived(_) | ServerNotification::ThreadDeleted(_) => true,
+            ServerNotification::ThreadUnarchived(_) => false,
+            ServerNotification::ThreadNameUpdated(_) => {
+                if self.side_threads.contains_key(&target)
+                    && (displayed || self.backend_registry.owner(target) == Some(backend_id))
+                {
+                    self.cancel_thread_title_generation(target);
+                }
+                return false;
+            }
+            _ => return false,
+        };
+        self.invalidate_saved_chat_discovery(server, target, removed, displayed);
+        let Some(parent) = self.side_chat_parent(target).filter(|_| removed) else {
+            return false;
+        };
+        let owner = self
+            .thread_event_channels
+            .get(&target)
+            .and_then(|channel| channel.backend_id)
+            .or_else(|| self.backend_registry.owner(parent));
+        if !owner.map_or(displayed, |owner| owner == backend_id) {
+            return false;
+        }
+        self.app_event_tx
+            .send(AppEvent::SideChatArchived { backend_id, target });
+        true
+    }
+}
+
 /// Reconcile both locally requested archives and notifications from another client.
 pub(super) async fn forget_archived(
     app: &mut App,
@@ -304,18 +356,10 @@ pub(super) async fn forget_archived(
     server: &mut AppServerSession,
     target: ThreadId,
 ) -> Result<()> {
-    let Some(parent) = app
-        .side_threads
-        .get(&target)
-        .map(|side| side.parent_thread_id)
-        .or_else(|| {
-            app.sidebars
-                .iter()
-                .find_map(|(parent, pane)| pane.chat_tabs().choice_index(target).and(*parent))
-        })
-    else {
+    let Some(parent) = app.side_chat_parent(target) else {
         return Ok(());
     };
+    app.pending_server_profiles.remove(&target);
     if app.current_displayed_thread_id() == Some(target) {
         app.select_agent_thread(tui, server, parent).await?;
         if app.current_displayed_thread_id() == Some(parent) {
@@ -328,13 +372,23 @@ pub(super) async fn forget_archived(
         .and_then(sidebar::SidebarPane::visible_content)
         == Some(sidebar::SidebarContent::Chat(target));
     app.abandoned_side_threads.insert(target);
-    app.discard_thread_local_state(target).await;
+    if app.current_displayed_thread_id() == Some(target) {
+        // Keep the visible snapshot until a blocking prompt allows the user to leave.
+        if let Some(channel) = app.thread_event_channels.get_mut(&target) {
+            channel.mark_replay_only();
+        }
+        app.chat_widget.pause_unavailable_thread();
+    } else {
+        app.discard_thread_local_state(target).await;
+    }
     if let Some(pane) = app.sidebars.get_mut(&Some(parent)) {
-        pane.set_discovery(crate::sidebar_chooser::Discovery::Idle);
         pane.remove_choice(target);
         if hide {
             pane.hide();
         }
+    }
+    if app.scrollback_side_chats_enabled() && app.sidebar_parent() == Some(parent) {
+        app.sync_side_thread_ui();
     }
     tui.frame_requester().schedule_frame();
     Ok(())

@@ -543,6 +543,15 @@ impl App {
         if self.chat_widget.fork_in_progress {
             return;
         }
+        if key_event.code == KeyCode::Esc
+            && key_event.modifiers.is_empty()
+            && key_event.kind == KeyEventKind::Press
+            && self.scrollback_cycle_pending()
+        {
+            self.sidebar_mut().cancel_scrollback_cycle();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
         if self.chat_widget.has_provider_error()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
@@ -796,6 +805,16 @@ impl App {
             }
         }
 
+        if self.scrollback_cycle_pending()
+            && !crate::key_hint::ctrl(KeyCode::Char('c')).is_press(key_event)
+        {
+            let action = self
+                .chat_widget
+                .handle_restricted_key(key_event, RestrictedInputMode::DraftHandoff);
+            self.handle_clipboard_key_action(tui, action);
+            return;
+        }
+
         if self.should_handle_unavailable_thread_key(key_event) {
             self.chat_widget
                 .handle_restricted_key(key_event, RestrictedInputMode::UnavailableThread);
@@ -885,9 +904,15 @@ impl App {
             return true;
         }
         if self.is_side_toggle(key_event) {
-            if let Err(err) = self.toggle_side_conversation(tui, app_server).await {
-                self.chat_widget
-                    .add_error_message(format!("Failed to switch side conversation: {err}"));
+            if let Some(parent) = self.current_displayed_thread_id()
+                && self.sidebar_parent() == Some(parent)
+                && self.can_cycle_scrollback_chats()
+                && app_server.can_list_saved_side_chats(parent)
+            {
+                self.discover_saved_chats(app_server, parent, /*cycle*/ true);
+                tui.frame_requester().schedule_frame();
+            } else {
+                self.advance_conversation(tui, app_server).await;
             }
             return true;
         }

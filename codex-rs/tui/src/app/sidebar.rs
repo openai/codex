@@ -123,6 +123,14 @@ pub(super) struct SidebarPane {
 }
 
 impl SidebarPane {
+    pub(super) fn cancel_scrollback_cycle(&mut self) {
+        if let Discovery::Loading { cycle, .. } = &mut self.discovery {
+            *cycle = false;
+        }
+        self.opening
+            .take_if(|opening| opening.scrollback_origin.is_some());
+    }
+
     pub(super) fn visible_link_at(&self, column: u16, row: u16) -> Option<ReaderLink> {
         let SidebarContent::Document(id) = self.visible_content()? else {
             return None;
@@ -174,8 +182,7 @@ impl SidebarPane {
         }
         match content {
             SidebarContent::Chat(id) => {
-                self.add_tab(id);
-                self.visit(SidebarTab::Chat(id));
+                self.visit_chat(id);
             }
             SidebarContent::Chooser
                 if !resume_chooser
@@ -299,6 +306,21 @@ impl SidebarPane {
             self.restore_choice(selection);
         }
         self.tabs_revision += 1;
+    }
+
+    pub(super) fn invalidate_discovery(
+        &mut self,
+        owner: Option<crate::backend_id::BackendId>,
+    ) -> Option<bool> {
+        if let Discovery::Loading {
+            backend_id, cycle, ..
+        } = self.discovery
+            && owner.is_none_or(|id| id == backend_id)
+        {
+            self.set_discovery(Discovery::Idle);
+            return Some(cycle);
+        }
+        None
     }
 
     pub(super) fn update_saved_chats(&mut self, mut chats: Vec<SideChat>) {
@@ -489,6 +511,20 @@ impl SidebarPane {
         }
     }
 
+    fn visit_chat(&mut self, id: ThreadId) {
+        self.add_tab(id);
+        self.visit(SidebarTab::Chat(id));
+        self.opening = None;
+    }
+
+    pub(super) fn select_chat(&mut self, id: ThreadId, fullscreen: bool) {
+        if fullscreen {
+            self.show(SidebarContent::Chat(id), PaneFocus::Sidebar);
+        } else {
+            self.visit_chat(id);
+        }
+    }
+
     pub(super) fn chat_ready(&mut self, child: ThreadId) {
         self.creation = None;
         if !self.tabs.contains(&SidebarTab::Chat(child)) {
@@ -590,6 +626,36 @@ impl App {
                 _ => None,
             }
         })
+    }
+
+    pub(super) fn invalidate_saved_chat_discovery(
+        &mut self,
+        server: &AppServerSession,
+        thread: ThreadId,
+        removed: bool,
+        displayed: bool,
+    ) {
+        let backend_id = server.backend_id();
+        let displayed_parent = displayed.then(|| self.sidebar_parent()).flatten();
+        let mut restart = None;
+        for (parent, pane) in &mut self.sidebars {
+            if let Some(cycle) = pane.invalidate_discovery(Some(backend_id))
+                && *parent == displayed_parent
+                && (cycle || pane.visible_content() == Some(SidebarContent::Chooser))
+            {
+                restart = Some(cycle);
+            }
+            if removed
+                && pane.opening.as_ref().is_some_and(|opening| {
+                    opening.target.backend_id == backend_id && opening.target.child == thread
+                })
+            {
+                pane.opening = None;
+            }
+        }
+        if let (Some(parent), Some(cycle)) = (displayed_parent, restart) {
+            self.discover_saved_chats(server, parent, cycle);
+        }
     }
 
     pub(super) fn refresh_visible_side_chat_prompts(

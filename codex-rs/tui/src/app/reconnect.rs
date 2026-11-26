@@ -285,6 +285,9 @@ impl App {
             }
             self.retire_background_voice();
             self.saved_openings.abandon();
+            for pane in self.sidebars.values_mut() {
+                pane.invalidate_discovery(self.app_server_backend_id);
+            }
             if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent()) {
                 pane.opening = None;
             }
@@ -624,7 +627,8 @@ impl App {
             if started.blocks_direct_input {
                 self.agent_navigation.mark_parent_owned(id);
             }
-            let channel = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
+            let mut channel = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
+            channel.backend_id = Some(app_server.backend_id());
             {
                 let mut store = channel.store.lock().await;
                 store.set_session(started.session, started.turns);

@@ -172,13 +172,15 @@ impl RolloutReferenceIndex {
             .and_then(|rollout| rollout.history_base.as_ref())
     }
 
-    /// Find an indexed attached child of any candidate parent.
-    pub fn attached_child(&self, parent_thread_ids: &[ThreadId]) -> Option<ThreadId> {
-        let parents: HashSet<_> = parent_thread_ids.iter().copied().collect();
+    /// Find an attached child outside a set of threads being deleted together.
+    pub fn external_attached_child(&self, thread_ids: &[ThreadId]) -> Option<ThreadId> {
+        let deleting: HashSet<_> = thread_ids.iter().copied().collect();
         self.rollouts_by_id.values().find_map(|rollout| {
             rollout
                 .attached_to_thread_id
-                .filter(|parent| parents.contains(parent))
+                .filter(|parent| {
+                    deleting.contains(parent) && !deleting.contains(&rollout.thread_id)
+                })
                 .map(|_| rollout.thread_id)
         })
     }

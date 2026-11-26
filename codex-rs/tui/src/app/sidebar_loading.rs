@@ -8,8 +8,13 @@ use super::thread_attachment::Prepared;
 use super::*;
 use crate::app_server_session::SideChatStorage;
 use crate::backend_id::BackendId;
+use crate::bottom_pane::TranscriptFooter;
+use crate::footer_hint::Hint;
+use crate::footer_hint::HintFocus;
+use crate::sidebar_chooser::Discovery;
 use crate::sidebar_chooser::OpenState;
 use crate::sidebar_chooser::Opening;
+use ratatui::style::Styled;
 use uuid::Uuid;
 
 pub(crate) use super::thread_attachment::Target;
@@ -86,6 +91,9 @@ impl Openings {
         };
         let updates = &mut updates.received;
         match notification {
+            ServerNotification::ThreadNameUpdated(n) => {
+                updates.name = Some(n.thread_name.clone());
+            }
             ServerNotification::ThreadSettingsUpdated(n) => {
                 updates.settings = Some(n.thread_settings.clone())
             }
@@ -105,19 +113,70 @@ impl Openings {
 }
 
 impl App {
+    pub(super) fn can_cycle_scrollback_chats(&self) -> bool {
+        self.scrollback_side_chats_enabled()
+            && self.overlay.is_none()
+            && self.chat_widget.completion_can_yield_focus()
+            && self.sidebar_chooser_available()
+    }
+
+    pub(super) fn scrollback_cycle_pending(&self) -> bool {
+        self.can_cycle_scrollback_chats()
+            && self.sidebar().is_some_and(|pane| {
+                matches!(pane.discovery, Discovery::Loading { cycle: true, .. })
+                    || pane
+                        .opening
+                        .as_ref()
+                        .is_some_and(|opening| opening.scrollback_origin.is_some())
+            })
+    }
+
+    pub(super) fn scrollback_cycle_footer(&self, width: u16) -> Option<TranscriptFooter> {
+        self.scrollback_cycle_pending().then(|| {
+            let status = "Switching chats…".set_style(crate::style::secondary_text_style());
+            let esc = crate::key_hint::plain(KeyCode::Esc).display_label();
+            let hints = [Hint::Status(status.into()), Hint::key(esc, "to cancel")];
+            let width = crate::bottom_pane::inset_footer_hint_area(Rect {
+                width,
+                ..Rect::default()
+            })
+            .width;
+            TranscriptFooter {
+                text: HintFocus::Active
+                    .render_lines(hints, width, /*max_rows*/ 2)
+                    .into(),
+                is_interactive: true,
+                cursor_column: None,
+            }
+        })
+    }
+
     pub(super) fn waiting_saved_chat(&self) -> Option<Target> {
         let opening = self.sidebar()?.opening.as_ref()?;
         matches!(opening.state, OpenState::Waiting).then_some(opening.target)
     }
 
     pub(super) fn wants_saved_chat(&self, target: Target) -> bool {
-        !self.reconnect.offline
-            && self.current_displayed_thread_id() == Some(target.parent)
-            && self.chooser_focus() == Some(sidebar::PaneFocus::Sidebar)
-            && self
-                .sidebar()
-                .and_then(|pane| pane.opening.as_ref())
-                .is_some_and(|o| o.target == target && !matches!(o.state, OpenState::Failed(_)))
+        let Some(opening) = self.sidebar().and_then(|pane| pane.opening.as_ref()) else {
+            return false;
+        };
+        if opening.target != target
+            || self
+                .app_server_backend_id
+                .is_some_and(|id| id != target.backend_id)
+            || matches!(opening.state, OpenState::Failed(_))
+        {
+            return false;
+        }
+        let active = self.current_displayed_thread_id();
+        match opening.scrollback_origin {
+            Some(origin) => active == Some(origin) && self.can_cycle_scrollback_chats(),
+            None => {
+                !self.reconnect.offline
+                    && active == Some(target.parent)
+                    && self.chooser_focus() == Some(sidebar::PaneFocus::Sidebar)
+            }
+        }
     }
 
     pub(super) async fn open_saved_chat(
@@ -126,13 +185,41 @@ impl App {
         server: &mut AppServerSession,
         target: Target,
     ) -> Result<()> {
-        if !self.can_select_thread() {
+        if !self.can_select_thread()
+            || (self.scrollback_side_chats_enabled()
+                && (self.overlay.is_some() || !self.sidebar_chooser_available()))
+        {
             return Ok(());
         }
         let pane = self.sidebar_mut();
         pane.agents.pending_link = None;
         pane.focus_document_request = None;
         let child = target.child;
+        if self
+            .sidebar()
+            .and_then(|pane| pane.closing_chats.get(&child))
+            .is_some_and(|task| !task.is_finished())
+            || self
+                .side_threads
+                .get(&child)
+                .is_some_and(|side| side.close_request.is_some())
+        {
+            self.chat_widget.add_info_message(
+                "Side chat is still closing. Try again in a moment.".to_string(),
+                /*hint*/ None,
+            );
+            return Ok(());
+        }
+        if self
+            .side_threads
+            .get(&child)
+            .is_some_and(|side| side.storage == SideChatStorage::Temporary)
+        {
+            return self.select_agent_thread(tui, server, child).await;
+        }
+        let scrollback_origin = self
+            .current_displayed_thread_id()
+            .filter(|_| self.scrollback_side_chats_enabled());
         let flight = self.saved_openings.active.get(&target.key());
         let state = if let Some(flight) = flight
             && flight.incoming.is_some()
@@ -152,7 +239,7 @@ impl App {
                 && (channel.archived || !self.should_attach_live_thread_for_selection(child))
                 && channel.store.lock().await.session.is_some()
             {
-                self.side_threads.insert(child, side);
+                self.side_threads.entry(child).or_insert(side);
                 return self.select_agent_thread(tui, server, child).await;
             }
             let request = Uuid::new_v4();
@@ -182,7 +269,11 @@ impl App {
             });
             OpenState::Loading(started)
         };
-        self.sidebar_mut().opening = Some(Opening { target, state });
+        self.sidebar_mut().opening = Some(Opening {
+            target,
+            scrollback_origin,
+            state,
+        });
         tui.frame_requester().schedule_frame();
         Ok(())
     }
@@ -198,7 +289,7 @@ impl App {
         let child = target.child;
         let wants = server.backend_id() == target.backend_id
             && self.wants_saved_chat(target)
-            && self.conversation_focus_available(tui)
+            && (self.scrollback_side_chats_enabled() || self.conversation_focus_available(tui))
             && self.sidebar_chooser_available()
             && self.can_select_thread();
         let Some(flight) = self
@@ -267,19 +358,21 @@ impl App {
             .discard(self, target, prepared.metadata.subscribed)
             .await;
         if let Some(pane) = self.sidebars.get_mut(&Some(target.parent))
-            && pane
-                .opening
-                .as_ref()
-                .is_some_and(|o| o.target == target && matches!(o.state, OpenState::Loading(_)))
+            && let Some(opening) = pane.opening.take_if(|opening| {
+                opening.target == target && matches!(opening.state, OpenState::Loading(_))
+            })
+            && current
+            && let Err(message) = prepared.result
         {
-            pane.opening = if current {
-                prepared.result.err().map(|message| Opening {
-                    target,
-                    state: OpenState::Failed(message),
-                })
+            if opening.scrollback_origin.is_some() {
+                self.chat_widget
+                    .add_error_message(format!("Failed to open side chat: {message}"));
             } else {
-                None
-            };
+                pane.opening = Some(Opening {
+                    state: OpenState::Failed(message),
+                    ..opening
+                });
+            }
         }
         if let Some(release) = release {
             let tx = self.saved_openings.tx.clone();

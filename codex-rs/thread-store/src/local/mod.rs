@@ -1885,7 +1885,7 @@ mod tests {
             .await
             .expect_err("indexing must fail");
         first
-            .ensure_no_attached_threads(&[parent])
+            .preflight_delete_threads(&[parent], /*include_fork_references*/ false)
             .await
             .expect("failed creation must not leave an attached rollout");
         assert!(

@@ -618,6 +618,7 @@ client_request_definitions! {
     },
     ThreadDelete => "thread/delete" {
         params: v2::ThreadDeleteParams,
+        inspect_params: true,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadDeleteResponse,
     },

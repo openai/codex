@@ -975,6 +975,7 @@ async fn resume_revalidates_persisted_thread_after_config_load(
             request_id: RequestId::Integer(2),
             params: ThreadDeleteParams {
                 thread_id: thread_id.clone(),
+                saved_side_chat_ids: None,
             },
         },
         ResumeMutation::DuplicateResume => ClientRequest::ThreadResume {

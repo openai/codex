@@ -202,16 +202,27 @@ async fn saved_chat_retry_and_supersession_with_pending_requests() -> Result<()>
             // Switching away and back cannot resurrect the original parent's intent.
             app.save_active_thread_state().await;
         } else if index == 5 {
-            // An archive from another client wins over a read that is already in flight.
-            boxed_future!(app.handle_event(
-                &mut tui,
-                &mut server,
-                AppEvent::SideChatArchived {
-                    backend_id,
-                    target: expected,
+            // A delete from another client revokes the opener before its response is installed.
+            app.handle_app_server_event(
+                &server,
+                codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                    ServerNotification::ThreadDeleted(
+                        codex_app_server_protocol::ThreadDeletedNotification {
+                            thread_id: expected.to_string(),
+                        },
+                    ),
+                )),
+            )
+            .await;
+            assert!(app.sidebar().unwrap().opening.is_none());
+            let removal = loop {
+                let event = events.recv().await.expect("deleted side chat event");
+                if matches!(&event, AppEvent::SideChatArchived { target, .. } if *target == expected)
+                {
+                    break event;
                 }
-            ))
-            .await?;
+            };
+            boxed_future!(app.handle_event(&mut tui, &mut server, removal)).await?;
             assert!(
                 app.sidebar()
                     .unwrap()

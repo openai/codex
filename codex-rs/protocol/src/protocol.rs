@@ -3275,6 +3275,8 @@ pub enum ThreadSource {
 }
 
 impl ThreadSource {
+    pub const TUI_SIDE_CHAT: &str = "tui_side_chat";
+
     pub fn as_str(&self) -> &str {
         match self {
             ThreadSource::User => "user",

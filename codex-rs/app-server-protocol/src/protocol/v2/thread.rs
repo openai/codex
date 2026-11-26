@@ -760,11 +760,15 @@ pub struct ThreadArchiveParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadDeleteParams {
     pub thread_id: String,
+    /// Verified saved TUI side chats to include in the same deletion.
+    #[experimental("thread/delete.savedSideChatIds")]
+    #[ts(optional = nullable)]
+    pub saved_side_chat_ids: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

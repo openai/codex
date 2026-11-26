@@ -234,8 +234,8 @@ impl App {
             ),
             AgentsOverviewAction::Delete => (
                 format!("Permanently delete “{name}”?"),
-                "Tasks with saved side chats stay intact. Otherwise, deleting this task stops its running work and permanently deletes its history and its child agents’ history.",
-                "Permanently delete task and child agents",
+                "This stops running work and permanently deletes this task, its child agents, and its saved side chats.",
+                "Permanently delete task and history",
             ),
         };
         self.chat_widget.show_selection_view(SelectionViewParams {
@@ -347,7 +347,11 @@ impl App {
                 attempted = true;
                 match action {
                     AgentsOverviewAction::Archive => app_server.thread_archive(thread_id).await,
-                    AgentsOverviewAction::Delete => app_server.thread_delete(thread_id).await,
+                    AgentsOverviewAction::Delete => {
+                        app_server
+                            .delete_thread_with_saved_side_chats(thread_id)
+                            .await
+                    }
                 }
             }
             .await;

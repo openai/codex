@@ -170,7 +170,8 @@ impl App {
     }
 
     pub(super) fn awaiting_side_replay(&self, tui: &tui::Tui) -> bool {
-        self.pending_thread_switch_resets != 0 && self.side_retention_enabled(tui)
+        self.pending_thread_switch_resets != 0
+            && (self.side_retention_enabled(tui) || self.scrollback_side_chats_enabled())
     }
 
     /// Apply queued app events before input can cross a backend or side-chat switch.
@@ -640,6 +641,7 @@ impl App {
         let mut provider_error = None;
         let mut history_notice = None;
         let confirm_preset = initial_resume_config.is_some();
+        let resuming_thread = matches!(&session_selection, SessionSelection::Resume(_));
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh
             | SessionSelection::Exit
@@ -1269,6 +1271,9 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
             app.remember_attached_host_project(&app_server);
+            if !read_only_thread && app.scrollback_side_chats_enabled() && resuming_thread {
+                app.refresh_saved_chats(&app_server, thread_id);
+            }
             if let Some(error) = provider_error {
                 app.chat_widget
                     .show_provider_error(error, /*rejected_message_id*/ None);
@@ -1738,6 +1743,7 @@ See the Codex keymap documentation for supported actions and examples."
                             | AppEvent::SidebarDocumentResolved { backend_id, .. }
                             | AppEvent::SidebarDocumentLoaded { backend_id, .. }
                             | AppEvent::SidebarFilesLoaded { backend_id, .. }
+                            | AppEvent::SideChatArchived { backend_id, .. }
                             | AppEvent::StartupThreadStarted { backend_id, .. } => {
                                 backends.slot(*backend_id).unwrap_or(displayed_session)
                             }

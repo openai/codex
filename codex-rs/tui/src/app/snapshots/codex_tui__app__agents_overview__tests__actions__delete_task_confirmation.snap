@@ -9,14 +9,14 @@ expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widge
   /tmp/project  1
   › ○ Current task                                            Ready    2m ago
 
+
       Permanently delete “Current task”?
-      Tasks with saved side chats stay intact. Otherwise, deleting this
-      task stops its running work and permanently deletes its history and
-      its child agents’ history.
+      This stops running work and permanently deletes this task, its child
+      agents, and its saved side chats.
 
 
     › 1. Cancel
-      2. Permanently delete task and child agents
+      2. Permanently delete task and history
 
       enter select · esc back
 

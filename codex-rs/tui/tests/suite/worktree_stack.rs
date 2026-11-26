@@ -137,7 +137,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     // Repeat through the real event loop, whose dev-build frames share the production stack.
     for attempt in 1..=3 {
         submit(&mut terminal, "/side")?;
-        terminal.wait_for_screen("Side from main thread")?;
+        terminal.wait_for_screen("from main thread")?;
         terminal.ensure_running()?;
         terminal.write_input(b"\x03")?;
         terminal.wait_for_screen("STACK_SAVED_HISTORY")?;

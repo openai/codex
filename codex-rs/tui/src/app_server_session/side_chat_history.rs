@@ -11,7 +11,6 @@ use codex_context_fragments::SideConversationPolicy;
 use codex_protocol::models::ContentItem;
 use codex_rollout::ResponseItemEnvelope;
 use codex_rollout::RolloutItem;
-use codex_rollout::read_session_meta_line;
 use futures::StreamExt;
 use itertools::Itertools;
 use std::io;
@@ -52,6 +51,34 @@ pub(super) async fn side_context_checkpoint(path: Option<&Path>) -> io::Result<O
         }
     }
     Ok(None)
+}
+
+fn name_written_before_boundary(written: &str, checkpoint: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(written)
+        .ok()
+        .zip(chrono::DateTime::parse_from_rfc3339(checkpoint).ok())
+        .is_some_and(|(written, opened)| written <= opened)
+}
+
+/// Remove the name copied during fork while preserving any later explicit rename.
+async fn take_inherited_side_chat_name(
+    codex_home: &Path,
+    id: ThreadId,
+    thread: &mut Thread,
+) -> Option<String> {
+    let name = thread.name.as_ref()?;
+    let checkpoint = side_context_checkpoint(thread.path.as_deref())
+        .await
+        .ok()??;
+    let entries = codex_rollout::find_thread_name_entries_by_ids(codex_home, &HashSet::from([id]))
+        .await
+        .ok()?;
+    let entry = entries.get(&id)?;
+    if &entry.thread_name == name && name_written_before_boundary(&entry.updated_at, &checkpoint) {
+        thread.name.take()
+    } else {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -110,6 +137,23 @@ pub(super) fn is_attached_thread_store_unsupported(err: &color_eyre::Report) -> 
 }
 
 impl AppServerSession {
+    pub(crate) async fn restore_saved_chat_title(
+        &mut self,
+        codex_home: &Path,
+        id: ThreadId,
+        thread: &mut Thread,
+    ) {
+        if self.uses_remote_workspace()
+            || !matches!(&thread.thread_source, Some(ThreadSource::Feature(source)) if source == ATTACHED_SIDE_CHAT_SOURCE)
+        {
+            return;
+        }
+        let inherited = take_inherited_side_chat_name(codex_home, id, thread).await;
+        if thread.name.is_none() && thread.turns.is_empty() {
+            self.side_chat_fork_names.insert(id, inherited);
+        }
+    }
+
     pub(crate) fn can_list_saved_side_chats(&self, parent: ThreadId) -> bool {
         !self.uses_remote_workspace()
             && self.history_support == ThreadHistorySupport::Paginated
@@ -206,14 +250,10 @@ impl AppServerSession {
             // Older servers write the inherited name during fork, before the TUI installs the
             // side-chat boundary. A later name write is an explicit rename, even to the same text.
             let name = thread.name.filter(|name| {
-                if let Some(entry) = indexed_names.get(&id)
-                    && entry.thread_name == *name
-                    && let Ok(written) = chrono::DateTime::parse_from_rfc3339(&entry.updated_at)
-                    && let Ok(opened) = chrono::DateTime::parse_from_rfc3339(&checkpoint)
-                {
-                    return written > opened;
-                }
-                true
+                !indexed_names.get(&id).is_some_and(|entry| {
+                    entry.thread_name == *name
+                        && name_written_before_boundary(&entry.updated_at, &checkpoint)
+                })
             });
             let preview = if name.is_none() {
                 self.side_chat_prompt(id, SortDirection::Asc)
@@ -230,11 +270,12 @@ impl AppServerSession {
         Ok(chats)
     }
 
-    /// Delete the parent's TUI side chats before deleting the parent itself.
+    /// Delete the parent and its verified saved TUI side chats in one server request.
     pub(crate) async fn delete_thread_with_saved_side_chats(
         &mut self,
         parent: ThreadId,
     ) -> Result<()> {
+        let mut children = Vec::new();
         if self.can_list_saved_side_chats(parent)
             && let Some(mut query) = self.attached_side_chat_query(parent).await?
         {
@@ -243,38 +284,11 @@ impl AppServerSession {
             let mut attached = self.list_attached_threads(query.clone()).await?;
             query.archived = Some(true);
             attached.extend(self.list_attached_threads(query).await?);
-            let mut children = HashSet::new();
-            for thread in attached {
-                let child = ThreadId::from_string(&thread.id)?;
-                let path = thread.path.as_deref().ok_or_else(|| {
-                    color_eyre::eyre::eyre!("No rollout found for attached thread {child}")
-                })?;
-                // The thread list omits fork origins. Verify the child's own metadata
-                // before passing its ID to the delete API.
-                let meta = read_session_meta_line(path)
-                    .await
-                    .wrap_err_with(|| format!("failed to verify attached thread {child}"))?
-                    .meta;
-                color_eyre::eyre::ensure!(
-                    meta.id == child
-                        && meta.attached_thread
-                        && meta.forked_from_id == Some(parent)
-                        && matches!(
-                            meta.thread_source.as_ref(),
-                            Some(codex_protocol::protocol::ThreadSource::Feature(source))
-                                if source == ATTACHED_SIDE_CHAT_SOURCE
-                        ),
-                    "The conversation has an attachment outside the TUI sidebar. Remove it before deleting the conversation."
-                );
-                children.insert(child);
-            }
-            for child in children {
-                self.thread_delete(child)
-                    .await
-                    .wrap_err_with(|| format!("failed to delete saved side chat {child}"))?;
-            }
+            children.extend(attached.into_iter().map(|thread| thread.id));
+            children.sort_unstable();
+            children.dedup();
         }
-        self.thread_delete(parent).await
+        self.delete_thread(parent, children).await
     }
 
     async fn list_attached_threads(&mut self, mut query: ThreadListParams) -> Result<Vec<Thread>> {

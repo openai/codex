@@ -4601,6 +4601,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
             request_id,
             params: ThreadDeleteParams {
                 thread_id: thread.id.clone(),
+                saved_side_chat_ids: None,
             },
         })
         .await?;

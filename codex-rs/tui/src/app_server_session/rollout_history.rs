@@ -403,6 +403,8 @@ impl AppServerSession {
             scope,
         )
         .await?;
+        self.restore_saved_chat_title(config.codex_home.as_path(), thread_id, &mut response.thread)
+            .await;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;

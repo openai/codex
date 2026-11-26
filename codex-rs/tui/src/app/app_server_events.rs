@@ -316,6 +316,14 @@ impl App {
             return;
         }
         self.handle_agent_picker_visibility_notification(app_server_client, &notification);
+        if let ServerNotificationThreadTarget::Thread(id) = target {
+            self.observe_side_chat_notification(
+                app_server_client,
+                &notification,
+                id,
+                /*displayed*/ true,
+            );
+        }
 
         if let ServerNotification::ThreadStarted(started) = &notification
             && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {

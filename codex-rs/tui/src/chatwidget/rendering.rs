@@ -234,7 +234,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
-        let backdrop = self.as_backdrop_renderable();
+        self.as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions::default())
+    }
+
+    pub(crate) fn as_renderable_with_options<'a>(
+        &'a self,
+        options: crate::bottom_pane::ComposerRenderOptions<'a>,
+    ) -> RenderableItem<'a> {
+        let backdrop = self.as_backdrop_renderable(options);
         match self.centered_dialog() {
             Some(dialog) => RenderableItem::Owned(Box::new(crate::bottom_pane::DialogOverlay {
                 backdrop,
@@ -248,7 +255,10 @@ impl ChatWidget {
         self.bottom_pane.centered_dialog()
     }
 
-    fn as_backdrop_renderable(&self) -> RenderableItem<'_> {
+    fn as_backdrop_renderable<'a>(
+        &'a self,
+        options: crate::bottom_pane::ComposerRenderOptions<'a>,
+    ) -> RenderableItem<'a> {
         if self
             .bottom_pane
             .selected_index_for_active_view(crate::app::AGENTS_OVERVIEW_VIEW_ID)
@@ -259,8 +269,7 @@ impl ChatWidget {
                     .selected_index_for_present_view(crate::app::AGENTS_OVERVIEW_VIEW_ID)
                     .is_some())
         {
-            return self
-                .bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions::default());
+            return self.bottom_pane_renderable(options);
         }
 
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
@@ -324,10 +333,9 @@ impl ChatWidget {
         }
         flex.push(
             /*flex*/ 0,
-            self.bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions::default())
-                .inset(Insets::tlbr(
-                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                )),
+            self.bottom_pane_renderable(options).inset(Insets::tlbr(
+                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         RenderableItem::Owned(Box::new(flex))
     }

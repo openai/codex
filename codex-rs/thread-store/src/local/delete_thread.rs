@@ -36,15 +36,25 @@ struct ThreadRollouts {
 }
 
 impl LocalThreadStore {
-    /// Reject deletion while any candidate has attached threads. Call before stopping live work;
-    /// deletion repeats this check under existing writer ownership to cover concurrent creation.
-    pub async fn ensure_no_attached_threads(
+    /// Check dependencies before stopping live threads. The store rechecks under writer ownership.
+    pub async fn preflight_delete_threads(
         &self,
         thread_ids: &[ThreadId],
+        include_fork_references: bool,
     ) -> ThreadStoreResult<()> {
         ensure_diagnostic_logs_available(self)?;
         let reference_index = scan_reference_index(self).await?;
-        check_attached_children(&reference_index, thread_ids)
+        check_attached_children(&reference_index, thread_ids)?;
+        if include_fork_references {
+            ensure_no_external_references(
+                &reference_index,
+                &thread_ids
+                    .iter()
+                    .map(|id| ThreadRollouts::from_index(&reference_index, *id))
+                    .collect::<Vec<_>>(),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -65,7 +75,7 @@ fn check_attached_children(
     reference_index: &RolloutReferenceIndex,
     thread_ids: &[ThreadId],
 ) -> ThreadStoreResult<()> {
-    let Some(child) = reference_index.attached_child(thread_ids) else {
+    let Some(child) = reference_index.external_attached_child(thread_ids) else {
         return Ok(());
     };
     Err(ThreadStoreError::InvalidRequest {

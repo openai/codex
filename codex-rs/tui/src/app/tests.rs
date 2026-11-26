@@ -3365,6 +3365,23 @@ async fn reopen_saved_side_chat(during: DuringOpen) -> Result<()> {
     let release_enter =
         KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release);
     capture("Loading", side_frame(&mut app, &mut tui, size)?);
+    if matches!(during, DuringOpen::Navigate) {
+        // Archiving an unrelated thread while the chooser is loading restarts its list.
+        let stale = app.sidebar().unwrap().discovery.request().unwrap();
+        app.handle_app_server_event(
+            &server,
+            AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadArchived(
+                ThreadArchivedNotification {
+                    thread_id: ThreadId::new().to_string(),
+                },
+            ))),
+        )
+        .await;
+        assert!(matches!(
+            app.sidebar().unwrap().discovery,
+            crate::sidebar_chooser::Discovery::Loading { request, cycle: false, .. } if request != stale
+        ));
+    }
     finish_discovery(&mut app, &mut tui, &mut server).await?;
     assert_eq!(
         app.sidebar().unwrap().latest_prompts,

@@ -385,20 +385,7 @@ impl App {
                 ChooserAction::Hide | ChooserAction::FilePath => None,
             };
             if let Some(id) = target {
-                let pane = self.sidebar_mut();
-                if pane
-                    .closing_chats
-                    .get(&id)
-                    .is_some_and(|task| !task.is_finished())
-                {
-                    self.chat_widget.add_info_message(
-                        "Side chat is still closing. Try again in a moment.".to_string(),
-                        /*hint*/ None,
-                    );
-                    return true;
-                }
-                let saved = !pane.chat_tabs().ids.contains(&SidebarTab::Chat(id));
-                if saved && let Some(parent) = self.current_displayed_thread_id() {
+                if let Some(parent) = self.current_displayed_thread_id() {
                     let target = super::sidebar_loading::Target {
                         backend_id: server.backend_id(),
                         parent,
@@ -407,8 +394,6 @@ impl App {
                     if let Err(err) = Box::pin(self.open_saved_chat(tui, server, target)).await {
                         self.chat_widget.add_error_message(err.to_string());
                     }
-                } else if let Err(err) = self.select_agent_thread(tui, server, id).await {
-                    self.chat_widget.add_error_message(err.to_string());
                 }
             } else if open && let Some(parent_thread_id) = self.chat_widget.thread_id() {
                 self.app_event_tx.send(AppEvent::StartSide {

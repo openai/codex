@@ -3779,6 +3779,9 @@ impl App {
                     side.close_request = None;
                     match (action, result) {
                         (sidebar_close::Action::Archive, Ok(())) => {
+                            self.invalidate_saved_chat_discovery(
+                                app_server, target, /*removed*/ true, /*displayed*/ true,
+                            );
                             sidebar_close::forget_archived(self, tui, app_server, target).await?;
                         }
                         (sidebar_close::Action::CloseTab, Ok(())) => {
@@ -3813,9 +3816,13 @@ impl App {
             AppEvent::StartQueuedSavedChat => {
                 if let Some(target) = self.waiting_saved_chat()
                     && target.backend_id == app_server.backend_id()
-                    && self.wants_saved_chat(target)
                 {
-                    Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
+                    let wanted = self.wants_saved_chat(target);
+                    self.sidebar_mut().opening = None;
+                    if wanted {
+                        Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
+                    }
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::OpenSidebarAgent { backend, source, agent } => {
@@ -3913,12 +3920,22 @@ impl App {
             AppEvent::SavedSideChatsLoaded { backend_id, parent, request, result } => {
                 use crate::app_event::SavedSideChatData;
                 use crate::sidebar_chooser::Discovery;
+                let displayed = self.app_server_backend_id.is_none_or(|id| id == backend_id)
+                    && self.current_displayed_thread_id() == Some(parent);
+                let can_cycle = displayed && self.can_cycle_scrollback_chats();
                 if let Some(pane) = self.sidebars.get_mut(&Some(parent))
-                    && pane.discovery.request() == Some(request)
+                    && let Discovery::Loading { request: pending, cycle, .. } = &mut pane.discovery
+                    && *pending == request
                 {
+                    let cycle = std::mem::take(cycle) && can_cycle;
                     match result {
                         _ if backend_id != app_server.backend_id() => pane.set_discovery(Discovery::Idle),
-                        Err(error) => pane.set_discovery(Discovery::Failed(error)),
+                        Err(error) => {
+                            if cycle {
+                                self.chat_widget.add_error_message(format!("Failed to load saved side chats: {error}"));
+                            }
+                            pane.set_discovery(Discovery::Failed(error));
+                        }
                         Ok(SavedSideChatData::LatestPrompts(prompts)) => {
                             pane.latest_prompts = prompts;
                             pane.set_discovery(Discovery::Idle);
@@ -3926,6 +3943,12 @@ impl App {
                         Ok(SavedSideChatData::Choices(chats)) => {
                             pane.update_saved_chats(chats);
                             self.refresh_visible_side_chat_prompts(tui, app_server, parent, request);
+                            if self.sidebar_parent() == Some(parent) && self.scrollback_side_chats_enabled() {
+                                self.sync_side_thread_ui();
+                            }
+                            if cycle {
+                                Box::pin(self.advance_conversation(tui, app_server)).await;
+                            }
                         }
                     }
                     tui.frame_requester().schedule_frame();
@@ -4839,7 +4862,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget
-                    .add_error_message(format!("Failed to delete current thread: {err}"));
+                    .add_error_message(format!("Failed to delete current thread: {err:#}"));
                 AppRunControl::Continue
             }
         })

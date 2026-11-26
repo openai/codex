@@ -2872,8 +2872,8 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
         assert_eq!(
             recorded_params(&requests, "thread/delete"),
             vec![
-                serde_json::json!({"threadId": missing_id.to_string()}),
-                serde_json::json!({"threadId": thread_id.to_string()}),
+                serde_json::json!({"threadId": missing_id.to_string(), "savedSideChatIds": null}),
+                serde_json::json!({"threadId": thread_id.to_string(), "savedSideChatIds": null}),
             ]
         );
         server.shutdown().await?;

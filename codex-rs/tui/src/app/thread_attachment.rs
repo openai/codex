@@ -66,6 +66,7 @@ pub(super) enum CloseState {
 #[derive(Default)]
 pub(super) struct SubscriptionUpdates {
     pub(super) settings: Option<codex_app_server_protocol::ThreadSettings>,
+    pub(super) name: Option<Option<String>>,
     pub(super) turn_changed: bool,
     pub(super) read_state_changed: bool,
     pub(super) close: CloseState,
@@ -140,11 +141,16 @@ impl Incoming {
                     .is_none_or(|owner| owner == target.backend_id)
                     && (!self.uses_channel(channel)
                         || app.active_thread_id == Some(child)
-                        || app.side_threads.contains_key(&child))
+                        || (app.side_threads.contains_key(&child)
+                            && channel.attachment() == ThreadEventAttachment::Live))
             });
         let release =
             subscribed && !claimed && !app.agents_overview.dispatched_requests.contains_key(&child);
-        if same_channel && self.created_channel && !claimed {
+        if same_channel
+            && self.created_channel
+            && !claimed
+            && !app.side_threads.contains_key(&child)
+        {
             // A later resume can replay the same still-pending approval after we give up this buffer.
             for request in self.store.lock().await.pending_replay_requests() {
                 app.pending_app_server_requests
@@ -248,6 +254,9 @@ pub(super) async fn prepare(
                     "Agent thread {thread_id} is not yet available for replay or live attach."
                 ));
             }
+            app_server
+                .restore_saved_chat_title(config.codex_home.as_path(), thread_id, &mut thread)
+                .await;
             let convention = app_server.path_convention();
             let cwd = match crate::app_server_session::decode_thread_cwd(&thread.cwd, convention) {
                 Ok(cwd) => Some(cwd),
@@ -287,13 +296,15 @@ impl App {
         debug_assert_eq!(server.backend_id(), target.backend_id);
         let Target { parent, child, .. } = target;
         server.install_attachment_metadata(child, metadata, updates.read_state_changed);
-        self.side_threads.insert(
-            child,
-            side::SideThreadState {
+        if updates.name.is_some() {
+            server.side_chat_fork_names.remove(&child);
+        }
+        self.side_threads
+            .entry(child)
+            .or_insert_with(|| side::SideThreadState {
                 storage: SideChatStorage::Attached,
                 ..side::SideThreadState::new(parent)
-            },
-        );
+            });
         let is_closed = updates.close == CloseState::Closed
             || matches!(&attachment, PreparedAttachment::ReplayOnly { thread, .. } if thread.status == ThreadStatus::NotLoaded);
         let live = self

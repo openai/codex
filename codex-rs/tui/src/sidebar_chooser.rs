@@ -171,6 +171,8 @@ pub(crate) enum Discovery {
     Idle,
     Loading {
         request: uuid::Uuid,
+        backend_id: crate::backend_id::BackendId,
+        cycle: bool,
         started: std::time::Instant,
         retry: bool,
     },
@@ -188,6 +190,7 @@ impl Discovery {
 
 pub(crate) struct Opening {
     pub(crate) target: crate::app::thread_attachment::Target,
+    pub(crate) scrollback_origin: Option<ThreadId>,
     pub(crate) state: OpenState,
 }
 

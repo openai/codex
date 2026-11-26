@@ -73,13 +73,34 @@ impl App {
     }
 
     pub(super) fn refresh_saved_chats(&mut self, server: &AppServerSession, parent: ThreadId) {
-        let pane = self.sidebar_mut();
-        if pane.discovery.request().is_some() || !server.can_list_saved_side_chats(parent) {
+        self.discover_saved_chats(server, parent, /*cycle*/ false);
+    }
+
+    pub(super) fn discover_saved_chats(
+        &mut self,
+        server: &AppServerSession,
+        parent: ThreadId,
+        cycle: bool,
+    ) {
+        if !server.can_list_saved_side_chats(parent) {
+            return;
+        }
+        let pane = self.sidebars.entry(Some(parent)).or_default();
+        if let Discovery::Loading {
+            backend_id,
+            cycle: pending,
+            ..
+        } = &mut pane.discovery
+            && *backend_id == server.backend_id()
+        {
+            *pending |= cycle;
             return;
         }
         let request = uuid::Uuid::new_v4();
         pane.set_discovery(Discovery::Loading {
             request,
+            backend_id: server.backend_id(),
+            cycle,
             started: Instant::now(),
             retry: matches!(pane.discovery, Discovery::Failed(_)),
         });

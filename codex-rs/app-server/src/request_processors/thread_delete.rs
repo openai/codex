@@ -2,6 +2,7 @@
 
 use super::thread_processor::unsupported_thread_store_operation;
 use super::*;
+use codex_protocol::protocol::ThreadSource;
 
 impl ThreadRequestProcessor {
     pub(crate) async fn thread_delete(
@@ -36,17 +37,55 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
+        let mut thread_ids = self.state_db_spawn_subtree_thread_ids(thread_id).await?;
 
         self.validate_root_thread_delete(thread_id, thread_ids.len() > 1)
             .await?;
-        if let Some(store) = self
+        let local_store = self
             .thread_store
             .as_any()
-            .downcast_ref::<LocalThreadStore>()
-        {
+            .downcast_ref::<LocalThreadStore>();
+        let includes_saved_side_chats = params
+            .saved_side_chat_ids
+            .as_ref()
+            .is_some_and(|children| !children.is_empty());
+        for child in params.saved_side_chat_ids.into_iter().flatten() {
+            if local_store.is_none() {
+                return Err(invalid_request(
+                    "saved side chat deletion requires a local thread store",
+                ));
+            }
+            let child = ThreadId::from_string(&child)
+                .map_err(|err| invalid_request(format!("invalid saved side chat id: {err}")))?;
+            let saved = self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: child,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+                .map_err(thread_store_delete_error)?;
+            if saved.attached_to_thread_id != Some(thread_id)
+                || saved.forked_from_id != Some(thread_id)
+                || !matches!(
+                    saved.thread_source.as_ref(),
+                    Some(ThreadSource::Feature(source)) if source == ThreadSource::TUI_SIDE_CHAT
+                )
+            {
+                return Err(invalid_request(format!(
+                    "Thread {child} is an attachment outside the TUI sidebar for {thread_id}. Remove it before deleting the conversation."
+                )));
+            }
+            for id in self.state_db_spawn_subtree_thread_ids(child).await? {
+                if !thread_ids.contains(&id) {
+                    thread_ids.push(id);
+                }
+            }
+        }
+        if let Some(store) = local_store {
             store
-                .ensure_no_attached_threads(&thread_ids)
+                .preflight_delete_threads(&thread_ids, includes_saved_side_chats)
                 .await
                 .map_err(thread_store_delete_error)?;
         }

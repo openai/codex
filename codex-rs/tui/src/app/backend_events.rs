@@ -49,6 +49,14 @@ impl App {
                 && let ServerNotificationThreadTarget::Thread(thread_id) =
                     server_notification_thread_target(notification)
             {
+                if self.observe_side_chat_notification(
+                    app_server,
+                    notification,
+                    thread_id,
+                    /*displayed*/ false,
+                ) {
+                    parked_inputs.remove(&thread_id);
+                }
                 if matches!(
                     notification.as_ref(),
                     ServerNotification::ThreadArchived(_)
