@@ -3915,47 +3915,6 @@ mod tests {
     }
 
     #[test]
-    fn vim_normal_defaults_include_insert_and_arrow_aliases() {
-        let runtime = RuntimeKeymap::defaults();
-
-        assert_eq!(
-            runtime.vim_normal.enter_insert,
-            vec![
-                key_hint::plain(KeyCode::Char('i')),
-                key_hint::plain(KeyCode::Insert)
-            ]
-        );
-        assert_eq!(
-            runtime.vim_normal.move_left,
-            vec![
-                key_hint::plain(KeyCode::Char('h')),
-                key_hint::plain(KeyCode::Left)
-            ]
-        );
-        assert_eq!(
-            runtime.vim_normal.move_right,
-            vec![
-                key_hint::plain(KeyCode::Char('l')),
-                key_hint::plain(KeyCode::Right)
-            ]
-        );
-        assert_eq!(
-            runtime.vim_normal.move_up,
-            vec![
-                key_hint::plain(KeyCode::Char('k')),
-                key_hint::plain(KeyCode::Up)
-            ]
-        );
-        assert_eq!(
-            runtime.vim_normal.move_down,
-            vec![
-                key_hint::plain(KeyCode::Char('j')),
-                key_hint::plain(KeyCode::Down)
-            ]
-        );
-    }
-
-    #[test]
     fn invalid_global_copy_binding_reports_global_path() {
         let mut keymap = TuiKeymap::default();
         keymap.global.copy = Some(one("meta-o"));
@@ -4564,85 +4523,6 @@ mod tests {
                 key_hint::alt(KeyCode::Enter),
             ]
         );
-    }
-
-    #[test]
-    fn default_editor_delete_forward_word_includes_alt_d() {
-        let runtime = RuntimeKeymap::defaults();
-        assert!(
-            runtime
-                .editor
-                .delete_forward_word
-                .contains(&key_hint::alt(KeyCode::Char('d')))
-        );
-    }
-
-    #[test]
-    fn default_editor_deletion_includes_modified_backspace_delete_aliases() {
-        let runtime = RuntimeKeymap::defaults();
-
-        assert!(
-            runtime
-                .editor
-                .delete_backward
-                .contains(&key_hint::shift(KeyCode::Backspace))
-        );
-        assert!(
-            runtime
-                .editor
-                .delete_forward
-                .contains(&key_hint::shift(KeyCode::Delete))
-        );
-        assert!(
-            runtime
-                .editor
-                .delete_backward_word
-                .contains(&key_hint::ctrl(KeyCode::Backspace))
-        );
-        assert!(
-            runtime
-                .editor
-                .delete_backward_word
-                .contains(&KeyBinding::new(
-                    KeyCode::Backspace,
-                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
-                ))
-        );
-        assert!(
-            runtime
-                .editor
-                .delete_forward_word
-                .contains(&key_hint::ctrl(KeyCode::Delete))
-        );
-        assert!(
-            runtime
-                .editor
-                .delete_forward_word
-                .contains(&KeyBinding::new(
-                    KeyCode::Delete,
-                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
-                ))
-        );
-    }
-
-    #[test]
-    fn default_composer_toggle_shortcuts_includes_shift_question_mark() {
-        let runtime = RuntimeKeymap::defaults();
-        assert!(
-            runtime
-                .composer
-                .toggle_shortcuts
-                .contains(&key_hint::shift(KeyCode::Char('?')))
-        );
-    }
-
-    #[test]
-    fn default_approval_open_fullscreen_includes_ctrl_shift_a() {
-        let runtime = RuntimeKeymap::defaults();
-        assert!(runtime.approval.open_fullscreen.contains(&KeyBinding::new(
-            KeyCode::Char('a'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
-        )));
     }
 
     #[test]

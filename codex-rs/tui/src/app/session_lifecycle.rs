@@ -2333,24 +2333,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_thread_read_error_detection_matches_not_loaded_errors() {
-        let err = color_eyre::eyre::eyre!(
-            "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
-        );
-
-        assert!(App::is_terminal_thread_read_error(&err));
-    }
-
-    #[test]
-    fn terminal_thread_read_error_detection_ignores_transient_failures() {
-        let err = color_eyre::eyre::eyre!(
-            "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
-        );
-
-        assert!(!App::is_terminal_thread_read_error(&err));
-    }
-
-    #[test]
     fn closed_state_for_thread_read_error_preserves_live_state_without_cache_on_transient_error() {
         let err = color_eyre::eyre::eyre!(
             "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"

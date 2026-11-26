@@ -1196,13 +1196,15 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_local_history_and_stops_at_boundaries() {
+    fn local_history_search_skips_duplicates_and_stops_at_boundaries() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
 
         let mut history = ChatComposerHistory::new();
         history.record_local_submission(HistoryEntry::new("git status".to_string()));
         history.record_local_submission(HistoryEntry::new("cargo test -p codex-tui".to_string()));
+        history.record_local_submission(HistoryEntry::new("git status".to_string()));
+        history.record_local_submission(HistoryEntry::new("cargo fmt".to_string()));
         history.record_local_submission(HistoryEntry::new("git diff".to_string()));
 
         assert_eq!(
@@ -1252,55 +1254,6 @@ mod tests {
         );
         assert_eq!(
             HistorySearchResult::AtBoundary,
-            history.search(
-                "git",
-                HistorySearchDirection::Newer,
-                /*restart*/ false,
-                &tx
-            )
-        );
-    }
-
-    #[test]
-    fn search_skips_duplicate_local_matches() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-
-        let mut history = ChatComposerHistory::new();
-        history.record_local_submission(HistoryEntry::new("git status".to_string()));
-        history.record_local_submission(HistoryEntry::new("cargo test -p codex-tui".to_string()));
-        history.record_local_submission(HistoryEntry::new("git status".to_string()));
-        history.record_local_submission(HistoryEntry::new("git diff".to_string()));
-
-        assert_eq!(
-            HistorySearchResult::Found(HistoryEntry::new("git diff".to_string())),
-            history.search(
-                "git",
-                HistorySearchDirection::Older,
-                /*restart*/ true,
-                &tx
-            )
-        );
-        assert_eq!(
-            HistorySearchResult::Found(HistoryEntry::new("git status".to_string())),
-            history.search(
-                "git",
-                HistorySearchDirection::Older,
-                /*restart*/ false,
-                &tx
-            )
-        );
-        assert_eq!(
-            HistorySearchResult::AtBoundary,
-            history.search(
-                "git",
-                HistorySearchDirection::Older,
-                /*restart*/ false,
-                &tx
-            )
-        );
-        assert_eq!(
-            HistorySearchResult::Found(HistoryEntry::new("git diff".to_string())),
             history.search(
                 "git",
                 HistorySearchDirection::Newer,

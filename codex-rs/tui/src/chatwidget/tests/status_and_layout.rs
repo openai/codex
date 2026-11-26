@@ -2609,11 +2609,6 @@ async fn esc_interrupt_pauses_active_goal_turn() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw goal paused footer");
     let snapshot = normalized_backend_snapshot(terminal.backend());
-    #[cfg(target_os = "windows")]
-    insta::with_settings!({ snapshot_suffix => "windows" }, {
-        assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
-    });
-    #[cfg(not(target_os = "windows"))]
     assert_chatwidget_snapshot!("esc_interrupt_goal_paused_footer", snapshot);
 }
 

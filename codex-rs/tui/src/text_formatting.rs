@@ -347,59 +347,20 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_truncate_text() {
-        let text = "Hello, world!";
-        let truncated = truncate_text(text, /*max_graphemes*/ 8);
-        assert_eq!(truncated, "Hello...");
-    }
-
-    #[test]
-    fn test_truncate_empty_string() {
-        let text = "";
-        let truncated = truncate_text(text, /*max_graphemes*/ 5);
-        assert_eq!(truncated, "");
-    }
-
-    #[test]
-    fn test_truncate_max_graphemes_zero() {
-        let text = "Hello";
-        let truncated = truncate_text(text, /*max_graphemes*/ 0);
-        assert_eq!(truncated, "");
-    }
-
-    #[test]
-    fn test_truncate_max_graphemes_one() {
-        let text = "Hello";
-        let truncated = truncate_text(text, /*max_graphemes*/ 1);
-        assert_eq!(truncated, "H");
-    }
-
-    #[test]
-    fn test_truncate_max_graphemes_two() {
-        let text = "Hello";
-        let truncated = truncate_text(text, /*max_graphemes*/ 2);
-        assert_eq!(truncated, "He");
-    }
-
-    #[test]
-    fn test_truncate_max_graphemes_three_boundary() {
-        let text = "Hello";
-        let truncated = truncate_text(text, /*max_graphemes*/ 3);
-        assert_eq!(truncated, "...");
-    }
-
-    #[test]
-    fn test_truncate_text_shorter_than_limit() {
-        let text = "Hi";
-        let truncated = truncate_text(text, /*max_graphemes*/ 10);
-        assert_eq!(truncated, "Hi");
-    }
-
-    #[test]
-    fn test_truncate_text_exact_length() {
-        let text = "Hello";
-        let truncated = truncate_text(text, /*max_graphemes*/ 5);
-        assert_eq!(truncated, "Hello");
+    fn truncate_text_respects_the_grapheme_limit_and_leaves_room_for_ellipsis() {
+        for (text, limit, expected) in [
+            ("", 5, ""),
+            ("Hello", 0, ""),
+            ("Hello", 1, "H"),
+            ("Hello", 2, "He"),
+            ("Hello", 3, "..."),
+            ("Hello", 5, "Hello"),
+            ("Hi", 10, "Hi"),
+            ("Hello, world!", 8, "Hello..."),
+        ] {
+            let truncated = truncate_text(text, limit);
+            assert_eq!(truncated, expected, "{text:?}, limit {limit}");
+        }
     }
 
     #[test]

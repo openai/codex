@@ -2639,22 +2639,24 @@ mod tests {
     }
 
     #[test]
-    fn vim_normal_arrow_keys_move_cursor() {
+    fn vim_normal_arrows_and_hjkl_move_cursor() {
         let mut t = ta_with("ab\ncd");
         t.set_cursor(/*pos*/ 1);
         t.set_vim_enabled(/*enabled*/ true);
 
-        t.input(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        assert_eq!(t.cursor(), 2);
-
-        t.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(t.cursor(), 5);
-
-        t.input(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(t.cursor(), 4);
-
-        t.input(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(t.cursor(), 1);
+        for (key, cursor) in [
+            (KeyCode::Right, 2),
+            (KeyCode::Down, 5),
+            (KeyCode::Left, 4),
+            (KeyCode::Up, 1),
+            (KeyCode::Char('l'), 2),
+            (KeyCode::Char('j'), 5),
+            (KeyCode::Char('h'), 4),
+            (KeyCode::Char('k'), 1),
+        ] {
+            t.input(KeyEvent::new(key, KeyModifiers::NONE));
+            assert_eq!(t.cursor(), cursor, "{key:?}");
+        }
     }
 
     #[test]

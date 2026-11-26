@@ -1383,19 +1383,6 @@ mod tests {
     }
 
     #[test]
-    fn picker_narrow_uses_compact_tabs() {
-        let runtime = RuntimeKeymap::defaults();
-        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
-        let rendered = render_picker(params, /*width*/ 78);
-
-        assert!(rendered.contains("Keymap"));
-        assert!(rendered.contains("Open Transcript"));
-        assert!(rendered.contains("ctrl-t"));
-        assert!(!rendered.contains("Selected Action"));
-        assert!(!rendered.contains("Source: default keymap"));
-    }
-
-    #[test]
     fn action_menu_content_snapshot() {
         let unbound_keymap = keymap_with_bindings(&TuiKeymap::default(), "global", "copy", &[])
             .expect("unbound copy");

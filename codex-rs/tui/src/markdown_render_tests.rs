@@ -1129,21 +1129,29 @@ fn file_link_keeps_unrelated_relative_label_with_matching_suffix() {
 }
 
 #[test]
-fn file_link_appends_line_number_when_label_lacks_it() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
+fn file_link_preserves_the_label_and_formats_the_target_location() {
+    let point = "file:///repo/src/lib.rs#L74C3";
+    let range = "/repo/src/lib.rs:74:3-76:9";
+    let hash_range = "file:///repo/src/lib.rs#L74C3-L76C9";
+    for (label, target, location) in [
+        ("lib.rs", "/repo/src/lib.rs:74", "src/lib.rs:74"),
+        ("lib.rs", point, "src/lib.rs:74:3"),
+        ("lib.rs#L74C3", point, "src/lib.rs:74:3"),
+        ("lib.rs", range, "src/lib.rs:74:3-76:9"),
+        ("lib.rs:74:3-76:9", range, "src/lib.rs:74:3-76:9"),
+        ("lib.rs", hash_range, "src/lib.rs:74:3-76:9"),
+        ("lib.rs#L74C3-L76C9", hash_range, "src/lib.rs:74:3-76:9"),
+    ] {
+        let markdown = format!("[{label}]({target})");
+        let text = render_markdown_text_for_cwd(&markdown, Path::new("/repo"));
+        let expected = Text::from(Line::from_iter([
+            label.into(),
+            " (".into(),
+            Span::styled(location, MarkdownStyles::default().code),
+            ")".into(),
+        ]));
+        assert_eq!(text, expected, "{markdown}");
+    }
 }
 
 #[test]
@@ -1191,96 +1199,6 @@ fn file_links_preserve_foreign_windows_paths_and_anchors_snapshot() {
 }
 
 #[test]
-fn file_link_appends_hash_anchor_when_label_lacks_it() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
-fn file_link_uses_target_path_for_hash_anchor() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs#L74C3](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs#L74C3".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
-fn file_link_appends_range_when_label_lacks_it() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3-76:9",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
-fn file_link_uses_target_path_for_range() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs:74:3-76:9](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs:74:3-76:9".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3-76:9",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
-fn file_link_appends_hash_range_when_label_lacks_it() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3-76:9",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
 fn multiline_file_link_label_after_styled_prefix_does_not_panic() {
     set_syntax_theme(syntect::highlighting::Theme::default());
     let text = render_markdown_text_for_cwd(
@@ -1296,24 +1214,6 @@ fn multiline_file_link_label_after_styled_prefix_does_not_panic() {
         " (".into(),
         Span::styled(
             "codex-rs/tui/src/markdown_render.rs:74:3",
-            MarkdownStyles::default().code,
-        ),
-        ")".into(),
-    ]));
-    assert_eq!(text, expected);
-}
-
-#[test]
-fn file_link_uses_target_path_for_hash_range() {
-    let text = render_markdown_text_for_cwd(
-        "[markdown_render.rs#L74C3-L76C9](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
-        Path::new("/Users/example/code/codex"),
-    );
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs#L74C3-L76C9".into(),
-        " (".into(),
-        Span::styled(
-            "codex-rs/tui/src/markdown_render.rs:74:3-76:9",
             MarkdownStyles::default().code,
         ),
         ")".into(),

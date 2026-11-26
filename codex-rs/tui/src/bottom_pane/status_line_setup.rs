@@ -462,7 +462,6 @@ mod tests {
     use super::*;
     use crate::app_event_sender::AppEventSender;
     use crate::bottom_pane::multi_select_picker::tests::render_lines;
-    use crate::terminal_hyperlinks::HyperlinkLine;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
@@ -603,93 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_runtime_values() {
-        let preview_data = StatusSurfacePreviewData::from_iter([
-            (
-                StatusLineItem::ModelName.preview_item(),
-                "gpt-5".to_string(),
-            ),
-            (
-                StatusLineItem::CurrentDir.preview_item(),
-                "/repo".to_string(),
-            ),
-        ]);
-        let items = [
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::CurrentDir.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-        ];
-
-        assert_eq!(
-            line_text(
-                preview_data.status_line_for_items(
-                    items
-                        .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
-                    /*use_theme_colors*/ true,
-                )
-            ),
-            Some("gpt-5 · /repo".to_string())
-        );
-    }
-
-    #[test]
-    fn preview_uses_placeholders_when_runtime_values_are_missing() {
-        let preview_data = StatusSurfacePreviewData::from_iter([(
-            StatusSurfacePreviewItem::Model,
-            "gpt-5".to_string(),
-        )]);
-        let items = [
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::GitBranch.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-        ];
-
-        assert_eq!(
-            line_text(
-                preview_data.status_line_for_items(
-                    items
-                        .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
-                    /*use_theme_colors*/ true,
-                )
-            ),
-            Some("gpt-5 · feat/awesome-feature".to_string())
-        );
-    }
-
-    #[test]
-    fn preview_includes_thread_title() {
+    fn preview_fills_missing_runtime_values_with_placeholders() {
         let preview_data = StatusSurfacePreviewData::from_iter([
             (
                 StatusLineItem::ModelName.preview_item(),
@@ -700,37 +613,17 @@ mod tests {
                 "Roadmap cleanup".to_string(),
             ),
         ]);
-        let items = [
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::ThreadTitle.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-                orderable: true,
-                section_break_after: false,
-                on_activate: None,
-            },
-        ];
-
+        let preview = preview_data.status_line_for_items(
+            [
+                StatusLineItem::ModelName,
+                StatusLineItem::GitBranch,
+                StatusLineItem::ThreadTitle,
+            ],
+            /*use_theme_colors*/ true,
+        );
         assert_eq!(
-            line_text(
-                preview_data.status_line_for_items(
-                    items
-                        .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
-                    /*use_theme_colors*/ true,
-                )
-            ),
-            Some("gpt-5 · Roadmap cleanup".to_string())
+            preview.unwrap().line.to_string(),
+            "gpt-5 · feat/awesome-feature · Roadmap cleanup"
         );
     }
 
@@ -856,9 +749,5 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-    }
-
-    fn line_text(content: Option<HyperlinkLine>) -> Option<String> {
-        content.map(|line| line.line.to_string())
     }
 }
