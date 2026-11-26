@@ -12,24 +12,10 @@ use crate::sidebar_chooser;
 use crate::sidebar_chooser::ChooserAction;
 use crate::sidebar_chooser::Discovery;
 use crate::sidebar_tab_strip::SidebarTab;
-use crate::sidebar_tab_strip::TabTarget;
 use crate::transcript_view::TranscriptView;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SidebarTarget {
-    Tab(TabTarget<SidebarTab>),
-    Row(usize),
-    Footer(ChooserAction),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct SidebarPress {
-    parent: Option<ThreadId>,
-    state: sidebar::SidebarInputState,
-    target: SidebarTarget,
-    area: Rect,
-    button: MouseButton,
-}
+pub(super) use super::sidebar_input::SidebarPress;
+pub(super) use super::sidebar_input::SidebarTarget;
 
 impl App {
     pub(super) fn hovered_sidebar_target(
@@ -53,7 +39,7 @@ impl App {
             && self.chat_widget.sidebar_chooser_available()
     }
 
-    async fn open_sidebar_tabs(
+    pub(super) async fn open_sidebar_tabs(
         &mut self,
         tui: &mut tui::Tui,
         server: &mut AppServerSession,
@@ -232,152 +218,13 @@ impl App {
         Ok(())
     }
 
-    pub(super) async fn handle_sidebar_input(
+    pub(super) async fn handle_chooser_input(
         &mut self,
         tui: &mut tui::Tui,
         server: &mut AppServerSession,
         event: &TuiEvent,
+        pointer_action: Option<ChooserAction>,
     ) -> bool {
-        if !self.conversation_focus_available(tui) || !self.sidebar_chooser_available() {
-            self.sidebar_press = None;
-            return false;
-        }
-        let mut pointer_action = None;
-        if let TuiEvent::Mouse(mouse) = event {
-            let point = (mouse.column, mouse.row).into();
-            let frame = &self.conversation_frame;
-            let over_strip = frame
-                .sidebar_tab_strip()
-                .is_some_and(|area| area.contains(point));
-            let over_chooser = self.chooser_focus().is_some()
-                && frame.panel_area().is_some_and(|area| area.contains(point));
-            if tui.shortcut_hud_contains(*mouse) {
-                self.sidebar_press = None;
-                return false;
-            }
-            if over_strip
-                && matches!(
-                    mouse.kind,
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                )
-            {
-                let step = if mouse.kind == MouseEventKind::ScrollUp {
-                    -1
-                } else {
-                    1
-                };
-                if frame.sidebar_input == self.sidebar().map(sidebar::SidebarPane::input_state)
-                    && frame
-                        .sidebar_targets
-                        .iter()
-                        .any(|(target, _)| matches!(target, SidebarTarget::Tab(_)))
-                    && let Err(err) = self.step_sidebar_tab(tui, server, step).await
-                {
-                    self.chat_widget.add_error_message(err.to_string());
-                }
-                return true;
-            }
-            if let MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Middle))
-            | MouseEventKind::Up(button @ (MouseButton::Left | MouseButton::Middle)) = mouse.kind
-            {
-                let down = matches!(mouse.kind, MouseEventKind::Down(_));
-                let pressed = self.sidebar_press.take();
-                if over_strip || over_chooser || pressed.is_some() {
-                    let current = self.sidebar().map(sidebar::SidebarPane::input_state);
-                    let hit = frame
-                        .sidebar_targets
-                        .iter()
-                        .find(|(_, area)| area.contains(point));
-                    let candidate = if frame.sidebar_input == current && self.pane_resize.is_none()
-                    {
-                        hit.zip(current)
-                            .map(|(&(target, area), state)| SidebarPress {
-                                parent: self.sidebar_parent(),
-                                state,
-                                target,
-                                area,
-                                button,
-                            })
-                    } else {
-                        None
-                    };
-                    tui.frame_requester().schedule_frame();
-                    if down {
-                        self.sidebar_press = candidate;
-                        if button == MouseButton::Left
-                            && mouse.modifiers.is_empty()
-                            && self.chooser_focus() == Some(PaneFocus::Main)
-                            && self.sidebar().is_some_and(|pane| pane.showing_file_path)
-                            && frame.sidebar_input == current
-                            && self.pane_resize.is_none()
-                            && frame.panel_area().is_some_and(|area| {
-                                sidebar_chooser::file_path_areas(area)[0].contains(point)
-                            })
-                        {
-                            self.sidebar_mut()
-                                .show(SidebarContent::Chooser, PaneFocus::Sidebar);
-                        }
-                        return true;
-                    }
-                    let Some(press) = candidate.filter(|candidate| Some(*candidate) == pressed)
-                    else {
-                        return true;
-                    };
-                    match press.target {
-                        SidebarTarget::Tab(target) => {
-                            let result = match (button, target) {
-                                (MouseButton::Left, TabTarget::Close(id))
-                                | (
-                                    MouseButton::Middle,
-                                    TabTarget::Tab(id) | TabTarget::Close(id),
-                                ) => self.close_sidebar_tab(tui, server, id).await,
-                                (MouseButton::Left, TabTarget::Add) => {
-                                    self.open_sidebar_tabs(tui, server).await
-                                }
-                                (
-                                    MouseButton::Left,
-                                    TabTarget::Tab(id) | TabTarget::Overflow { tab: id, .. },
-                                ) => self.activate_sidebar_tab(tui, server, id).await,
-                                _ => return true,
-                            };
-                            if let Err(err) = result {
-                                self.chat_widget.add_error_message(err.to_string());
-                            }
-                            return true;
-                        }
-                        SidebarTarget::Row(index) if button == MouseButton::Left => {
-                            pointer_action = Some(ChooserAction::Open(index));
-                        }
-                        SidebarTarget::Footer(action) if button == MouseButton::Left => {
-                            pointer_action = Some(action);
-                        }
-                        _ => return true,
-                    }
-                    self.sidebar_mut()
-                        .show(SidebarContent::Chooser, PaneFocus::Sidebar);
-                } else if down && button == MouseButton::Left && self.chooser_focus().is_some() {
-                    self.sidebar_mut()
-                        .show(SidebarContent::Chooser, PaneFocus::Main);
-                }
-            }
-        }
-        if matches!(
-            self.sidebar()
-                .and_then(sidebar::SidebarPane::visible_content),
-            Some(SidebarContent::Document(_))
-        ) {
-            return self.handle_document_input(tui, server, event).await;
-        }
-        if self
-            .sidebar()
-            .and_then(sidebar::SidebarPane::visible_content)
-            == Some(SidebarContent::Subagents)
-        {
-            return self.handle_docked_agent_input(tui, server, event).await;
-        }
-        if self.chooser_focus().is_none() {
-            return false;
-        }
         let new_chat = self.chat_widget.side_chat_creation_state();
         let chooser_area = self.chooser_area(tui);
         let selection_visible = self.sidebar().is_some_and(|pane| {

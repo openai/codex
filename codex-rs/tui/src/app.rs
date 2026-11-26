@@ -290,6 +290,7 @@ mod sidebar;
 mod sidebar_close;
 mod sidebar_document;
 mod sidebar_files;
+mod sidebar_input;
 pub(crate) mod sidebar_loading;
 mod sidebar_model_documents;
 #[cfg(all(test, not(windows)))]
