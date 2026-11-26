@@ -4,11 +4,19 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashSet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FileSystemFormat {
+    Full,
+    Compact,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileSystemContext {
+    format: FileSystemFormat,
     workspace_roots: Vec<String>,
     permission_profile: FileSystemPermissionProfileContext,
 }
@@ -33,6 +41,7 @@ impl FileSystemContext {
     pub(super) fn from_permission_profile(
         permission_profile: &PermissionProfile,
         workspace_roots: &[PathUri],
+        format: FileSystemFormat,
     ) -> Self {
         let permission_profile = permission_profile
             .clone()
@@ -51,12 +60,25 @@ impl FileSystemContext {
             PermissionProfile::External { .. } => FileSystemPermissionProfileContext::External,
         };
         Self {
+            format,
             workspace_roots,
             permission_profile,
         }
     }
 
     pub(super) fn render(&self) -> String {
+        if self.format == FileSystemFormat::Compact
+            && let FileSystemPermissionProfileContext::Managed(
+                ManagedFileSystemContext::Restricted {
+                    entries,
+                    glob_scan_max_depth: None,
+                },
+            ) = &self.permission_profile
+            && let Some(compact) = render_compact_filesystem(&self.workspace_roots, entries)
+        {
+            return compact;
+        }
+
         let mut rendered = "<filesystem>".to_string();
         if !self.workspace_roots.is_empty() {
             rendered.push_str("<workspace_roots>");
@@ -138,6 +160,105 @@ impl ManagedFileSystemContext {
             }
         }
     }
+}
+
+/// Describe a workspace-write profile only if every literal write path has exactly
+/// the same generated read-only children. Any other rule needs the full listing.
+fn render_compact_filesystem(
+    workspace_roots: &[String],
+    entries: &[FileSystemSandboxEntry],
+) -> Option<String> {
+    if workspace_roots.is_empty() || entries.len() < 2 * (1 + PROTECTED_METADATA_PATH_NAMES.len()) {
+        return None;
+    }
+
+    let mut read_root = false;
+    let mut temp_grants = Vec::new();
+    let mut writes = Vec::new();
+    let mut reads = HashSet::new();
+    for entry in entries {
+        match (&entry.path, entry.access) {
+            (
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ) => read_root = true,
+            (FileSystemPath::Special { value }, FileSystemAccessMode::Write)
+                if matches!(
+                    value,
+                    FileSystemSpecialPath::SlashTmp | FileSystemSpecialPath::Tmpdir
+                ) =>
+            {
+                temp_grants.push(render_special_path(value));
+            }
+            (FileSystemPath::Path { path }, FileSystemAccessMode::Write) => writes.push(path),
+            (FileSystemPath::Path { path }, FileSystemAccessMode::Read) => {
+                if !entry.skips_missing_path() || !reads.insert(path) {
+                    return None;
+                }
+            }
+            (_, FileSystemAccessMode::Deny)
+            | (FileSystemPath::Special { .. } | FileSystemPath::GlobPattern { .. }, _) => {
+                return None;
+            }
+        }
+    }
+    if !read_root
+        || writes.len() < 2
+        || reads.len() != writes.len() * PROTECTED_METADATA_PATH_NAMES.len()
+        || writes.iter().any(|path| reads.contains(path))
+    {
+        return None;
+    }
+
+    let mut remaining_roots: HashSet<_> = workspace_roots.iter().collect();
+    let mut other_writes = Vec::new();
+    for path in writes {
+        for name in PROTECTED_METADATA_PATH_NAMES {
+            let child = path.join_descendant(name).ok()?;
+            // PathUri equality ignores Windows case. Preserve the spelling the model sees.
+            if reads.take(&child)?.encoded_path() != child.encoded_path() {
+                return None;
+            }
+        }
+        let path = path.inferred_native_path_string();
+        if !remaining_roots.remove(&path) {
+            other_writes.push(path);
+        }
+    }
+    if !remaining_roots.is_empty() {
+        return None;
+    }
+
+    let mut rendered = String::from("<filesystem>\nManaged, restricted. Read access to :root.");
+    for (label, paths) in [
+        ("Writable workspace roots", workspace_roots),
+        ("Other writable paths", other_writes.as_slice()),
+    ] {
+        if !paths.is_empty() {
+            // Quote path boundaries and control characters as JSON inside XML text.
+            let paths = serde_json::to_string(paths)
+                .ok()?
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            rendered.push_str(&format!("\n{label}: {paths}"));
+        }
+    }
+    let (last, rest) = PROTECTED_METADATA_PATH_NAMES.split_last()?;
+    rendered.push_str(&format!(
+        "\nDirectly under each listed path, {} and {last} have read-only entries.",
+        rest.join(", ")
+    ));
+    if !temp_grants.is_empty() {
+        rendered.push_str(&format!(
+            "\nSeparate write grants: {}",
+            temp_grants.join(", ")
+        ));
+    }
+    rendered.push_str("\n</filesystem>");
+    Some(rendered)
 }
 
 fn render_file_system_entry(rendered: &mut String, entry: &FileSystemSandboxEntry) {

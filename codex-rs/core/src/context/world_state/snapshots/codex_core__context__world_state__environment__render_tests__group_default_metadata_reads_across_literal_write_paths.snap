@@ -1,0 +1,23 @@
+---
+source: core/src/context/world_state/environment_render_tests.rs
+expression: "format!(\"Control\\n{full}\\n\\nTreatment\\n{compact}\")"
+---
+Control
+<environment_context>
+  <cwd>C:\work</cwd>
+  <shell>powershell</shell>
+  <filesystem><workspace_roots><root>C:\work</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="read"><special>:root</special></entry><entry access="write"><path>C:\work</path></entry><entry access="write"><special>:tmpdir</special></entry><entry access="read"><path>C:\work\.git</path></entry><entry access="read"><path>C:\work\.agents</path></entry><entry access="read"><path>C:\work\.codex</path></entry><entry access="read"><path>C:\work\.aws</path></entry><entry access="write"><path>D:\build&amp;test</path></entry><entry access="read"><path>D:\build&amp;test\.git</path></entry><entry access="read"><path>D:\build&amp;test\.agents</path></entry><entry access="read"><path>D:\build&amp;test\.codex</path></entry><entry access="read"><path>D:\build&amp;test\.aws</path></entry></file_system></permission_profile></filesystem>
+</environment_context>
+
+Treatment
+<environment_context>
+  <cwd>C:\work</cwd>
+  <shell>powershell</shell>
+  <filesystem>
+Managed, restricted. Read access to :root.
+Writable workspace roots: ["C:\\work"]
+Other writable paths: ["D:\\build&amp;test"]
+Directly under each listed path, .git, .agents, .codex and .aws have read-only entries.
+Separate write grants: :tmpdir
+</filesystem>
+</environment_context>

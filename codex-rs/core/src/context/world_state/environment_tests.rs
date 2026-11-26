@@ -70,6 +70,7 @@ fn snapshots() -> Result<()> {
         filesystem: Some(FileSystemContext::from_permission_profile(
             &PermissionProfile::Disabled,
             &[],
+            FileSystemFormat::Full,
         )),
         ..environments.clone()
     };
@@ -85,6 +86,7 @@ fn snapshots() -> Result<()> {
                 network: NetworkSandboxPolicy::Restricted,
             },
             &[],
+            FileSystemFormat::Full,
         )),
         ..environments
     };
@@ -98,6 +100,7 @@ fn snapshots() -> Result<()> {
         filesystem: Some(FileSystemContext::from_permission_profile(
             &PermissionProfile::Disabled,
             &[],
+            FileSystemFormat::Full,
         )),
         ..Default::default()
     };
@@ -485,7 +488,11 @@ fn failure_context_limits_total_detail_bytes_at_utf8_boundaries() {
             })
             .collect(),
     };
-    let states = environment_states(&snapshot, /*per_environment*/ false);
+    let states = environment_states(
+        &snapshot,
+        /*per_environment*/ false,
+        FileSystemFormat::Full,
+    );
     let details: Vec<_> = states
         .values()
         .map(|state| state.error.as_deref())

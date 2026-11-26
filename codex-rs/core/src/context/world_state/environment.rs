@@ -6,6 +6,7 @@ use super::WorldStateUpdate;
 use super::WorldStateUpdateContent;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
+use crate::context::environment_context::FileSystemFormat;
 use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -59,6 +60,15 @@ impl EnvironmentsState {
             .config
             .features
             .enabled(Feature::PerEnvironmentContext);
+        let filesystem_format = if turn_context
+            .config
+            .features
+            .enabled(Feature::CompactFilesystemContext)
+        {
+            FileSystemFormat::Compact
+        } else {
+            FileSystemFormat::Full
+        };
         let shell_version = if turn_context
             .config
             .features
@@ -72,7 +82,7 @@ impl EnvironmentsState {
             None
         };
         Self {
-            environments: environment_states(environments, per_environment),
+            environments: environment_states(environments, per_environment, filesystem_format),
             per_environment,
             shell_version,
             current_date_is_utc: current_date.is_some()
@@ -93,6 +103,7 @@ impl EnvironmentsState {
                     FileSystemContext::from_permission_profile(
                         environment.permission_profile(),
                         environment.workspace_roots(),
+                        filesystem_format,
                     )
                 }),
             subagents: None,
@@ -543,6 +554,7 @@ async fn powershell_version(shell_path: &Path) -> Option<String> {
 fn environment_states(
     snapshot: &TurnEnvironmentSnapshot,
     per_environment: bool,
+    filesystem_format: FileSystemFormat,
 ) -> BTreeMap<String, EnvironmentState> {
     let mut environments = snapshot
         .turn_environments()
@@ -564,6 +576,7 @@ fn environment_states(
                         FileSystemContext::from_permission_profile(
                             environment.permission_profile(),
                             environment.workspace_roots(),
+                            filesystem_format,
                         )
                         .render()
                     }),

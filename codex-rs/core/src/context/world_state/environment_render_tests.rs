@@ -121,6 +121,7 @@ fn serialize_environment_context_with_foreign_windows_cwd() {
         FileSystemContext::from_permission_profile(
             &PermissionProfile::Disabled,
             &[PathUri::parse("file:///D:/workspace").expect("Windows workspace root URI")],
+            FileSystemFormat::Full,
         )
         .render(),
     );
@@ -228,6 +229,7 @@ fn serialize_environment_context_with_full_filesystem_profile() {
             PathUri::from_abs_path(&repo),
             PathUri::from_abs_path(&other_repo),
         ],
+        FileSystemFormat::Compact,
     ));
 
     let expected = format!(
@@ -246,6 +248,87 @@ fn serialize_environment_context_with_full_filesystem_profile() {
     );
 
     assert_eq!(context.render().expect_text(), expected);
+}
+
+#[test]
+fn group_default_metadata_reads_across_literal_write_paths() {
+    let workspace = PathUri::parse("file:///C:/work").unwrap();
+    let extra = PathUri::parse("file:///D:/build&test").unwrap();
+    let profile = PermissionProfile::workspace_write_with_path_uris(
+        &[extra],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ true,
+    );
+    let mut context = environment_state(
+        [environment("local", workspace.clone(), "powershell")],
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+    let [full, compact] = [FileSystemFormat::Full, FileSystemFormat::Compact].map(|format| {
+        context.filesystem = Some(FileSystemContext::from_permission_profile(
+            &profile,
+            std::slice::from_ref(&workspace),
+            format,
+        ));
+        context.render().expect_text()
+    });
+    insta::assert_snapshot!(format!("Control\n{full}\n\nTreatment\n{compact}"));
+}
+
+#[test]
+fn keep_nonuniform_metadata_reads_explicit() {
+    let workspace = PathUri::parse("file:///C:/work").unwrap();
+    let extra = PathUri::parse("file:///D:/build").unwrap();
+    let mut policy = FileSystemSandboxPolicy::workspace_write_with_path_uris(
+        std::slice::from_ref(&extra),
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let git = extra.join_descendant(".git").unwrap().into();
+    let entry = policy
+        .entries
+        .iter_mut()
+        .find(|entry| entry.path == git)
+        .unwrap();
+    // Windows paths compare case-insensitively. A shared rule would lose this spelling.
+    entry.path = extra.join_descendant(".GIT").unwrap().into();
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let rendered = FileSystemContext::from_permission_profile(
+        &profile,
+        &[workspace],
+        FileSystemFormat::Compact,
+    )
+    .render();
+    assert!(rendered.contains(r#"<entry access="read"><path>C:\work\.git</path></entry>"#));
+    assert!(rendered.contains(r#"<entry access="read"><path>D:\build\.GIT</path></entry>"#));
+}
+
+#[test]
+fn keep_an_explicit_metadata_read_even_when_the_paths_match() {
+    let roots = [
+        PathUri::parse("file:///repo").unwrap(),
+        PathUri::parse("file:///cache").unwrap(),
+    ];
+    let mut policy = FileSystemSandboxPolicy::workspace_write_with_path_uris(
+        &roots, /*exclude_tmpdir_env_var*/ false, /*exclude_slash_tmp*/ false,
+    );
+    let git = roots[1].join_descendant(".git").unwrap();
+    policy.entries.push(FileSystemSandboxEntry::new(
+        git.into(),
+        FileSystemAccessMode::Read,
+    ));
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let render =
+        |format| FileSystemContext::from_permission_profile(&profile, &roots, format).render();
+    assert_eq!(
+        render(FileSystemFormat::Compact),
+        render(FileSystemFormat::Full)
+    );
 }
 
 #[test]

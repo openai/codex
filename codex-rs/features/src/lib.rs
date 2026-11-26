@@ -226,6 +226,8 @@ pub enum Feature {
     DeferredExecutor,
     /// Describe each selected environment's filesystem and permissions separately.
     PerEnvironmentContext,
+    /// Describe uniform workspace-write permissions without repeating paths or nested XML.
+    CompactFilesystemContext,
     /// Use the current working directory for turn diff display paths.
     CwdRelativeTurnDiffs,
     /// Enable runtime metrics snapshots via a manual reader.
@@ -1361,6 +1363,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PerEnvironmentContext,
         key: "per_environment_context",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CompactFilesystemContext,
+        key: "compact_filesystem_context",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

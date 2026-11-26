@@ -3843,6 +3843,84 @@ async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(false, "compact_filesystem"; "shared")]
+#[test_case::test_case(true, "compact_filesystem_per_environment"; "per_environment")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_filesystem_context(per_environment: bool, snapshot_name: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("first")]),
+            sse(vec![ev_completed("second")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .features
+                .enable(Feature::CompactFilesystemContext)
+                .expect("enable compact filesystem context");
+            config
+                .features
+                .set_enabled(Feature::PerEnvironmentContext, per_environment)
+                .expect("configure per-environment context");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let cwd = executor_path_uri(&test.config.cwd)?;
+    let roots = [cwd.clone(), cwd.join("cache")?];
+    let profile = PermissionProfile::workspace_write_with_path_uris(
+        &roots,
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ true,
+    );
+    test.submit_turn_with_permission_profile("Where can I write?", profile)
+        .await?;
+    test.submit_text_turn("What about the cache?").await?;
+
+    // The snapshot formatter handles XML paths. Normalize the compact JSON lists before clipping.
+    let [workspace, cache] =
+        roots.map(|path| json!(path.inferred_native_path_string()).to_string());
+    let mut bodies = mock
+        .requests()
+        .iter()
+        .map(core_test_support::responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    for body in &mut bodies {
+        for item in body["input"].as_array_mut().expect("request input") {
+            for part in item["content"].as_array_mut().into_iter().flatten() {
+                if let Some(text) = part["text"].as_str()
+                    && text.starts_with("<environment_context>")
+                {
+                    part["text"] = text
+                        .replace(&workspace, r#""<CWD>""#)
+                        .replace(&cache, r#""<CWD>/cache""#)
+                        .replace(r#"<environment id="remote""#, r#"<environment id="local""#)
+                        .into();
+                }
+            }
+        }
+    }
+    let entries = bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_context_snapshot(
+            "The workspace and cache share read-only children. Unchanged permissions carry over to the next turn.",
+            &entries,
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .preserve_environment_context(),
+        )
+    );
+    Ok(())
+}
+
 #[test_case::test_case(PermissionPathScenario::OmittedPaths; "omitted_paths")]
 #[test_case::test_case(PermissionPathScenario::DeniedReads; "denied_reads")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
