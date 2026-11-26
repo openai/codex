@@ -6,6 +6,7 @@
 use super::super::hooks::install_allow_permission_request_hook;
 #[cfg(not(target_os = "windows"))]
 use super::super::hooks::read_permission_request_hook_inputs;
+use super::guardian_direct_review::assess_with_transcript_reviewer;
 use super::*;
 use anyhow::Context;
 use codex_config::test_support::CloudConfigBundleFixture;
@@ -20,7 +21,6 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_sse_once;
 #[cfg(not(target_os = "windows"))]
 use pretty_assertions::assert_eq;
-use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_checkpoint_requires_fresh_human_decisions() -> Result<()> {
@@ -145,9 +145,7 @@ justification = "A person must approve this command."
         "type": "function_call", "name": "exec_command", "call_id": "direct-review",
         "arguments": r#"{"cmd":"echo checkpoint-ok","login":false}"#,
     }))?;
-    let error = test
-        .codex
-        .guardian_review(&tool_call, &CancellationToken::new())
+    let error = assess_with_transcript_reviewer(&test.codex, &tool_call)
         .await
         .expect_err("managed checkpoint requires a human");
     assert!(matches!(

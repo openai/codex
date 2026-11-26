@@ -1,5 +1,6 @@
 //! Direct MCP review uses the current catalog and policy without dispatching the recorded call.
 
+use super::guardian_direct_review::assess_with_transcript_reviewer;
 use super::guardian_direct_review::model_input;
 use anyhow::Result;
 use codex_config::types::AppToolApproval;
@@ -29,7 +30,6 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_mcp_review_without_dispatch() -> Result<()> {
@@ -102,10 +102,7 @@ async fn direct_mcp_review_without_dispatch() -> Result<()> {
     wait_for_mcp_server(&direct.thread, "codex_apps").await?;
     let tool_call = items.last().expect("recorded call").clone();
     direct.thread.inject_response_items(items).await?;
-    let result = direct
-        .thread
-        .guardian_review(&tool_call, &CancellationToken::new())
-        .await?;
+    let result = assess_with_transcript_reviewer(&direct.thread, &tool_call).await?;
     assert_eq!(
         result,
         GuardianReviewResult {

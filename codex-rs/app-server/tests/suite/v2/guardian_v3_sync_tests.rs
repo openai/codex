@@ -1,14 +1,21 @@
-//! Exercise the native approval route with and without the Guardian board extension.
+//! Exercise native approvals and recorded reviews with the Guardian board extension.
 use super::super::mcp_tool::wait_for_mcp_tool_call_completed;
 use super::sync_sessions::sync_config;
 use super::*;
 use app_test_support::create_final_assistant_message_sse_response as assistant_response;
 use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
+use codex_exec_server::ReadFileOptions;
 use codex_models_manager::model_info::model_info_from_slug;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
@@ -16,8 +23,12 @@ use std::sync::atomic::AtomicBool;
 use test_case::test_case;
 
 enum ReviewCase {
+    LegacyHistory,
+    ColdResume,
     V3,
     V3WithReconsideration,
+    V3RoutingFailure,
+    V3RoutingTimeout,
     EphemeralV3,
     Native,
 }
@@ -156,6 +167,36 @@ fn received_user_instruction(request: &responses::ResponsesRequest, text: &str) 
                         })
                 })
         })
+}
+
+fn routing_input(request: &responses::ResponsesRequest) -> Value {
+    let item = request
+        .inputs_of_type("function_call_output")
+        .into_iter()
+        .rev()
+        .find(|item| item["name"] == "guardian_housekeeper_input")
+        .expect("routing originals");
+    let output = item["output"].as_str().expect("housekeeper input text");
+    serde_json::from_str(output).expect("valid housekeeper input JSON")
+}
+
+fn route_release(request: &responses::ResponsesRequest, routing_failure: bool) -> String {
+    let input = routing_input(request);
+    let sources = input["sources"].as_array().expect("housekeeper sources");
+    // A nonempty batch with no destinations is a terminal routing error.
+    release_routes(if routing_failure { 0 } else { sources.len() })
+}
+
+fn release_routes(count: usize) -> String {
+    let text = json!({
+        "descriptions": [{"channel": "release", "description": "Release policy"}],
+        "routes": vec![vec!["release"]; count],
+    })
+    .to_string();
+    responses::sse(vec![
+        responses::ev_assistant_message("route", &text),
+        responses::ev_completed("route"),
+    ])
 }
 
 #[test_case(ReviewCase::V3, None; "v3_follows_subscribed_revocation_and_reapproval")]
@@ -456,6 +497,7 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                 "metadata": {"guardian": {"item_id": call_id, "requires_review": requires_review}},
             }));
         }
+        let recorded_call = call["item"].clone();
         events.extend([call, responses::ev_completed(call_id)]);
         let (_actor, issue_call) = hold_response(&actor_url, responses::sse(events)).await;
         let id = app
@@ -626,9 +668,12 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                 .contains("If the user explicitly approves a previously rejected action")),
             followup
         );
-        assert!(developer.iter().any(|text| {
-            text.contains("Browser connector (`connector_openai_browser` on `codex_apps`)")
-        }));
+        let browser_policy = developer
+            .iter()
+            .find(|text| {
+                text.contains("Browser connector (`connector_openai_browser` on `codex_apps`)")
+            })
+            .expect("live browser policy");
         assert!(body["input"].to_string().contains("release-action"));
         if uses_board {
             let review_event = wait_for_matching_analytics_event(&server, TIMEOUT, |event| {
@@ -676,6 +721,36 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
                         && parts.iter().any(|text| text.contains("release-action")))
             );
         }
+        if empty_board && !reconsider && probe.is_none() {
+            let replay = app
+                .start_thread(ThreadStartParams {
+                    history_mode: Some(ThreadHistoryMode::Paginated),
+                    ..Default::default()
+                })
+                .await?
+                .thread;
+            let instruction = json!({
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            });
+            let id = send_recorded_review(&mut app, &replay.id, vec![instruction], &recorded_call)
+                .await?;
+            let result: Value = app.read_response(id).await?;
+            assert_eq!(result["callId"], call_id);
+            let calls = requests.requests();
+            let recorded = calls[seen_requests..]
+                .iter()
+                .rev()
+                .find(|r| expects_field(r, "outcome"))
+                .expect("recorded browser verdict");
+            assert!(
+                recorded
+                    .message_input_texts("developer")
+                    .contains(browser_policy),
+                "recorded review must include the live browser policy"
+            );
+            seen_requests = calls.len();
+        }
         if followup && !late {
             assert!(
                 received_user_instruction(verdict, prompt),
@@ -706,4 +781,436 @@ async fn pending_mcp_action_uses_the_configured_reviewer(
     }
     app.shutdown_gracefully().await?;
     Ok(())
+}
+
+fn recorded_command(user: &str, call_id: &str, command: &str) -> [Value; 2] {
+    let mut arguments = json!({
+        "cmd": command,
+        "sandbox_permissions": "require_escalated",
+        "justification": "Write the candidate.",
+    });
+    arguments.sort_all_objects();
+    [
+        json!({
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": user}],
+        }),
+        json!({
+            "type": "function_call", "name": "exec_command", "call_id": call_id,
+            "arguments": arguments.to_string(),
+        }),
+    ]
+}
+
+async fn send_recorded_review(
+    app: &mut TestAppServer,
+    thread_id: &str,
+    items: Vec<Value>,
+    tool_call: &Value,
+) -> Result<i64> {
+    let inject = app
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
+            thread_id: thread_id.to_owned(),
+            items,
+        })
+        .await?;
+    let _: ThreadInjectItemsResponse = app.read_response(inject).await?;
+    app.send_raw_request(
+        "thread/guardianReview",
+        Some(json!({"threadId": thread_id, "toolCall": tool_call})),
+    )
+    .await
+}
+
+#[test_case(ReviewCase::V3; "reviews_sequential_batches_without_execution")]
+#[test_case(ReviewCase::LegacyHistory; "unsupported_history_is_an_error")]
+#[test_case(ReviewCase::EphemeralV3; "ephemeral_thread_is_an_error")]
+#[test_case(ReviewCase::ColdResume; "resumed_thread_is_an_error")]
+#[test_case(ReviewCase::V3RoutingFailure; "routing_failure_is_an_error")]
+#[test_case(ReviewCase::V3RoutingTimeout; "stalled_routing_times_out")]
+#[test_case(ReviewCase::V3WithReconsideration; "stalled_reconsideration_preserves_denial")]
+#[tokio::test]
+async fn recorded_v3_review(case: ReviewCase) -> Result<()> {
+    const DENIAL: &str = "The user did not approve this write.";
+    let reconsider = matches!(case, ReviewCase::V3WithReconsideration);
+    let resumed = matches!(case, ReviewCase::ColdResume);
+    let legacy = matches!(case, ReviewCase::LegacyHistory);
+    let ephemeral = matches!(case, ReviewCase::EphemeralV3);
+    let routing_failure = matches!(case, ReviewCase::V3RoutingFailure);
+    let routing_timeout = matches!(case, ReviewCase::V3RoutingTimeout);
+    let server = responses::start_mock_server().await;
+    let route = |count| responses::sse_response(release_routes(count));
+    let search = |call_id, response_id| {
+        responses::sse_response(responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                call_id,
+                "guardian_board",
+                "search_posts",
+                r#"{"channel_name":"release","max_chars_per_post":2048}"#,
+            ),
+            responses::ev_completed(response_id),
+        ]))
+    };
+    let verdict = |id, text: &str| {
+        responses::sse_response(responses::sse(vec![
+            responses::ev_assistant_message(id, text),
+            responses::ev_completed(id),
+        ]))
+    };
+    let requests = if matches!(case, ReviewCase::V3) {
+        let allow = r#"{"outcome":"allow","rationale":"Requested write."}"#;
+        responses::mount_response_sequence(
+            &server,
+            vec![
+                route(1),
+                search("find-release", "search"),
+                verdict("verdict", allow),
+                route(3),
+                search("find-release-followup", "search-followup"),
+                verdict("verdict-followup", allow),
+            ],
+        )
+        .await
+    } else if reconsider {
+        let denial = verdict(
+            "verdict",
+            &json!({"outcome":"deny","rationale":DENIAL}).to_string(),
+        );
+        responses::mount_response_sequence(
+            &server,
+            vec![route(1), denial.clone(), denial.set_delay(TIMEOUT)],
+        )
+        .await
+    } else {
+        responses::mount_response_handler(&server, move |request| {
+            let response = responses::sse_response(route_release(&request, routing_failure));
+            if routing_timeout {
+                response.set_delay(TIMEOUT)
+            } else {
+                response
+            }
+        })
+        .await
+    };
+    let home = TempDir::new()?;
+    let mut config =
+        sync_config(&server.uri()).with_extra_config("[features.guardianv3]\nenabled = true");
+    if reconsider {
+        config = config.enable_feature(Feature::GuardianDenialReconsideration);
+    }
+    if reconsider || routing_timeout {
+        config = config.with_root_config("auto_review.timeout_ms = 10000");
+    }
+    config.write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            ephemeral: Some(ephemeral),
+            history_mode: legacy.then_some(ThreadHistoryMode::Legacy),
+            // Turning off the thread flag must not bypass the server's attached reviewer.
+            config: Some([("features.guardianv3.enabled".into(), json!(false))].into()),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    let user = "Record the release candidate.";
+    let command = "echo release > candidate.txt";
+    let [instruction, first_call] = recorded_command(user, "release-1", command);
+    if resumed {
+        let inject = app
+            .send_thread_inject_items_request(ThreadInjectItemsParams {
+                thread_id: thread.id.clone(),
+                items: vec![json!({
+                    "type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "Do not write files."}],
+                })],
+            })
+            .await?;
+        let _: ThreadInjectItemsResponse = app.read_response(inject).await?;
+        app.shutdown_gracefully().await?;
+        app = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .build_initialized()
+            .await?;
+        let resume = app
+            .send_raw_request("thread/resume", Some(json!({"threadId": thread.id})))
+            .await?;
+        let _: Value = app.read_response(resume).await?;
+    }
+    let review = send_recorded_review(&mut app, &thread.id, vec![instruction], &first_call).await?;
+    if routing_timeout {
+        let error = timeout(
+            TIMEOUT,
+            app.read_stream_until_error_message(RequestId::Integer(review)),
+        )
+        .await??;
+        assert!(
+            error.error.message.contains("request timed out"),
+            "{}",
+            error.error.message
+        );
+        let calls = requests.requests();
+        assert_eq!(calls.len(), 1);
+        assert!(expects_field(&calls[0], "routes"));
+    } else if ephemeral || routing_failure || legacy || resumed {
+        let error = app
+            .read_stream_until_error_message(RequestId::Integer(review))
+            .await?;
+        let calls = requests.requests();
+        if routing_failure {
+            assert!(
+                error
+                    .error
+                    .message
+                    .contains("could not prepare the evidence")
+            );
+            assert!(!calls.is_empty());
+            assert!(calls.iter().all(|call| expects_field(call, "routes")));
+        } else {
+            assert_eq!(error.error.code, -32600);
+            assert_eq!(
+                error.error.message,
+                "Guardian V3 recorded review requires a fresh, non-ephemeral root thread with paginated history"
+            );
+            assert!(calls.is_empty());
+        }
+        if ephemeral {
+            let worker = app
+                .send_raw_request(
+                    "thread/guardianReview",
+                    Some(json!({
+                        "threadId": thread.id,
+                        "toolCall": first_call,
+                        "rootEvidence": {
+                            "messages": [{"role": "user", "text": user}],
+                            "missingUserInstructions": false,
+                            "missingAssistantContext": false,
+                        },
+                    })),
+                )
+                .await?;
+            let rejected = app
+                .read_stream_until_error_message(RequestId::Integer(worker))
+                .await?;
+            assert_eq!(rejected.error.code, -32600);
+            assert!(
+                rejected
+                    .error
+                    .message
+                    .contains("does not support rootEvidence")
+            );
+            assert!(requests.requests().is_empty());
+        }
+    } else if reconsider {
+        let result: Value = timeout(TIMEOUT, app.read_response(review)).await??;
+        assert_eq!(result["callId"], "release-1");
+        assert_eq!(result["assessment"]["outcome"], "deny");
+        assert_eq!(result["assessment"]["rationale"], DENIAL);
+        assert_eq!(
+            requests
+                .requests()
+                .iter()
+                .filter(|r| expects_field(r, "outcome"))
+                .count(),
+            2
+        );
+    } else {
+        let result: Value = app.read_response(review).await?;
+        assert_eq!(result["callId"], "release-1");
+        assert_eq!(result["assessment"]["outcome"], "allow");
+        let calls = requests.requests();
+        let verdict = calls.last().expect("verdict");
+        let evidence = verdict
+            .function_call_output_text("find-release")
+            .expect("board search");
+        assert!(evidence.contains(user), "{evidence}");
+
+        let next_user = "Update the release candidate.";
+        let next_command = "echo updated > candidate.txt";
+        let [instruction, next_call] = recorded_command(next_user, "release-2", next_command);
+        let output = json!({
+            "type": "function_call_output",
+            "call_id": "release-1",
+            "output": "The recorded write succeeded.",
+        });
+        let review = send_recorded_review(
+            &mut app,
+            &thread.id,
+            vec![first_call, output, instruction],
+            &next_call,
+        )
+        .await?;
+        let result: Value = app.read_response(review).await?;
+        assert_eq!(result["callId"], "release-2");
+        assert_eq!(result["assessment"]["outcome"], "allow");
+
+        let all_calls = requests.requests();
+        let env = app.auto_env()?;
+        let selection = env.selection();
+        let cwd = selection.cwd.inferred_native_path_string();
+        let bodies = all_calls
+            .iter()
+            .map(|call| {
+                normalize_recorded_review_request(call.body_json(), &cwd, &selection.environment_id)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let entries = bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+        insta::assert_snapshot!(
+            "recorded_v3_review_request_history",
+            context_snapshot::format_context_snapshot(
+                "Review two recorded release commands on the same thread without executing either.",
+                &entries,
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
+            )
+        );
+        let [routing, search, followup] = &all_calls[calls.len()..] else {
+            panic!("expected one new routing request followed by a board search and verdict");
+        };
+        assert!(expects_field(routing, "routes"));
+        let routing = routing_input(routing);
+        let sources = routing["sources"].as_array().expect("housekeeper sources");
+        let [recorded_call, recorded_output, instruction] = sources.as_slice() else {
+            panic!("expected only originals from the second batch: {sources:?}");
+        };
+        assert_eq!(recorded_call["original"]["payload"]["call_id"], "release-1");
+        let recorded_output = &recorded_output["original"]["payload"];
+        assert_eq!(recorded_output["type"], "function_call_output");
+        assert_eq!(recorded_output["call_id"], "release-1");
+        assert_eq!(
+            instruction["original"]["payload"]["content"][0]["text"],
+            next_user,
+        );
+        assert!(expects_field(search, "outcome"));
+        assert!(expects_field(followup, "outcome"));
+        let evidence = followup
+            .function_call_output_text("find-release-followup")
+            .expect("followup board search");
+        assert!(evidence.contains(user), "{evidence}");
+        assert!(evidence.contains(next_user), "{evidence}");
+        assert_eq!(
+            followup.body_json()["client_metadata"]["thread_id"]
+                .as_str()
+                .expect("followup reviewer thread"),
+            verdict.body_json()["client_metadata"]["thread_id"]
+                .as_str()
+                .expect("first reviewer thread"),
+        );
+        assert!(
+            followup
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains(next_command))
+        );
+    }
+    let env = app.auto_env()?;
+    let candidate = env.selection().cwd.join("candidate.txt")?;
+    let error = env
+        .environment()
+        .get_filesystem()
+        .read_file(
+            &candidate,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("recorded review must not create candidate.txt");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    app.shutdown_gracefully().await?;
+    Ok(())
+}
+
+// Normalize volatile values and sort JSON object keys. Keep evidence order and
+// contents, including the pending action, in the snapshot.
+fn normalize_recorded_review_request(
+    mut body: Value,
+    cwd: &str,
+    environment_id: &str,
+) -> Result<Value> {
+    fn normalize_original(source: &mut Value) {
+        let ordinal = source["id"]["ordinal"].as_u64();
+        if let (Some(ordinal), Some(id)) = (ordinal, source.pointer_mut("/original/payload/id"))
+            && let Some((kind, suffix)) = id.as_str().and_then(|id| id.split_once('_'))
+            && uuid::Uuid::parse_str(suffix).is_ok()
+        {
+            *id = json!(format!("{kind}_<SOURCE_{ordinal}>"));
+        }
+        if let Some(create_time) = source
+            .pointer_mut("/original/payload/internal_chat_message_metadata_passthrough/create_time")
+        {
+            *create_time = json!(0);
+        }
+    }
+
+    let environment = format!("environment {environment_id:?}");
+    if let Some(items) = body["input"].as_array_mut() {
+        for item in items {
+            if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
+                for part in content {
+                    if let Some(text) = part["text"].as_str() {
+                        if let Ok(mut action) = serde_json::from_str::<Value>(text)
+                            && action["tool"] == "exec_command"
+                        {
+                            if action["cwd"] == cwd {
+                                action["cwd"] = json!("<EXECUTOR_CWD>");
+                            }
+                            if action["environment_id"] == environment_id {
+                                action["environment_id"] = json!("<ENVIRONMENT>");
+                            }
+                            // Keep the shell script and replace the platform-specific argv prefix.
+                            if let Some(argv) = action["command"].as_array_mut()
+                                && argv.len() > 1
+                                && let Some(script) = argv.pop()
+                            {
+                                *argv = vec![json!("<SHELL>"), script];
+                            }
+                            action.sort_all_objects();
+                            part["text"] =
+                                json!(format!("{}\n", serde_json::to_string_pretty(&action)?));
+                        } else {
+                            part["text"] =
+                                json!(text.replace(&environment, "environment \"<ENVIRONMENT>\""));
+                        }
+                    }
+                }
+            }
+            let Some(output) = item["output"].as_str() else {
+                continue;
+            };
+            if item["name"] == "guardian_housekeeper_input" {
+                let mut routing: Value = serde_json::from_str(output)?;
+                if let Some(sources) = routing["sources"].as_array_mut() {
+                    sources.iter_mut().for_each(normalize_original);
+                }
+                routing.sort_all_objects();
+                item["output"] = json!(serde_json::to_string(&routing)?);
+            } else if matches!(
+                item["call_id"].as_str(),
+                Some("find-release" | "find-release-followup")
+            ) {
+                let mut search: Value = serde_json::from_str(output)?;
+                if let Some(posts) = search["results"].as_array_mut() {
+                    for post in posts {
+                        if let Some(created_at) = post.get_mut("created_at") {
+                            *created_at = json!("<BOARD_TIMESTAMP>");
+                        }
+                        let preview = post["text_preview"].as_str().expect("board post preview");
+                        assert_eq!(post["truncated"], false, "fixture post fits the preview");
+                        assert_eq!(post["n_chars"], preview.chars().count());
+                        let mut original: Value = serde_json::from_str(preview)?;
+                        normalize_original(&mut original);
+                        original.sort_all_objects();
+                        let preview = serde_json::to_string(&original)?;
+                        post["n_chars"] = json!(preview.chars().count());
+                        post["text_preview"] = json!(preview);
+                    }
+                }
+                search.sort_all_objects();
+                item["output"] = json!(serde_json::to_string(&search)?);
+            }
+        }
+    }
+    Ok(body)
 }

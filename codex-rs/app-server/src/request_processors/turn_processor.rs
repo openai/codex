@@ -8,6 +8,7 @@ use codex_app_server_protocol::ThreadGuardianReviewResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
 use codex_app_server_protocol::ThreadPrepareApprovedPlanResponse;
+use codex_core::guardian_review::RecordedReviewMode;
 use codex_protocol::AgentPath;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::AgentMessageInputContent;
@@ -218,12 +219,23 @@ impl TurnRequestProcessor {
         // Older servers silently ignore rootEvidence. Acknowledge it on success so clients
         // can distinguish a worker review from one that used only the injected history.
         let used_root_evidence = params.root_evidence.is_some();
+        // The startup flag installs the reviewer. A thread override cannot change it.
+        let mode = if self.config.features.enabled(Feature::GuardianV3) {
+            if used_root_evidence {
+                return Err(invalid_request(
+                    "Guardian V3 recorded review does not support rootEvidence",
+                ));
+            }
+            RecordedReviewMode::Attached(Box::pin(codex_guardian_v3::route_pending_history(
+                Arc::clone(&thread),
+            )))
+        } else {
+            RecordedReviewMode::Transcript {
+                root_evidence: params.root_evidence,
+            }
+        };
         let result = thread
-            .guardian_review_with_root_evidence(
-                &params.tool_call,
-                params.root_evidence,
-                cancellation,
-            )
+            .review_recorded_call(&params.tool_call, mode, cancellation)
             .await
             .map_err(|err| match err.details() {
                 CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),

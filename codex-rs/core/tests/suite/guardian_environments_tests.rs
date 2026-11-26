@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::suite::scenarios::guardian_direct_mcp::recorded_mcp_items;
+use crate::suite::scenarios::guardian_direct_review::assess_with_transcript_reviewer;
 use crate::suite::scenarios::guardian_direct_review::model_input;
 use codex_core::context::UserGoalUpdate;
 use codex_history::RolloutItem;
@@ -135,10 +136,7 @@ async fn live_and_recorded_mcp_reviews_use_the_server_owners_denied_paths() -> R
     let items = recorded_mcp_items(&test.codex, prompt).await?;
     let tool_call = items.last().expect("recorded call").clone();
     recorded.thread.inject_response_items(items).await?;
-    recorded
-        .thread
-        .guardian_review(&tool_call, &tokio_util::sync::CancellationToken::new())
-        .await?;
+    assess_with_transcript_reviewer(&recorded.thread, &tool_call).await?;
     let requests = responses.requests();
     let [review, _, replay] = requests.as_slice() else {
         anyhow::bail!("expected live review, parent completion, and recorded review");

@@ -18,6 +18,24 @@ pub enum ReviewRetrieval {
     Extension(std::sync::Arc<str>),
 }
 
+/// How the host requests review of a single recorded tool call.
+pub enum RecordedReviewMode {
+    Transcript {
+        root_evidence: Option<codex_app_server_protocol::GuardianRootEvidence>,
+    },
+    /// Route pending history under the recorded review deadline.
+    Attached(codex_extension_api::ExtensionFuture<'static, Result<(), ReviewPreparationError>>),
+}
+
+impl RecordedReviewMode {
+    pub(crate) fn root_evidence(&self) -> Option<&codex_app_server_protocol::GuardianRootEvidence> {
+        match self {
+            Self::Transcript { root_evidence } => root_evidence.as_ref(),
+            Self::Attached(_) => None,
+        }
+    }
+}
+
 /// The result of checking a recorded call without executing it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct GuardianReviewResult {

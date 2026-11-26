@@ -278,9 +278,19 @@ instructions, use `thread/fork` followed by `turn/start`.
 ## Recorded Guardian reviews (experimental)
 
 On an idle thread, `thread/guardianReview` assesses the supplied `toolCall`
-without appending or executing it. To review an archived worker's action,
-start a dedicated ephemeral thread and load the worker's history with
-`thread/inject_items`. Supply the action and parent messages in the review request.
+without appending or executing it.
+
+With `features.guardianv3.enabled = true` at app-server startup, use
+`thread/start` to create a fresh root thread with `ephemeral: false` and
+`historyMode: "paginated"`. Inject history with `thread/inject_items`, then
+call `thread/guardianReview` with `threadId` and `toolCall`. V3 waits for
+pending history to be processed before assessing the call. Wait for the verdict
+before injecting another batch on the same thread. V3 rejects `rootEvidence`.
+
+The worker example below uses the transcript reviewer with Guardian V3 disabled
+at app-server startup. Start a dedicated ephemeral thread and inject the archived
+worker's history with `thread/inject_items`. Supply the action and parent
+messages in the review request.
 
 ```json
 {

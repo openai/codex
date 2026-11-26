@@ -26,6 +26,7 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
+use codex_history::HistoryInitialization;
 use codex_history::RolloutItem;
 use codex_models_manager::ModelsManagerConfig;
 use codex_otel::SessionTelemetry;
@@ -1227,31 +1228,33 @@ impl CodexThread {
         Ok(())
     }
 
-    /// Review the supplied tool call without executing it.
-    pub async fn guardian_review(
+    /// Assess a recorded call using the reviewer selected by the host.
+    pub async fn review_recorded_call(
         &self,
         tool_call: &ResponseItem,
-        cancellation: &CancellationToken,
-    ) -> CodexResult<crate::guardian_review::GuardianReviewResult> {
-        self.guardian_review_with_root_evidence(
-            tool_call,
-            /*root_evidence*/ None,
-            cancellation,
-        )
-        .await
-    }
-
-    /// Use the supplied parent evidence only for this review of the injected history.
-    pub async fn guardian_review_with_root_evidence(
-        &self,
-        tool_call: &ResponseItem,
-        root_evidence: Option<codex_app_server_protocol::GuardianRootEvidence>,
+        mode: crate::guardian_review::RecordedReviewMode,
         cancellation: &CancellationToken,
     ) -> CodexResult<crate::guardian_review::GuardianReviewResult> {
         if self.session.active_turn.lock().await.is_some() {
             return Err(CodexErr::InvalidRequest("thread has an active turn".into()));
         }
-        if root_evidence.is_some()
+        if matches!(
+            mode,
+            crate::guardian_review::RecordedReviewMode::Attached(_)
+        ) {
+            // On resume or fork, evidence intake starts at the existing history tail.
+            let (config, initialization, history_mode) = self.session.thread_ready_config().await;
+            if !matches!(initialization, HistoryInitialization::New)
+                || self.session_source().is_non_root_agent()
+                || config.ephemeral
+                || history_mode != ThreadHistoryMode::Paginated
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "Guardian V3 recorded review requires a fresh, non-ephemeral root thread with paginated history".into(),
+                ));
+            }
+        }
+        if mode.root_evidence().is_some()
             && (!self.config().await.ephemeral
                 || matches!(self.session_source(), SessionSource::SubAgent(_)))
         {
@@ -1260,14 +1263,8 @@ impl CodexThread {
             ));
         }
         let history = self.session.clone_history().await;
-        crate::guardian::review_tool_call(
-            &self.session,
-            history,
-            tool_call,
-            root_evidence,
-            cancellation,
-        )
-        .await
+        crate::guardian::review_tool_call(&self.session, history, tool_call, mode, cancellation)
+            .await
     }
 
     /// Inject raw Responses items. Plaintext agent-mail batches in a native MAv2

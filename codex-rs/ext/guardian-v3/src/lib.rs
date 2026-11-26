@@ -22,6 +22,7 @@ mod housekeeper_transport;
 mod inbox;
 pub use host::install;
 pub use host::install_shadow;
+pub use host::route_pending_history;
 mod retrieval_tools;
 mod sampling;
 mod subscription_tools;

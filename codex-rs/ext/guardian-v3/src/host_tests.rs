@@ -21,6 +21,7 @@ use codex_thread_store::PersistContext;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::received_responses_requests;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::user_message_item;
@@ -292,6 +293,14 @@ async fn activity_routes_committed_posts_in_source_order(in_memory: bool) -> any
         queued_originals.push(record["original"].take());
     }
     assert_eq!(queued_originals, [first_original, second_original]);
+
+    // A wake after both batches were published must reply without another model request.
+    let requests_before = received_responses_requests(&server).await.len();
+    tokio::time::timeout(wait, super::route_pending_history(Arc::clone(&test.codex))).await??;
+    assert_eq!(
+        received_responses_requests(&server).await.len(),
+        requests_before
+    );
 
     // Reject unattributed user-role records without advancing the surviving tree's cursor.
     let published = inbox.delivery.cursor();

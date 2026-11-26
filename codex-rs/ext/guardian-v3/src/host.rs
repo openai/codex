@@ -8,9 +8,11 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use anyhow::Context;
+use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::guardian_review::PreserveReviewWrites;
+use codex_core::guardian_review::ReviewPreparationError;
 use codex_core::guardian_review::ReviewRetrieval;
 use codex_core::guardian_review::ShadowReviewer;
 use codex_extension_api::ExtensionData;
@@ -36,6 +38,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_state::SqliteConfig;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::ActorReviewer;
@@ -159,8 +162,25 @@ struct Host {
 pub(super) struct RootWorker {
     pub(super) shadow: bool,
     pub(super) reader: Arc<dyn AgentMessageBoard>,
-    wake: mpsc::Sender<()>,
+    // Live wakes coalesce. Callers that need to wait supply a reply sender.
+    wake: mpsc::Sender<Option<oneshot::Sender<()>>>,
     lifetime: ReviewerTasks,
+}
+
+/// Wake the root worker and wait for it to route pending history to the board.
+pub async fn route_pending_history(root: Arc<CodexThread>) -> Result<(), ReviewPreparationError> {
+    use ReviewPreparationError::EvidenceUnavailable;
+    let worker = root
+        .thread_extension_data()
+        .get::<RootWorker>()
+        .ok_or(EvidenceUnavailable)?;
+    let (done, routed) = oneshot::channel();
+    worker
+        .wake
+        .send(Some(done))
+        .await
+        .map_err(|_| EvidenceUnavailable)?;
+    routed.await.map_err(|_| EvidenceUnavailable)
 }
 
 impl Host {
@@ -256,7 +276,7 @@ impl Host {
             cancellation: tree.stop.child_token(),
             ..Default::default()
         };
-        let (wake, mut wakes) = mpsc::channel(1);
+        let (wake, mut wakes) = mpsc::channel::<Option<oneshot::Sender<()>>>(1);
         let initial_position = cursor.position();
         let delivery = Arc::clone(
             tree.delivery
@@ -267,7 +287,7 @@ impl Host {
         if saved.position().thread_id == initial_position.thread_id
             && saved.position().end_ordinal_exclusive < initial_position.end_ordinal_exclusive
         {
-            let _ = wake.try_send(());
+            let _ = wake.try_send(None);
         }
         let shadow = self.shadow;
         let manager = self.manager.clone();
@@ -277,7 +297,13 @@ impl Host {
             let work = async {
                 let board = Arc::new(board);
                 let mut housekeeper = None;
-                while let Some(Some(())) = cancellation.run_until_cancelled(wakes.recv()).await {
+                while let Some(Some(done)) = cancellation.run_until_cancelled(wakes.recv()).await {
+                    // On failure, dropping the sender wakes the caller with an error.
+                    let finish = || {
+                        if let Some(done) = done {
+                            let _ = done.send(());
+                        }
+                    };
                     let cursor = delivery.cursor();
                     let read = async {
                         // Shadow reads can catch up on the next wake without
@@ -298,6 +324,7 @@ impl Host {
                         tracing::warn!(root_thread_id = %root, %error, "Guardian intake rejected stored evidence");
                     })?;
                     if !snapshot.source_advanced() {
+                        finish();
                         continue;
                     }
                     for &source_ordinal in &snapshot.skipped_incomplete_deliveries {
@@ -311,6 +338,7 @@ impl Host {
                     }
                     if snapshot.records().is_empty() {
                         delivery.acknowledge(&snapshot, /*count*/ 0)?;
+                        finish();
                         continue;
                     }
                     let housekeeper = match &mut housekeeper {
@@ -335,6 +363,7 @@ impl Host {
                     };
                     // route_next drains accepted appends before honoring cancellation.
                     while housekeeper.route_next(&snapshot, &cancellation).await? != 0 {}
+                    finish();
                     tracing::debug!(
                         name: "guardian_v3.housekeeping_routed",
                         root_thread_id = %root,
@@ -494,6 +523,6 @@ impl TurnLifecycleContributor for Host {
 
 fn wake_worker(thread: &ExtensionData) {
     if let Some(worker) = thread.get::<RootWorker>() {
-        let _ = worker.wake.try_send(());
+        let _ = worker.wake.try_send(None);
     }
 }

@@ -810,7 +810,13 @@ async fn guardian_review_assesses_allowlisted_calls_and_reuses_private_history_p
         .build_initialized()
         .await?;
     let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
-    let other = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let other = app
+        .start_thread(ThreadStartParams {
+            config: Some([("features.guardianv3.enabled".into(), json!(true))].into()),
+            ..Default::default()
+        })
+        .await?
+        .thread;
 
     let script = r#"for (const path of ["a", "b"]) await tools.exec_command({cmd: "git ls-files " + path});"#;
     let command = |id: &str| {

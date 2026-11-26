@@ -3,6 +3,7 @@
 
 #[path = "review_request.rs"]
 mod request;
+pub(super) use request::PreparedApproval;
 pub(super) use request::ReviewAuthorization;
 
 use crate::guardian_review::ReviewRetrieval;
@@ -227,7 +228,7 @@ impl ReviewInput {
     /// Assess the recorded call in a Guardian session separate from the actor.
     /// The parent can reuse that session across calls.
     /// The caller enforces the deadline and cancellation during setup.
-    pub(super) async fn assess_isolated(
+    pub(super) async fn assess_with_transcript_reviewer(
         self,
         deadline: ReviewDeadline,
         cancellation: &CancellationToken,

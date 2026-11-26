@@ -3,25 +3,37 @@
 
 use std::sync::Arc;
 
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_app_server_protocol::GuardianRootEvidence;
 use codex_app_server_protocol::GuardianRootEvidenceMessage;
 use codex_features::Feature;
 use codex_guardian_context::GuardianRootMessage;
+use codex_guardian_reviewer::GuardianAssessment;
 use codex_guardian_reviewer::GuardianReviewError;
+use codex_guardian_reviewer::GuardianReviewOutcome;
 use codex_guardian_reviewer::ReviewDeadline;
+use codex_guardian_reviewer::ReviewHost;
+use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ReviewDecision;
 use codex_tools::FunctionCallError;
 use codex_tools::ToolName;
 use tokio_util::sync::CancellationToken;
 
 use super::ApprovalRequestReasons;
 use super::GuardianReviewContext;
+use super::GuardianReviewOptions;
 use super::from_approval_action;
+use super::new_guardian_review_id;
+use super::review::PreparedApproval;
 use super::review::ReviewInput;
+use super::runtime::ReviewRuntime;
 use crate::context_manager::ContextManager;
+use crate::guardian_review::AttachedReviewer;
 use crate::guardian_review::GuardianReviewResult;
+use crate::guardian_review::RecordedReviewMode;
 use crate::mcp_tool_call;
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
@@ -43,7 +55,7 @@ pub(crate) async fn review_tool_call(
     session: &Arc<Session>,
     history: ContextManager,
     tool_call: &ResponseItem,
-    root_evidence: Option<GuardianRootEvidence>,
+    mode: RecordedReviewMode,
     cancellation: &CancellationToken,
 ) -> Result<GuardianReviewResult> {
     let is_supported_builtin = match tool_call {
@@ -89,7 +101,7 @@ pub(crate) async fn review_tool_call(
             "direct review does not support replaying request_permissions".into(),
         ));
     }
-    if let Some(evidence) = &root_evidence
+    if let Some(evidence) = mode.root_evidence()
         && !evidence.messages.iter().any(
             |entry| matches!(entry, GuardianRootEvidenceMessage::User(text) if !text.trim().is_empty()),
         )
@@ -98,7 +110,7 @@ pub(crate) async fn review_tool_call(
     }
     let deadline = ReviewDeadline::from_timeout(session.get_config().await.guardian_review_timeout);
 
-    let review = async {
+    let resolve_recorded_call = async |root_evidence: Option<GuardianRootEvidence>| {
         let turn = session
             .new_turn_with_default_settings(uuid::Uuid::now_v7().to_string(), Default::default())
             .await;
@@ -253,23 +265,140 @@ pub(crate) async fn review_tool_call(
                 retry: None,
             },
         };
-        let assessment = input
-            .assess_isolated(deadline, cancellation)
-            .await
-            .map_err(|error| match error {
-                GuardianReviewError::Cancelled => CodexErr::TurnAborted,
-                GuardianReviewError::Timeout => CodexErr::RequestTimeout,
-                other => CodexErr::Fatal(format!("Guardian assessment failed: {other:?}")),
-            })?;
+        Ok((invocation.call_id, input))
+    };
+    let review = async {
+        let (call_id, assessment) = match mode {
+            RecordedReviewMode::Transcript { root_evidence } => {
+                before_deadline(deadline, async {
+                    let (call_id, input) = resolve_recorded_call(root_evidence).await?;
+                    let assessment = input
+                        .assess_with_transcript_reviewer(deadline, cancellation)
+                        .await
+                        .map_err(assessment_error)?;
+                    Ok((call_id, assessment))
+                })
+                .await?
+            }
+            RecordedReviewMode::Attached(route_pending_history) => {
+                let (call_id, runtime, prepared) = before_deadline(deadline, async {
+                    let (call_id, input) = resolve_recorded_call(/*root_evidence*/ None).await?;
+                    let reviewer = session
+                        .services
+                        .thread_extension_data
+                        .get::<Arc<dyn AttachedReviewer>>()
+                        .ok_or_else(|| {
+                            CodexErr::Fatal("Guardian reviewer is unavailable".into())
+                        })?;
+                    route_pending_history.await.map_err(|error| {
+                        CodexErr::Fatal(format!("Guardian could not prepare the evidence: {error}"))
+                    })?;
+                    let (runtime, prepared) = prepare_attached_reviewer(
+                        input,
+                        Arc::clone(reviewer.as_ref()),
+                        deadline,
+                        cancellation,
+                    )
+                    .await?;
+                    Ok((call_id, runtime, prepared))
+                })
+                .await?;
+                let assessment =
+                    assess_with_attached_reviewer(runtime, prepared, deadline, cancellation)
+                        .await?;
+                (call_id, assessment)
+            }
+        };
         Ok(GuardianReviewResult {
-            call_id: invocation.call_id.into(),
+            call_id: call_id.into(),
             assessment,
         })
     };
     tokio::select! {
+        biased;
         _ = cancellation.cancelled() => Err(CodexErr::TurnAborted),
-        _ = deadline.wait() => Err(CodexErr::RequestTimeout),
         result = review => result,
+    }
+}
+
+async fn before_deadline<T>(
+    deadline: ReviewDeadline,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::select! {
+        biased;
+        _ = deadline.wait() => Err(CodexErr::RequestTimeout),
+        result = work => result,
+    }
+}
+
+/// The attached reviewer reads live evidence, so recorded evals use a dedicated
+/// thread and inject only between reviews.
+async fn prepare_attached_reviewer(
+    input: ReviewInput,
+    reviewer: Arc<dyn AttachedReviewer>,
+    deadline: ReviewDeadline,
+    cancellation: &CancellationToken,
+) -> Result<(ReviewRuntime, PreparedApproval)> {
+    let (version, history_reset) = input.session.history_reset().await;
+    if version != input.history.reset_version {
+        return Err(CodexErr::TurnAborted);
+    }
+    let runtime = ReviewRuntime {
+        attached_reviewer: Some(reviewer),
+        session: input.session,
+        history_reset,
+        context: input.context,
+        request: input.request.into(),
+        reasons: input.reasons,
+        options: GuardianReviewOptions {
+            require_guardian: true,
+            require_synchronous_review: true,
+            plugin_attribution_override: None,
+            approval_request_source: GuardianApprovalRequestSource::MainTurn,
+            external_cancel: Some(cancellation.clone()),
+        },
+    };
+    // A failure to prepare evidence is an RPC error, never a denial.
+    let id = new_guardian_review_id();
+    let (prepared, _) = runtime
+        .prepare(&id, GuardianReviewReason::Policy, deadline, cancellation)
+        .await
+        .map_err(|decision| match decision {
+            ReviewDecision::Abort => CodexErr::TurnAborted,
+            ReviewDecision::Denied { rejection } => CodexErr::Fatal(rejection),
+            other => CodexErr::Fatal(format!("Unexpected preparation decision: {other:?}")),
+        })?;
+    Ok((runtime, prepared))
+}
+
+/// Assess without publishing or caching approval.
+async fn assess_with_attached_reviewer(
+    runtime: ReviewRuntime,
+    prepared: PreparedApproval,
+    deadline: ReviewDeadline,
+    cancellation: &CancellationToken,
+) -> Result<GuardianAssessment> {
+    // The verdict runner owns the same deadline. Let it drain a stalled
+    // reconsideration and recover the first denial.
+    let (outcome, _, _) = runtime.attempt(&prepared, deadline, cancellation).await;
+    match outcome {
+        GuardianReviewOutcome::Completed(assessment) => Ok(assessment),
+        GuardianReviewOutcome::Error(GuardianReviewError::Session { message, .. }) => {
+            Err(CodexErr::Fatal(message))
+        }
+        GuardianReviewOutcome::Error(error) => Err(assessment_error(error)),
+        GuardianReviewOutcome::CachedApproval => Err(CodexErr::Fatal(
+            "Expected a fresh Guardian assessment".into(),
+        )),
+    }
+}
+
+fn assessment_error(error: GuardianReviewError) -> CodexErr {
+    match error {
+        GuardianReviewError::Cancelled => CodexErr::TurnAborted,
+        GuardianReviewError::Timeout => CodexErr::RequestTimeout,
+        other => CodexErr::Fatal(format!("Guardian assessment failed: {other:?}")),
     }
 }
 

@@ -206,7 +206,7 @@ fn guardian_exec_command_request(id: &str) -> GuardianApprovalRequest {
 }
 
 #[tokio::test]
-async fn isolated_review_returns_assessment_for_prepared_action() -> anyhow::Result<()> {
+async fn review_returns_assessment_for_prepared_action() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let assessment = serde_json::json!({
@@ -244,12 +244,12 @@ async fn isolated_review_returns_assessment_for_prepared_action() -> anyhow::Res
         session,
     };
     let result = input
-        .assess_isolated(
+        .assess_with_transcript_reviewer(
             codex_guardian_reviewer::ReviewDeadline::Unlimited,
             &CancellationToken::new(),
         )
         .await
-        .expect("isolated assessment");
+        .expect("Guardian assessment");
     assert_eq!(result, serde_json::from_value(assessment)?);
     let request = mock.single_request();
     let rendered = serde_json::to_string(&request.input())?;

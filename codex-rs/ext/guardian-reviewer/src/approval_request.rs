@@ -143,7 +143,11 @@ impl GuardianApprovalRequest {
         match self {
             Self::ExecCommand { .. } | Self::WriteStdin { .. } => GuardianScope::Shell,
             Self::ApplyPatch { .. } => GuardianScope::FileChanges,
-            Self::McpToolCall { server, .. } => GuardianScope::for_mcp_server(server),
+            Self::McpToolCall {
+                server,
+                connector_id,
+                ..
+            } => GuardianScope::for_mcp_connector(server, connector_id.as_deref()),
             Self::NetworkAccess { .. } => GuardianScope::Network,
             Self::RequestPermissions { .. } => GuardianScope::Permissions,
             Self::NativeToolCall { .. } => GuardianScope::NativeTool,
