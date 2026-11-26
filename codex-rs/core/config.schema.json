@@ -1135,9 +1135,6 @@
             "guardianv3": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
             },
-            "guardianv3_shadow": {
-              "type": "boolean"
-            },
             "hooks": {
               "type": "boolean"
             },
@@ -2553,7 +2550,7 @@
           "type": "integer"
         },
         "message_board_in_memory": {
-          "description": "Keep each fresh root's Guardian board in memory until the runtime closes. Defaults to false.",
+          "description": "Defaults to true for shadow boards and false for live boards. False disables shadow reviews.",
           "type": "boolean"
         },
         "reviewer": {
@@ -2564,6 +2561,10 @@
           "format": "uint32",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "shadow_enabled": {
+          "description": "Run shadow reviews alongside Guardian V2 without changing approval decisions. Ignored in project config.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -8533,9 +8534,6 @@
         },
         "guardianv3": {
           "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
-        },
-        "guardianv3_shadow": {
-          "type": "boolean"
         },
         "hooks": {
           "type": "boolean"

@@ -17,6 +17,8 @@ use codex_protocol::ThreadId;
 use tokio_util::task::TaskTracker;
 
 use super::ActorReviewer;
+use super::BoardSettings;
+use super::BoardStorage;
 use super::Host;
 use super::IntakeStart;
 use super::RootWorker;
@@ -112,11 +114,14 @@ impl ConfigContributor<Config> for Host {
 impl Host {
     fn attach_shadow(&self, thread: &ExtensionData, identity: &Actor, tree: &Arc<TreeDelivery>) {
         let mut actors = tree.actors.lock().unwrap_or_else(PoisonError::into_inner);
-        if tree.stop.is_cancelled() || tree.delivery.get().is_none() {
+        if tree.stop.is_cancelled() {
             return;
         }
+        let Some(board) = tree.board.get() else {
+            return;
+        };
         let cancellation = tree.stop.child_token();
-        let reviewer = self.reviewer(identity, tree, cancellation.clone());
+        let reviewer = self.reviewer(identity, tree, &board.retrieval, cancellation.clone());
         actors.retain(|actor| actor.strong_count() > 0);
         actors.push(Arc::downgrade(&reviewer));
         thread.insert_arc(Arc::clone(&reviewer));
@@ -189,7 +194,8 @@ impl Host {
                     }
                 }
                 let thread = root_thread.thread_extension_data();
-                host.activate(root, &tree, thread, start).await?;
+                let settings = BoardSettings::new(root_thread.config().await.as_ref(), BoardStorage::Memory);
+                host.activate(root, &tree, thread, start, &settings).await?;
                 host.attach_shadow(thread, &identity, &tree);
                 if !tree.stop.is_cancelled() {
                     let event_name = match start {

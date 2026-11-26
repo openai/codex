@@ -533,6 +533,8 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
     use core_test_support::load_guardian_policy_snapshot;
     use futures::FutureExt;
 
+    const ROUTING: &str = "Group deployment requests by service.";
+    const ROOT_GUIDANCE: &str = "Look for revocations in release channels.";
     type ReviewerChange = (ApprovalsReviewer, ApprovalsReviewer);
     struct RecordReviewerChange;
 
@@ -564,6 +566,16 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
         .with_config(|config| {
             config.features.enable(Feature::GuardianV2).unwrap();
             config.features.enable(Feature::GuardianV3Shadow).unwrap();
+            config.guardian_v3 = Some(Arc::new(codex_features::GuardianV3ConfigToml {
+                housekeeper: Some(codex_features::GuardianV3HousekeeperConfigToml {
+                    routing_instructions: Some(ROUTING.to_owned()),
+                    ..Default::default()
+                }),
+                reviewer: Some(codex_features::GuardianV3ReviewerConfigToml {
+                    retrieval_instructions: Some(ROOT_GUIDANCE.to_owned()),
+                }),
+                ..Default::default()
+            }));
             config.requested_approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config
@@ -614,12 +626,15 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
     };
     let turns = &registry.turn_lifecycle_contributors()[0];
     // Force the first lookup to fail, then retry with the live manager on a turn.
-    for (enrolled, history, expected) in [
-        (false, HistoryInitialization::New, false),
-        (true, HistoryInitialization::ColdResume, false),
-        (true, HistoryInitialization::WarmFork, false),
-        (true, HistoryInitialization::New, true),
+    for (enrolled, in_memory, history, expected) in [
+        (false, None, HistoryInitialization::New, false),
+        (true, Some(false), HistoryInitialization::New, false),
+        (true, None, HistoryInitialization::ColdResume, false),
+        (true, None, HistoryInitialization::WarmFork, false),
+        (true, None, HistoryInitialization::New, true),
     ] {
+        Arc::make_mut(config.guardian_v3.as_mut().context("root settings")?)
+            .message_board_in_memory = in_memory;
         if enrolled {
             config.features.enable(Feature::GuardianV3Shadow)?;
         }
@@ -678,9 +693,12 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
         agent_nickname: None,
         agent_role: None,
     });
+    // A child can lack the root's thread-start prompt override.
+    let mut child_config = config.clone();
+    child_config.guardian_v3 = None;
     lifecycle
         .on_thread_ready(ThreadReadyInput {
-            config: &config,
+            config: &child_config,
             session_source: &source,
             history_initialization: HistoryInitialization::WarmFork,
             history_mode: ThreadHistoryMode::Paginated,
@@ -691,6 +709,13 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
     let child_reviewer = child_store
         .get::<ShadowReviewer>()
         .context("child reviewer")?;
+    assert!(child_store.get::<super::RootWorker>().is_none());
+    for reviewer in [&old_reviewer, &child_reviewer] {
+        assert!(matches!(
+            reviewer.reviewer.retrieval(),
+            codex_core::guardian_review::ReviewRetrieval::Extension(prompt) if prompt.contains(ROOT_GUIDANCE)
+        ));
+    }
     if let Some((message_kib, expected_calls)) = overflow {
         use serde_json::json;
 
@@ -719,7 +744,7 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
             .map(|name| json!({"channel": name, "description": "Seed"}))
             .collect();
         let seed = json!({"routes": [channels], "descriptions": descriptions});
-        let _seed = mount_sse_once(
+        let seed_request = mount_sse_once(
             &server,
             sse(vec![
                 ev_assistant_message("seed", &seed.to_string()),
@@ -730,6 +755,12 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
         let mut routed = NamedTraceEvents::subscribe("guardian_v3.housekeeping_routed");
         append(/*order*/ 1, /*kib*/ 62).await?;
         routed.next().await?;
+        assert!(
+            seed_request
+                .single_request()
+                .instructions_text()
+                .contains(ROUTING)
+        );
         let query = codex_message_board::ChannelQuery {
             query: None,
             direction: codex_message_board::SortDirection::OldestFirst,
@@ -770,7 +801,6 @@ async fn shadow_intake_enrolls_only_new_opted_in_roots(
         test.codex.shutdown_and_wait().await?;
         return Ok(());
     }
-    assert!(child_store.get::<super::RootWorker>().is_none());
 
     // A terminal capture error closes admission for the whole board, even without metrics.
     test.thread_store

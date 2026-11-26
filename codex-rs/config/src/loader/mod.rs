@@ -1385,7 +1385,11 @@ fn sanitize_project_config(
             .get_mut("guardianv3")
             .and_then(TomlValue::as_table_mut)
         {
-            for key in ["max_instruction_tokens", "shadow_board_limit_mib"] {
+            for key in [
+                "max_instruction_tokens",
+                "shadow_board_limit_mib",
+                "shadow_enabled",
+            ] {
                 if guardian.remove(key).is_some() {
                     ignored_keys.push(format!("features.guardianv3.{key}"));
                 }
@@ -1416,7 +1420,8 @@ fn sanitize_project_config(
             "respect_system_proxy",
             "system_proxy_fallback",
             "credential_masking",
-            "guardianv3_shadow",
+            // A quoted dotted key is a literal feature name, outside the table above.
+            "guardianv3.shadow_enabled",
         ] {
             if features.remove(key).is_some() {
                 ignored_keys.push(format!("features.{key}"));

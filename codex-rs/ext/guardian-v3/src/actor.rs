@@ -122,13 +122,14 @@ impl ActorReviewer {
         if let Some(binding) = &state.binding {
             return Ok(binding.clone());
         }
-        let delivery = state
+        let published = state
             .tree
-            .delivery
+            .board
             .get()
             .ok_or(ReviewPreparationError::EvidenceUnavailable)?;
-        let binding = LiveRetrievalBinding::new(board, self.actor, self.path.clone(), delivery)
-            .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
+        let binding =
+            LiveRetrievalBinding::new(board, self.actor, self.path.clone(), &published.delivery)
+                .map_err(|_| ReviewPreparationError::EvidenceUnavailable)?;
         Ok(state.binding.insert(binding).clone())
     }
 
