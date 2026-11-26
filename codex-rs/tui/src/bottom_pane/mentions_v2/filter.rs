@@ -104,7 +104,10 @@ fn file_match_to_row(file_match: &FileMatch) -> SearchResult {
         description: None,
         mention_type,
         label_style: ThreadLabelStyle::Plain,
-        selection: Selection::File(file_match.path.clone()),
+        selection: Selection::File {
+            path: file_match.path.clone(),
+            full_path: file_match.full_path(),
+        },
         match_indices: file_match
             .indices
             .as_ref()

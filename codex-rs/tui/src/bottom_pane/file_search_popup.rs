@@ -1,8 +1,6 @@
 //! Display file completions while preserving the full path used for insertion.
 //! Narrow rows retain the filename; fuzzy highlights refer to the displayed text.
 
-use std::path::PathBuf;
-
 use codex_file_search::FileMatch;
 use codex_utils_fuzzy_match::fuzzy_match;
 use ratatui::buffer::Buffer;
@@ -96,11 +94,10 @@ impl FileSearchPopup {
         self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
     }
 
-    pub(crate) fn selected_match(&self) -> Option<&PathBuf> {
+    pub(crate) fn selected_match(&self) -> Option<&FileMatch> {
         self.state
             .selected_idx
             .and_then(|idx| self.matches.get(idx))
-            .map(|file_match| &file_match.path)
     }
 
     pub(crate) fn calculate_required_height(&self) -> u16 {
@@ -194,6 +191,7 @@ mod tests {
     use super::*;
     use codex_file_search::MatchType;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     fn file_match(index: usize) -> FileMatch {
         FileMatch {
@@ -262,7 +260,7 @@ mod tests {
                         text.contains("parser_alpha.rs") && text.contains("parser_beta.rs"),
                         "{text}"
                     );
-                    assert_eq!(popup.selected_match(), Some(path));
+                    assert_eq!(popup.selected_match().map(|m| &m.path), Some(path));
                     let unselected_y = if selected == 0 { 2 } else { 1 };
                     let parser_x = (0..width.saturating_sub(/*rhs*/ 5))
                         .find(|&x| {

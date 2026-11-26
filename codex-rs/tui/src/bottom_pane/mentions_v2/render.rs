@@ -410,12 +410,12 @@ fn file_name(row: &SearchResult) -> Option<&str> {
 
 fn file_name_start(row: &SearchResult) -> usize {
     match row.selection {
-        Selection::File(_) if row.mention_type.is_filesystem() => row
+        Selection::File { .. } if row.mention_type.is_filesystem() => row
             .display_name
             .rfind(['/', '\\'])
             .map(|idx| row.display_name[..idx + 1].chars().count())
             .unwrap_or(0),
-        Selection::File(_) | Selection::Tool { .. } => usize::MAX,
+        Selection::File { .. } | Selection::Tool { .. } => usize::MAX,
     }
 }
 

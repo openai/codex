@@ -25,7 +25,10 @@ fn rows() -> Vec<SearchResult> {
             description: None,
             mention_type: MentionType::File,
             label_style: ThreadLabelStyle::Plain,
-            selection: Selection::File(name.into()),
+            selection: Selection::File {
+                path: name.into(),
+                full_path: name.into(),
+            },
             match_indices: None,
             score: 0,
         });
@@ -177,7 +180,10 @@ fn fuzzy_matches_preserve_graphemes_when_truncated() {
         description: None,
         mention_type: MentionType::File,
         label_style: ThreadLabelStyle::Plain,
-        selection: Selection::File(path.into()),
+        selection: Selection::File {
+            path: path.into(),
+            full_path: path.into(),
+        },
         match_indices: Some(vec![0, 1]),
         score: 0,
     };
@@ -216,7 +222,10 @@ fn long_mentions_leave_room_for_distinguishing_parent_paths() {
             description: None,
             mention_type: MentionType::File,
             label_style: ThreadLabelStyle::Plain,
-            selection: Selection::File(name.into()),
+            selection: Selection::File {
+                path: name.into(),
+                full_path: name.into(),
+            },
             match_indices: None,
             score: 0,
         });

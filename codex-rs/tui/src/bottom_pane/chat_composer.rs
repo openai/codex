@@ -2322,11 +2322,12 @@ impl ChatComposer {
                     };
                 };
 
-                let sel_path = sel.to_string_lossy().to_string();
+                let full_path = sel.full_path();
+                let sel_path = sel.path.to_string_lossy().into_owned();
                 if let Some((token_range, _)) =
                     self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
                 {
-                    self.insert_selected_file_path(token_range, &sel_path);
+                    self.insert_selected_file_path(token_range, &sel_path, full_path);
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -2524,10 +2525,11 @@ impl ChatComposer {
                 .map(|(range, _)| range);
             if let (Some(selected), Some(token_range)) = (selected, token_range) {
                 match selected {
-                    MentionV2Selection::File(path) => {
+                    MentionV2Selection::File { path, full_path } => {
                         self.insert_selected_file_path(
                             token_range,
-                            path.to_string_lossy().as_ref(),
+                            &path.to_string_lossy(),
+                            full_path,
                         );
                     }
                     MentionV2Selection::Tool { insert_text, path } => {
@@ -2634,18 +2636,22 @@ impl ChatComposer {
         }
     }
 
-    fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
+    fn insert_selected_file_path(
+        &mut self,
+        token_range: Range<usize>,
+        selected_path: &str,
+        full_path: PathBuf,
+    ) {
         let started_edit = self.begin_direct_edit();
         let token_range = self.separate_completion_from_adjacent_element(token_range);
-        if Self::is_image_path(selected_path) {
-            let path_buf = PathBuf::from(selected_path);
-            match image::image_dimensions(&path_buf) {
+        if Self::is_image_path(selected_path) && full_path.is_file() {
+            match image::image_dimensions(&full_path) {
                 Ok((width, height)) => {
                     tracing::debug!("selected image dimensions={}x{}", width, height);
                     let start_idx = token_range.start;
                     self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
-                    self.attach_image(path_buf);
+                    self.attach_image(full_path);
                     self.advance_past_completion_separator();
                 }
                 Err(err) => {
@@ -5119,6 +5125,10 @@ mod snapshot_tests;
 #[cfg(test)]
 #[path = "chat_composer/mentions_layout_tests.rs"]
 mod mentions_layout_tests;
+
+#[cfg(test)]
+#[path = "chat_composer/image_completion_tests.rs"]
+mod image_completion_tests;
 
 #[cfg(test)]
 #[path = "chat_composer/skill_completion_tests.rs"]
@@ -10492,7 +10502,7 @@ mod tests {
         }
     }
 
-    fn complete_file(
+    pub(super) fn complete_file(
         composer: &mut ChatComposer,
         text: &str,
         cursor: usize,
@@ -10511,7 +10521,10 @@ mod tests {
             query.to_string(),
             vec![FileMatch {
                 score: 1,
-                path: selected_path,
+                path: selected_path
+                    .strip_prefix(&root)
+                    .unwrap_or(&selected_path)
+                    .to_path_buf(),
                 match_type: codex_file_search::MatchType::File,
                 root,
                 indices: None,
@@ -10550,7 +10563,11 @@ mod tests {
     fn adjacent_file_completion_inserts_leading_separator() {
         let (mut composer, _rx) = new_test_composer();
         configure_bound_plugin_left_of_unbound_plugin(&mut composer);
-        composer.insert_selected_file_path("@sample".len().."@sample@other".len(), "src/main.rs");
+        composer.insert_selected_file_path(
+            "@sample".len().."@sample@other".len(),
+            "src/main.rs",
+            "/tmp/src/main.rs".into(),
+        );
 
         assert_eq!(composer.current_text(), "@sample src/main.rs ");
     }
@@ -10569,7 +10586,8 @@ mod tests {
         let before = composer.draft_snapshot();
         composer.insert_selected_file_path(
             "@sample".len().."@sample@other".len(),
-            image_path.to_str().expect("UTF-8 path"),
+            "image.png",
+            image_path.clone(),
         );
 
         assert_eq!(composer.current_text(), "@sample [Image #1] ");

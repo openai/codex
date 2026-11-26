@@ -788,7 +788,7 @@ fn vim_replace_completion_preserves_suffix() {
                 composer.set_text_content(text.into(), Vec::new(), Vec::new());
                 composer.draft.textarea.set_cursor(cursor);
                 keys(composer, command);
-                composer.insert_selected_file_path(0.."@ma".len(), path);
+                composer.insert_selected_file_path(0.."@ma".len(), path, path.into());
                 composer.sync_popups();
                 assert_eq!(
                     (composer.current_text(), composer.current_cursor()),

@@ -10,7 +10,10 @@ const TAG_WIDTH: usize = "Plugin".len();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Selection {
-    File(PathBuf),
+    File {
+        path: PathBuf,
+        full_path: PathBuf,
+    },
     Tool {
         insert_text: String,
         path: Option<String>,
