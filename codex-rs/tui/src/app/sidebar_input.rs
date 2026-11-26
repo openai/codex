@@ -4,7 +4,6 @@
 use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
-use crate::sidebar_chooser;
 use crate::sidebar_chooser::ChooserAction;
 use crate::sidebar_tab_strip::SidebarTab;
 use crate::sidebar_tab_strip::TabTarget;
@@ -160,7 +159,8 @@ impl App {
                     .sidebar_targets
                     .iter()
                     .find(|(_, area)| area.contains(point));
-                let candidate = if frame.sidebar_input == current && self.pane_resize.is_none() {
+                let can_press = frame.sidebar_input == current && self.pane_resize.is_none();
+                let candidate = if can_press {
                     hit.zip(current)
                         .map(|(&(target, area), state)| SidebarPress {
                             parent: self.sidebar_parent(),
@@ -178,12 +178,9 @@ impl App {
                     if button == MouseButton::Left
                         && mouse.modifiers.is_empty()
                         && self.chooser_focus() == Some(PaneFocus::Main)
-                        && self.sidebar().is_some_and(|pane| pane.showing_file_path)
-                        && frame.sidebar_input == current
-                        && self.pane_resize.is_none()
-                        && frame.panel_area().is_some_and(|area| {
-                            sidebar_chooser::file_path_areas(area)[0].contains(point)
-                        })
+                        && over_chooser
+                        && can_press
+                        && hit.is_none()
                     {
                         self.sidebar_mut()
                             .show(SidebarContent::Chooser, PaneFocus::Sidebar);

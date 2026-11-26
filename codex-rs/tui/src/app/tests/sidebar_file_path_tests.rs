@@ -70,6 +70,17 @@ async fn sidebar_file_path_escape_requires_focus_but_mouse_back_does_not() -> Re
             Ok(())
         };
     click_back(&mut app, &mut tui, &mut server).await?;
+
+    // Click below the file list to resume keyboard navigation on the selected file.
+    app.focus_workspace_composer(&mut tui);
+    side_frame(&mut app, &mut tui, size)?;
+    let panel = app.conversation_frame.panel_area().unwrap();
+    let left = MouseButton::Left;
+    for kind in [MouseEventKind::Down(left), MouseEventKind::Up(left)] {
+        let event = mouse(kind, panel.right() - 1, panel.bottom() - 2);
+        boxed_future!(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+    }
+    assert_eq!(app.chooser_focus(), Some(PaneFocus::Sidebar));
     Box::pin(press(&mut app, &mut tui, &mut server, path)).await?;
     let frame = side_frame(&mut app, &mut tui, size)?;
     insta::assert_snapshot!(footer(&frame), @"esc back · ↓ scroll");
