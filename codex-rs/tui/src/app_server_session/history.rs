@@ -1,6 +1,7 @@
 //! Bounded app-server transcript loading for resume, fork, and transcript views.
 
 use codex_app_server_protocol::ThreadItem;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::AppServerSession;
@@ -187,11 +188,9 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         before_turn_id: String,
-        retained_turns: &[Turn],
     ) -> std::result::Result<ThreadRevertResponse, codex_app_server_client::TypedRequestError> {
         let request_id = self.next_request_id();
-        let response: ThreadRevertResponse = self
-            .request_handle
+        self.request_handle
             .request_typed(ClientRequest::ThreadRevert {
                 request_id,
                 params: ThreadRevertParams {
@@ -199,7 +198,57 @@ impl AppServerSession {
                     before_turn_id,
                 },
             })
-            .await?;
+            .await
+    }
+
+    /// A revert cuts the rollout in recording order. Even an earlier turn can lose
+    /// a late result, so only keep loaded items present in the surviving suffix.
+    pub(crate) async fn refresh_reverted_history(
+        &mut self,
+        thread_id: ThreadId,
+        response: &ThreadRevertResponse,
+        retained_turns: &mut [Turn],
+    ) -> Result<()> {
+        let mut loaded = HashMap::new();
+        for (index, turn) in retained_turns.iter().enumerate() {
+            for item in &turn.items {
+                loaded.insert((turn.id.as_str(), item.id()), index);
+            }
+        }
+        let mut surviving = vec![Vec::new(); retained_turns.len()];
+        let mut remaining = loaded.len();
+        let mut cursor = response.items_backwards_cursor.clone();
+        while remaining > 0 && cursor.is_some() {
+            let limit = remaining.min(HISTORY_ITEM_PAGE_LIMIT as usize) as u32;
+            let page = self
+                .thread_items_page(thread_id, /*turn_id*/ None, cursor, limit)
+                .await?;
+            if page.data.is_empty() {
+                break;
+            }
+            remaining = remaining.saturating_sub(page.data.len());
+            cursor = page.next_cursor;
+            for entry in page.data {
+                if let Some(index) = loaded.get(&(entry.turn_id.as_str(), entry.item.id())) {
+                    surviving[*index].push(ThreadItem::try_from(entry)?);
+                }
+            }
+        }
+        for (turn, mut items) in retained_turns.iter_mut().zip(surviving) {
+            items.reverse();
+            let is_prompt =
+                |item: &&ThreadItem| matches!(item.payload, ThreadItemPayload::UserMessage { .. });
+            if !turn
+                .items
+                .iter()
+                .filter(is_prompt)
+                .map(ThreadItem::id)
+                .eq(items.iter().filter(is_prompt).map(ThreadItem::id))
+            {
+                color_eyre::eyre::bail!("retained prompts no longer match the reverted thread");
+            }
+            turn.items = items;
+        }
         // Older cursors in the retained prefix remain valid. If the entire displayed window
         // disappeared, resume paging at the replacement history's end instead.
         if retained_turns.iter().all(|turn| turn.items.is_empty()) {
@@ -215,7 +264,7 @@ impl AppServerSession {
         } else if let Some(page) = self.history_pagination.get_mut(&thread_id) {
             page.loading_older = false;
         }
-        Ok(response)
+        Ok(())
     }
 
     /// A recovery snapshot is complete only after all item and turn metadata pages are exhausted.

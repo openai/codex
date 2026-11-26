@@ -566,47 +566,76 @@ impl App {
     }
 }
 
+/// Keep a boundary for each paged turn, including metadata-only gaps.
+pub(crate) fn loaded_prompt_boundaries(turns: &[Turn]) -> Vec<(String, Option<String>)> {
+    // When we attach before the active turn's first item, its prompt arrives
+    // through live notifications. It belongs after the retained history.
+    let turns = match turns.split_last() {
+        Some((tail, earlier)) if tail.status == TurnStatus::InProgress && tail.items.is_empty() => {
+            earlier
+        }
+        _ => turns,
+    };
+    turns
+        .iter()
+        .map(|turn| {
+            (
+                turn.id.clone(),
+                turn.items.first().map(|item| item.id().to_string()),
+            )
+        })
+        .collect()
+}
+
 /// Find the persisted turn that contains a selected transcript prompt.
 ///
 /// Replay hides review prompts and other display-empty inputs, so the selected ordinal must be
 /// resolved against the same visible projection before restoring its canonical mention bindings.
-/// `start_item` anchors a partially loaded transcript within authoritative history; earlier
-/// user inputs still establish whether the selected input was a mid-turn steer.
+/// On success, retain only the displayed prefix preceding the selected turn.
 ///
 /// A turn can contain multiple user messages when it was steered. Only its initial prompt can be
 /// reopened independently because app-server cannot revert in the middle of a turn.
 pub(crate) fn backtrack_revert_before_turn_id(
-    turns: &[Turn],
-    start_item: Option<&(String, String)>,
+    turns: &mut Vec<Turn>,
+    loaded: &[(String, Option<String>)],
     nth_user_message: usize,
     prompt: &mut UserMessage,
 ) -> Result<String> {
-    let (start_turn, start_item) = match start_item {
-        Some((turn_id, item_id)) => turns
+    // Items are paged in completion order. A late result can leave multiple turns
+    // partially loaded, so each turn has its own boundary. New live turns follow
+    // the loaded tail and have no clipped items.
+    let mut offsets = vec![0; turns.len()];
+    if let Some((tail, _)) = loaded.last() {
+        let boundary_missing =
+            || color_eyre::eyre::eyre!("the loaded history boundary no longer exists");
+        let tail_index = turns
             .iter()
-            .position(|turn| turn.id == *turn_id)
-            .and_then(|index| {
-                turns[index]
+            .position(|turn| turn.id == *tail)
+            .ok_or_else(boundary_missing)?;
+        let mut loaded = loaded.iter().rev();
+        for index in (0..=tail_index).rev() {
+            let turn = &turns[index];
+            offsets[index] = match loaded.next() {
+                Some((id, _)) if *id != turn.id => return Err(boundary_missing()),
+                Some((_, Some(item_id))) => turn
                     .items
                     .iter()
                     .position(|item| item.id() == item_id)
-                    .map(|item| (index, item))
-            })
-            .ok_or_else(|| {
-                color_eyre::eyre::eyre!("the loaded history boundary no longer exists")
-            })?,
-        None => (0, 0),
-    };
+                    .ok_or_else(boundary_missing)?,
+                _ => turn.items.len(),
+            };
+        }
+        if loaded.any(|(_, item)| item.is_some()) {
+            return Err(boundary_missing());
+        }
+    }
     let mut visible_user_messages_seen = 0_usize;
     let mut review_mode = false;
-    for (turn_index, turn) in turns.iter().enumerate().skip(start_turn) {
-        let hidden_nested_review_turn = turn_index > start_turn
+    for (turn_index, turn) in turns.iter().enumerate() {
+        let first_item = offsets[turn_index];
+        let hidden_nested_review_turn = turn_index > 0
             && turns.get(turn_index - 1).is_some_and(|previous| {
-                let previous_items = if turn_index - 1 == start_turn {
-                    &previous.items[start_item..]
-                } else {
-                    &previous.items
-                };
+                let previous_items = &previous.items[offsets[turn_index - 1]..];
                 is_hidden_nested_review_turn(previous, turn)
                     && previous_items.iter().any(|item| {
                         matches!(&item.payload, ThreadItemPayload::EnteredReviewMode { .. })
@@ -615,11 +644,6 @@ pub(crate) fn backtrack_revert_before_turn_id(
                         matches!(&item.payload, ThreadItemPayload::ExitedReviewMode { .. })
                     })
             });
-        let first_item = if turn_index == start_turn {
-            start_item
-        } else {
-            0
-        };
         // Clipped items affect whether an input is a steer, but were never displayed and
         // therefore must not change the transcript's review visibility or prompt ordinals.
         let mut user_messages_in_turn = turn
@@ -627,8 +651,8 @@ pub(crate) fn backtrack_revert_before_turn_id(
             .take(first_item)
             .filter(|item| matches!(item, ThreadItemPayload::UserMessage { .. }))
             .count();
-        for item in turn.item_payloads().skip(first_item) {
-            let content = match item {
+        for item in &turn.items[first_item..] {
+            let content = match &item.payload {
                 ThreadItemPayload::EnteredReviewMode { .. } => {
                     review_mode = true;
                     continue;
@@ -682,10 +706,14 @@ pub(crate) fn backtrack_revert_before_turn_id(
             }
             prompt.mention_bindings = mention_bindings_from_user_inputs(content, &display.message);
 
-            return Ok(turn.id.clone());
+            let before_turn_id = turn.id.clone();
+            turns.truncate(turn_index);
+            for (turn, offset) in turns.iter_mut().zip(offsets) {
+                turn.items.drain(..offset);
+            }
+            return Ok(before_turn_id);
         }
     }
-
     bail!("the selected prompt was not found in the persisted thread");
 }
 
@@ -857,7 +885,7 @@ mod tests {
             text: "\u{0007}".into(),
             text_elements: Vec::new(),
         }];
-        let turns = vec![
+        let mut turns = vec![
             hidden,
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             turn(
@@ -870,8 +898,8 @@ mod tests {
 
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns.clone(),
+                &[],
                 /*nth_user_message*/ 0,
                 &mut prompt("turn-1-prompt-0"),
             )
@@ -880,8 +908,8 @@ mod tests {
         );
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns,
+                &[],
                 /*nth_user_message*/ 1,
                 &mut prompt("turn-2-prompt-0"),
             )
@@ -892,15 +920,15 @@ mod tests {
 
     #[test]
     fn backtrack_revert_before_turn_id_rejects_mid_turn_steers() {
-        let turns = vec![turn(
+        let mut turns = vec![turn(
             "turn-1",
             TurnStatus::Completed,
             /*user_messages*/ 2,
         )];
 
         let error = backtrack_revert_before_turn_id(
-            &turns,
-            /*start_item*/ None,
+            &mut turns,
+            &[],
             /*nth_user_message*/ 1,
             &mut prompt("turn-1-prompt-1"),
         )
@@ -913,16 +941,62 @@ mod tests {
     }
 
     #[test]
+    fn backtrack_revert_skips_unloaded_prompts_after_a_late_item() {
+        // The page contains a late item from the first turn, none of the
+        // second, and only the end of the third. The fourth repeats the second.
+        let mut turns = vec![
+            turn("first", TurnStatus::Completed, /*user_messages*/ 1),
+            turn("second", TurnStatus::Completed, /*user_messages*/ 1),
+            turn("third", TurnStatus::Completed, /*user_messages*/ 1),
+            turn("fourth", TurnStatus::Interrupted, /*user_messages*/ 1),
+        ];
+        turns[3].items = turns[1].items.clone();
+        for index in [0, 2] {
+            turns[index]
+                .items
+                .push(ThreadItem::untimed(ThreadItemPayload::ContextCompaction {
+                    id: "last".into(),
+                }));
+        }
+        let mut expected = turns[..3].to_vec();
+        for turn in &mut expected {
+            turn.items.remove(0);
+        }
+        // The fourth prompt arrived live after the TUI attached to the active turn.
+        let mut snapshot = expected.clone();
+        snapshot.push(turn(
+            "fourth",
+            TurnStatus::InProgress,
+            /*user_messages*/ 0,
+        ));
+        let loaded = loaded_prompt_boundaries(&snapshot);
+        assert_eq!(
+            backtrack_revert_before_turn_id(
+                &mut turns,
+                &loaded,
+                /*nth_user_message*/ 0,
+                &mut prompt("second-prompt-0"),
+            )
+            .expect("edit the visible copy"),
+            "fourth"
+        );
+        assert_eq!(turns, expected);
+    }
+
+    #[test]
     fn backtrack_revert_partial_history_does_not_make_a_steer_editable() {
-        let turns = vec![turn(
+        let mut turns = vec![turn(
             "turn-1",
             TurnStatus::Completed,
             /*user_messages*/ 2,
         )];
-        let start_item = (turns[0].id.clone(), turns[0].items[1].id().to_string());
+        let start_item = (
+            turns[0].id.clone(),
+            Some(turns[0].items[1].id().to_string()),
+        );
         let error = backtrack_revert_before_turn_id(
-            &turns,
-            Some(&start_item),
+            &mut turns,
+            &[start_item],
             /*nth_user_message*/ 0,
             &mut prompt("turn-1-prompt-1"),
         )
@@ -935,7 +1009,7 @@ mod tests {
 
     #[test]
     fn backtrack_revert_before_turn_id_rejects_in_progress_and_missing_prompts() {
-        let turns = vec![turn(
+        let mut turns = vec![turn(
             "turn-1",
             TurnStatus::InProgress,
             /*user_messages*/ 1,
@@ -943,8 +1017,8 @@ mod tests {
 
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns,
+                &[],
                 /*nth_user_message*/ 0,
                 &mut prompt("turn-1-prompt-0"),
             )
@@ -954,8 +1028,8 @@ mod tests {
         );
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns,
+                &[],
                 /*nth_user_message*/ 1,
                 &mut prompt("missing prompt"),
             )
@@ -964,15 +1038,15 @@ mod tests {
             "the selected prompt was not found in the persisted thread"
         );
 
-        let completed_turns = vec![turn(
+        let mut completed_turns = vec![turn(
             "turn-1",
             TurnStatus::Completed,
             /*user_messages*/ 1,
         )];
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &completed_turns,
-                /*start_item*/ None,
+                &mut completed_turns,
+                &[],
                 /*nth_user_message*/ 0,
                 &mut prompt("different prompt"),
             )
@@ -1002,7 +1076,7 @@ mod tests {
                 id: "review-end".to_string(),
                 review: "review complete".to_string(),
             }));
-        let turns = vec![
+        let mut turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             review_turn,
             turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1),
@@ -1010,8 +1084,8 @@ mod tests {
 
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns.clone(),
+                &[],
                 /*nth_user_message*/ 1,
                 &mut prompt("turn-2-prompt-0"),
             )
@@ -1019,11 +1093,14 @@ mod tests {
             "turn-2".to_string()
         );
         // This loaded page starts after the review marker, so its review prompt is visible.
-        let start_item = (turns[1].id.clone(), turns[1].items[1].id().to_string());
+        let start_item = (
+            turns[1].id.clone(),
+            Some(turns[1].items[1].id().to_string()),
+        );
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                Some(&start_item),
+                &mut turns,
+                &[start_item],
                 /*nth_user_message*/ 1,
                 &mut prompt("turn-2-prompt-0"),
             )
@@ -1085,7 +1162,7 @@ mod tests {
             &review_turn,
             &interrupted_steered_turn,
         ));
-        let turns = vec![
+        let mut turns = vec![
             review_turn,
             review_child_turn,
             turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1),
@@ -1093,8 +1170,8 @@ mod tests {
 
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns,
+                &[],
                 /*nth_user_message*/ 0,
                 &mut prompt("turn-2-prompt-0"),
             )
@@ -1128,7 +1205,7 @@ mod tests {
                 },
             ],
         })];
-        let turns = vec![
+        let mut turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             selected_turn,
         ];
@@ -1136,8 +1213,8 @@ mod tests {
 
         assert_eq!(
             backtrack_revert_before_turn_id(
-                &turns,
-                /*start_item*/ None,
+                &mut turns,
+                &[],
                 /*nth_user_message*/ 1,
                 &mut selected_prompt,
             )

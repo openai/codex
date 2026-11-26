@@ -11744,13 +11744,31 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
     }
 
     let source_thread_id = ThreadId::from_string(&source_thread_id)?;
+    // The only loaded item from turn-0 was recorded after turn-3 began.
+    // The first rewind drops it, so it cannot anchor the second rewind.
+    codex_rollout::append_rollout_item_to_path(
+        &source_path,
+        &RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
+            thread_id: source_thread_id,
+            turn_id: "turn-0".into(),
+            item: TurnItem::Reasoning(codex_protocol::items::ReasoningItem {
+                id: "late-result".into(),
+                summary_text: Vec::new(),
+                raw_content: Vec::new(),
+            }),
+            started_at_ms: None,
+            completed_at_ms: 0,
+        })),
+    )
+    .await?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
     // Bound fixture hydration independently from the owned viewport exercised below.
     // Inline hydration's row cap leaves the oldest prompt on an unloaded page.
     let mut local_settings = crate::local_settings::LocalSettings::from(&config);
     local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     local_settings.tui.alternate_screen = codex_config::types::AltScreenMode::Never;
-    local_settings.tui.terminal_resize_reflow_max_rows = Some(2);
+    local_settings.tui.terminal_resize_reflow_max_rows = Some(3);
     let started = app_server
         .resume_thread(
             &local_settings,

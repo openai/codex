@@ -986,15 +986,12 @@ impl App {
                 let selection: Result<(String, Vec<Turn>)> = async {
                     let channel = self.thread_event_channels.get(&thread_id)
                         .ok_or_else(|| color_eyre::eyre::eyre!("the selected thread is no longer available"))?;
-                    let (start_item, loaded_tail, latest_turn_id) = {
+                    let (loaded, latest_turn_id) = {
                         let store = channel.store.lock().await;
-                        (
-                            store.turns.iter().find_map(|turn| turn.items.first()
-                                .map(|item| (turn.id.clone(), item.id().to_string()))),
-                            store.turns.last().map(|turn| turn.id.clone()),
-                            store.latest_turn_id.clone(),
-                        )
+                        let loaded = crate::app_backtrack::loaded_prompt_boundaries(&store.turns);
+                        (loaded, store.latest_turn_id.clone())
                     };
+                    let anchor = loaded.iter().find(|(_, item)| item.is_some()).or_else(|| loaded.last());
                     let mut thread = app_server.thread_read(thread_id, /*include_turns*/ false).await?;
                     app_server.hydrate_initial_thread_history(
                         &mut thread,
@@ -1002,45 +999,23 @@ impl App {
                         /*item_cursor*/ None,
                         /*config*/ None,
                         /*local_settings*/ None,
-                        start_item.as_ref().map(|(turn_id, _)| turn_id).or(loaded_tail.as_ref()).map_or(
+                        anchor.map_or(
                             crate::app_server_session::HistoryHydrationScope::Complete,
-                            |turn_id| crate::app_server_session::HistoryHydrationScope::ThroughTurn(turn_id),
+                            |(turn_id, _)| crate::app_server_session::HistoryHydrationScope::ThroughTurn(turn_id),
                         ),
                     ).await?;
                     if thread.turns.last().map(|turn| &turn.id) != latest_turn_id.as_ref() {
                         color_eyre::eyre::bail!("thread history changed; reload the session before editing this prompt");
                     }
-                    // With no retained visible items, the next prompt follows the metadata-only tail.
-                    let start_item = start_item.or_else(|| loaded_tail.as_ref().and_then(|tail| {
-                        thread.turns.iter().position(|turn| &turn.id == tail).and_then(|index| {
-                            thread.turns[index + 1..].iter().find_map(|turn| turn.items.first()
-                                .map(|item| (turn.id.clone(), item.id().to_string())))
-                        })
-                    }));
                     let before_turn_id = crate::app_backtrack::backtrack_revert_before_turn_id(
-                        &thread.turns,
-                        start_item.as_ref(),
+                        &mut thread.turns,
+                        &loaded,
                         nth_user_message,
                         &mut prompt,
                     )?;
-                    // Keep the store aligned with the displayed prefix, including retained live turns.
-                    let cut = thread.turns.iter().position(|turn| turn.id == before_turn_id)
-                        .ok_or_else(|| color_eyre::eyre::eyre!("selected turn disappeared"))?;
-                    thread.turns.truncate(cut);
-                    if let Some((turn_id, item_id)) = &start_item {
-                        for turn in &mut thread.turns {
-                            if &turn.id == turn_id {
-                                if let Some(index) = turn.items.iter().position(|item| item.id() == item_id) {
-                                    turn.items.drain(..index);
-                                }
-                                break;
-                            }
-                            turn.items.clear();
-                        }
-                    }
                     Ok((before_turn_id, thread.turns))
                 }.await;
-                let (before_turn_id, retained_turns) = match selection {
+                let (before_turn_id, mut retained_turns) = match selection {
                     Ok(selection) => selection,
                     Err(err) => {
                         self.restore_backtrack_prompt_after_revert_error(prompt, err);
@@ -1048,7 +1023,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
                 };
-                let reverted = match app_server.revert_thread(thread_id, before_turn_id, &retained_turns).await {
+                let reverted = match app_server.revert_thread(thread_id, before_turn_id).await {
                     Ok(reverted) => reverted,
                     Err(err) => {
                     // Validation and unsupported-method errors leave history unchanged. Other
@@ -1082,6 +1057,8 @@ impl App {
                     Err(color_eyre::eyre::eyre!("app-server disconnected"))
                 }).await
                     .wrap_err("history was reverted, but refreshing the session timed out; resume this session to reload it")??;
+                app_server.refresh_reverted_history(thread_id, &reverted, &mut retained_turns).await
+                    .wrap_err("history was reverted, but refreshing retained items failed; resume this session to reload it")?;
                 // Preserve the widget and unrelated threads; only replace this replay store.
                 self.chat_widget.restore_thread_input_state(
                     /*input_state*/ None,
