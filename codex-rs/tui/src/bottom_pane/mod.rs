@@ -281,6 +281,7 @@ pub(crate) use chat_composer::ShellPrefixHandling;
 pub(crate) use chat_composer_history::HistoryEntry;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::status_indicator_widget::StatusHeader;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 #[cfg(test)]
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
@@ -731,6 +732,10 @@ impl BottomPane {
         self.status.as_ref()
     }
 
+    pub(crate) fn status_widget_mut(&mut self) -> Option<&mut StatusIndicatorWidget> {
+        self.status.as_mut()
+    }
+
     pub(crate) fn status_elapsed(&self) -> Option<Duration> {
         self.is_task_running
             .then(|| self.status_timer.elapsed_at(Instant::now()))
@@ -1167,6 +1172,9 @@ impl BottomPane {
     fn pre_draw_tick_at(&mut self, now: Instant) {
         self.composer.sync_popups();
         self.maybe_show_delayed_prompts_at(now);
+        if let Some(status) = &mut self.status {
+            status.prepare_frame(now);
+        }
         self.tick_active_view(now);
         self.schedule_active_view_frame();
     }
@@ -1371,7 +1379,7 @@ impl BottomPane {
     /// was updated and requested a redraw.
     pub(crate) fn update_status(
         &mut self,
-        header: String,
+        header: impl Into<StatusHeader>,
         details: Option<String>,
         details_capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,

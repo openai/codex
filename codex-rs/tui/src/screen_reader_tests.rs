@@ -107,6 +107,7 @@ async fn persisted_default_loads_and_renders_without_animation() -> anyhow::Resu
     use crate::app_event_sender::AppEventSender;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::render::renderable::Renderable;
+    use crate::status_indicator_widget::StatusHeader;
     use crate::status_indicator_widget::StatusIndicatorWidget;
     use crate::status_indicator_widget::StatusTimer;
     use crate::tui::FrameRequester;
@@ -135,7 +136,14 @@ async fn persisted_default_loads_and_renders_without_animation() -> anyhow::Resu
         config.animations,
         Default::default(),
     );
-    status.update_header("Reading the terminal output".into());
+    status.update_header(
+        StatusHeader::from_summary(
+            /*item_id*/ None,
+            /*part*/ 0,
+            "Reading the terminal output",
+        )
+        .unwrap(),
+    );
     let mut timer = StatusTimer::default();
     timer.pause_at(std::time::Instant::now());
     let mut terminal = Terminal::new(TestBackend::new(/*width*/ 60, /*height*/ 1))?;

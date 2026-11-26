@@ -5392,13 +5392,16 @@ async fn reasoning_delta_redraws_when_latest_usable_line_changes() {
 
     chat.on_agent_reasoning_delta(" files**".to_string());
     assert!(draw_rx.try_recv().is_ok());
-    assert_eq!(chat.reasoning_header.as_deref(), Some("Checking files"));
+    assert_eq!(
+        chat.reasoning_header.as_ref().unwrap().text,
+        "Checking files"
+    );
 
     chat.on_agent_reasoning_delta("\nPreparing a response".to_string());
     assert!(draw_rx.try_recv().is_ok());
     assert_eq!(
-        chat.reasoning_header.as_deref(),
-        Some("Preparing a response")
+        chat.reasoning_header.as_ref().unwrap().text,
+        "Preparing a response"
     );
     chat.on_agent_reasoning_delta("".to_string());
     assert!(matches!(
@@ -5423,7 +5426,10 @@ async fn reasoning_delta_does_not_double_schedule_visible_status_redraw() {
 
     chat.on_agent_reasoning_delta("**Checking files**".to_string());
 
-    assert_eq!(chat.reasoning_header.as_deref(), Some("Checking files"));
+    assert_eq!(
+        chat.reasoning_header.as_ref().unwrap().text,
+        "Checking files"
+    );
     assert!(draw_rx.try_recv().is_ok());
     assert!(matches!(
         draw_rx.try_recv(),

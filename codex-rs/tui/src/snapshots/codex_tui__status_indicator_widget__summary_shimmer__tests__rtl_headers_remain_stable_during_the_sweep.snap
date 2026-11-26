@@ -7,6 +7,9 @@ expression: headers
         Span::from("שלום עולם").dim(),
     ],
     [
+        Span::from("Checking שלום").dim(),
+    ],
+    [
         Span::from("Checking ש\u{5b8}\u{5c1}לו\u{5b9}ם (test.rs) 123").dim(),
     ],
     [

@@ -33,6 +33,66 @@ fn complete(chat: &mut ChatWidget, id: &str) {
     );
 }
 
+fn assert_heading(chat: &mut ChatWidget, start: Instant, times_ms: &[u64], expected: &str) {
+    let row = chat.bottom_pane.status_widget_mut().unwrap();
+    for &ms in times_ms {
+        let frame = row.render_heading_at(start + Duration::from_millis(ms));
+        assert_eq!(frame, expected, "at {ms} ms");
+    }
+}
+
+#[tokio::test]
+async fn finishes_the_visible_heading_when_the_next_heading_arrives_before_a_draw() {
+    for chunks in [
+        &["ing files", "\nRunning tests"][..],
+        &["ing files\nRunning tests"],
+        // A second line with the same prefix is still a distinct heading.
+        &["ing files\nReading files", " again", "\nRunning tests"],
+    ] {
+        let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.on_task_started();
+        handle_agent_reasoning_started(&mut chat, "first");
+        delta(&mut chat, "first", "Starting");
+        delta(&mut chat, "first", "\nRead");
+        let start = Instant::now();
+        assert_heading(&mut chat, start, &[0], "Read");
+        for chunk in chunks {
+            delta(&mut chat, "first", chunk);
+        }
+        assert_eq!(
+            chat.bottom_pane.status_widget().unwrap().header(),
+            "Running tests"
+        );
+        // The first draw after the tick is 30 ms late. The second tick is still at 7000 ms.
+        assert_heading(&mut chat, start, &[32, 3499, 3530], "Reading files");
+        delta(&mut chat, "first", "\nEditing");
+        assert_heading(&mut chat, start, &[4270, 6999], "Running tests");
+        delta(&mut chat, "first", "\nTesting");
+        assert_heading(&mut chat, start, &[7000], "Running tests");
+        assert_heading(&mut chat, start, &[7740], "Testing");
+        delta(&mut chat, "first", "\nFinishing");
+        chat.on_stream_error("Reconnecting".into(), /*additional_details*/ None);
+        assert_heading(&mut chat, start, &[7800, 11000], "Reconnecting");
+    }
+}
+
+#[tokio::test]
+async fn a_split_bold_opener_waits_for_the_heading_text() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    handle_agent_reasoning_started(&mut chat, "first");
+    let start = Instant::now();
+    for (ms, chunk) in [(0, "*"), (32, "*Reading files*")] {
+        delta(&mut chat, "first", chunk);
+        assert_heading(&mut chat, start, &[ms], "Working");
+    }
+    // Repeating Working between draws should preserve the handoff from that label.
+    chat.restore_reasoning_status_header();
+    delta(&mut chat, "first", "*");
+    assert_heading(&mut chat, start, &[64], "Working");
+    assert_heading(&mut chat, start, &[1000], "Reading files");
+}
+
 #[tokio::test]
 async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;

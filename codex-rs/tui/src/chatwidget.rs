@@ -252,6 +252,7 @@ use crate::status::RateLimitSnapshotDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::status_indicator_widget::StatusHeader;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod activity_groups;
@@ -679,8 +680,8 @@ pub(crate) struct ChatWidget {
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
-    // Caches the first completed bold header so later deltas do not rescan the whole block.
-    reasoning_header: Option<String>,
+    // Keep the last usable heading through tools and empty reasoning items.
+    reasoning_header: Option<StatusHeader>,
     // Preserves reasoning-summary part boundaries for transcript-only recording.
     reasoning_summary_parts: Vec<String>,
     status_state: StatusState,

@@ -39,7 +39,7 @@ pub(super) fn on_metadata(chat: &mut ChatWidget, notification: TurnModerationMet
         chat.clear_safety_buffering();
         chat.bottom_pane.ensure_status_indicator();
         chat.set_status_header(
-            "I can’t help with this request. Preparing alternative suggestions…".into(),
+            "I can’t help with this request. Preparing alternative suggestions…".to_owned(),
         );
     }
 }

@@ -1,0 +1,14 @@
+---
+source: tui/src/status_indicator_widget/effects_tests.rs
+expression: "frames.join(\"\\n\")"
+---
+99 ms
+"Working (0s) · running hook   "
+
+100 ms
+"Ch                    (0s)    "
+"  └ running hook              "
+
+1000 ms
+"Checking dependencies (1s)    "
+"  └ running hook              "

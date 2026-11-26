@@ -13,24 +13,23 @@ fn streamed_message_matches_completed(streamed: &str, completed: &str) -> bool {
     streamed == completed || streamed.strip_suffix('\n') == Some(completed)
 }
 
-fn latest_summary_line(text: &str) -> Option<String> {
-    text.lines().rev().find_map(|line| {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("<!--") {
-            return None;
-        }
-        let line = line.trim_start_matches('#').trim();
-        let line = if let Some(stripped) = line.strip_prefix("**") {
-            let (bold, trailing) = stripped.split_once("**")?;
-            format!("{bold}{trailing}")
-        } else {
-            line.to_string()
-        };
-        (!line.is_empty()).then_some(line)
-    })
-}
-
 impl ChatWidget {
+    /// Finish the visible line and remember the latest one for the next sample.
+    fn refresh_reasoning_heading(&mut self) -> bool {
+        let item_id = self.status_state.reasoning_item_id.as_deref();
+        let part = self.reasoning_summary_parts.len();
+        if let Some(row) = self.bottom_pane.status_widget_mut() {
+            row.extend_reasoning(item_id, part, &self.reasoning_buffer);
+        }
+        if let Some(heading) = StatusHeader::from_summary(item_id, part, &self.reasoning_buffer)
+            && self.reasoning_header.as_ref() != Some(&heading)
+        {
+            self.reasoning_header = Some(heading);
+            return true;
+        }
+        false
+    }
+
     pub(super) fn on_reasoning_item_started(&mut self, id: String) {
         if self.status_state.reasoning_resume_turn_id.take().is_some()
             && self.status_state.reasoning_item_id.as_ref() != Some(&id)
@@ -54,8 +53,7 @@ impl ChatWidget {
         {
             return;
         }
-        self.reasoning_header =
-            latest_summary_line(&self.reasoning_buffer).or(self.reasoning_header.take());
+        self.refresh_reasoning_heading();
         if let Some(header) = self.reasoning_header.clone() {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
             self.set_status_header(header);
@@ -457,28 +455,28 @@ impl ChatWidget {
             return;
         }
 
-        self.reasoning_header =
-            latest_summary_line(&self.reasoning_buffer).or(self.reasoning_header.take());
-        let Some(header) = self.reasoning_header.as_deref() else {
+        let changed = self.refresh_reasoning_heading();
+        let Some(header) = &self.reasoning_header else {
             // No usable summary has arrived yet.
             return;
         };
 
         let status = &self.status_state.current_status;
-        if self.status_state.terminal_title_status_kind == TerminalTitleStatusKind::Thinking
-            && status.header == header
+        if !changed
+            && self.status_state.terminal_title_status_kind == TerminalTitleStatusKind::Thinking
+            && status.header == header.text
             && status.details.is_none()
             && status.details_max_lines == STATUS_DETAILS_DEFAULT_MAX_LINES
             && self
                 .bottom_pane
                 .status_widget()
-                .is_none_or(|status| status.header() == header)
+                .is_none_or(|status| status.header() == header.text)
         {
             return;
         }
 
         // Update the shimmer header to the extracted reasoning chunk header.
-        let header = header.to_string();
+        let header = header.clone();
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
         if !self.set_status_header(header) {
             self.request_redraw();
@@ -491,11 +489,13 @@ impl ChatWidget {
             self.reasoning_summary_parts
                 .push(std::mem::take(&mut self.reasoning_buffer));
         }
+        let item_id = self.status_state.reasoning_item_id.as_deref();
         self.reasoning_header = self
             .reasoning_summary_parts
             .iter()
+            .enumerate()
             .rev()
-            .find_map(|part| latest_summary_line(part))
+            .find_map(|(index, part)| StatusHeader::from_summary(item_id, index, part))
             .or(self.reasoning_header.take());
         if !self.reasoning_summary_parts.is_empty() {
             let reasoning_parts = std::mem::take(&mut self.reasoning_summary_parts);

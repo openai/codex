@@ -4,6 +4,20 @@ use pretty_assertions::assert_eq;
 use crate::terminal_palette::with_test_default_colors;
 use crate::terminal_probe::DefaultColors;
 
+fn summary_shimmer(text: &str, elapsed: Duration, motion: MotionMode) -> Vec<Span<'static>> {
+    super::summary_shimmer(text, elapsed, motion, usize::MAX, /*sample*/ None)
+}
+
+fn levels(spans: &[Span<'_>]) -> Vec<u8> {
+    spans
+        .iter()
+        .map(|span| match span.style.fg {
+            Some(ratatui::style::Color::Rgb(level, _, _)) => level,
+            color => panic!("expected interpolated RGB, got {color:?}"),
+        })
+        .collect()
+}
+
 #[test]
 fn rtl_headers_remain_stable_during_the_sweep() {
     with_test_default_colors(
@@ -15,15 +29,24 @@ fn rtl_headers_remain_stable_during_the_sweep() {
             let mut headers = Vec::new();
             for text in [
                 "שלום עולם",
+                "Checking שלום",
                 "Checking שָׁלוֹם (test.rs) 123",
                 "Checking lines ١٢-٣٤",
                 "مرحبا",
             ] {
                 let initial = summary_shimmer(text, Duration::ZERO, MotionMode::Animated);
-                let sweep = summary_shimmer(
-                    text,
+                // A chunk can finish the visible line and start an English heading.
+                let sample = HeaderSample {
+                    header: text.to_owned().into(),
+                    outgoing: None,
+                    next_sample: None,
+                };
+                let sweep = super::summary_shimmer(
+                    "Running tests",
                     Duration::from_millis(/*millis*/ 1100),
                     MotionMode::Animated,
+                    usize::MAX,
+                    Some(&sample),
                 );
                 assert_eq!(initial, sweep);
                 assert_eq!(
@@ -62,15 +85,27 @@ fn short_and_long_labels_sweep_smoothly_in_both_themes() {
                 for ms in [0, 850, 1100, 1350, 3600, 5100] {
                     let spans =
                         summary_shimmer(text, Duration::from_millis(ms), MotionMode::Animated);
-                    let levels = spans
-                        .iter()
-                        .map(|span| match span.style.fg {
-                            Some(ratatui::style::Color::Rgb(level, _, _)) => level,
-                            color => panic!("expected interpolated RGB, got {color:?}"),
-                        })
-                        .collect::<Vec<_>>();
+                    let levels = levels(&spans);
                     frames.push(format!("{theme} {text} {ms}ms: {levels:?}"));
                 }
+            }
+            let text = "Reading e\u{301}界🧪";
+            let sample = HeaderSample {
+                header: text.to_owned().into(),
+                outgoing: Some("Working".into()),
+                next_sample: None,
+            };
+            for ms in [0, 50, 160, 370, 740, 1000, 4370] {
+                let spans = super::summary_shimmer(
+                    text,
+                    Duration::from_millis(ms),
+                    MotionMode::Animated,
+                    /*columns*/ 20,
+                    Some(&sample),
+                );
+                let levels = levels(&spans);
+                let label = ratatui::text::Line::from(spans).to_string();
+                frames.push(format!("{theme} handoff {ms}ms: {label:?} {levels:?}"));
             }
         });
     }
@@ -90,13 +125,7 @@ fn working_has_overlapping_highlights_without_frame_to_frame_flashes() {
             for ms in (0..=5600).step_by(/*step*/ 32) {
                 let spans =
                     summary_shimmer("Working", Duration::from_millis(ms), MotionMode::Animated);
-                let brightness = spans
-                    .iter()
-                    .map(|span| match span.style.fg {
-                        Some(ratatui::style::Color::Rgb(r, _, _)) => r,
-                        color => panic!("expected interpolated RGB, got {color:?}"),
-                    })
-                    .collect::<Vec<_>>();
+                let brightness = levels(&spans);
                 if brightness.iter().any(|value| *value > 220) {
                     assert!(brightness.iter().filter(|value| **value > 160).count() >= 2);
                 }

@@ -37,6 +37,8 @@ use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
+mod header;
+pub(crate) use header::StatusHeader;
 mod timer;
 pub(crate) use timer::StatusTimer;
 
@@ -46,6 +48,14 @@ use summary_shimmer::summary_shimmer;
 
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
+const HEADING_INTERVAL: Duration = Duration::from_millis(/*millis*/ 3500);
+
+#[derive(Clone, Debug)]
+struct HeaderSample {
+    header: StatusHeader,
+    outgoing: Option<String>,
+    next_sample: Option<Instant>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusDetailsCapitalization {
@@ -57,8 +67,10 @@ pub(crate) enum StatusDetailsCapitalization {
 #[derive(Clone, Debug)]
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
-    header: String,
+    header: StatusHeader,
     header_started_at: Instant,
+    prepared_at: Option<Instant>,
+    sample: Option<HeaderSample>,
     details: Option<String>,
     details_max_lines: usize,
     /// Optional suffix rendered after the elapsed/interrupt segment.
@@ -99,8 +111,10 @@ impl StatusIndicatorWidget {
         effects: codex_config::types::TuiEffects,
     ) -> Self {
         Self {
-            header: String::from("Working"),
+            header: String::from("Working").into(),
             header_started_at: Instant::now(),
+            prepared_at: None,
+            sample: None,
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
@@ -123,11 +137,65 @@ impl StatusIndicatorWidget {
         self.effects = tui.effects;
     }
 
+    fn shimmer_motion(&self) -> MotionMode {
+        MotionMode::from_animations_enabled(self.animations_enabled && self.effects.shimmer)
+    }
+
+    /// Use the same heading and transition time for layout and painting.
+    pub(crate) fn prepare_frame(&mut self, now: Instant) {
+        self.prepared_at = Some(now);
+        if self.shimmer_motion() == MotionMode::Reduced
+            || summary_shimmer::palette(self.header()).is_none()
+        {
+            self.sample = None;
+            return;
+        }
+        let sample = self.sample.get_or_insert_with(|| HeaderSample {
+            header: self.header.clone(),
+            outgoing: None,
+            next_sample: None,
+        });
+        let due = sample.next_sample.unwrap_or(now);
+        if !self.header.is_reasoning() || now < due {
+            return;
+        }
+        // Keep the first heading's clock even when a frame is drawn late.
+        let late = (now.duration_since(due).as_nanos() % HEADING_INTERVAL.as_nanos()) as u64;
+        sample.next_sample = Some(now + HEADING_INTERVAL - Duration::from_nanos(late));
+        if sample.header != self.header {
+            let previous = std::mem::replace(&mut sample.header, self.header.clone());
+            if previous.text != self.header.text {
+                sample.outgoing = Some(previous.text);
+                self.header_started_at = now;
+            }
+        }
+    }
+
+    fn header_spans(&self, now: Instant, columns: usize) -> Vec<Span<'static>> {
+        summary_shimmer(
+            self.header(),
+            now.saturating_duration_since(self.header_started_at),
+            self.shimmer_motion(),
+            columns,
+            self.sample.as_ref(),
+        )
+    }
+
     /// Update the animated header label (left of the brackets).
-    pub(crate) fn update_header(&mut self, header: String) {
-        if self.header != header {
-            self.header = header;
+    pub(crate) fn update_header(&mut self, header: impl Into<StatusHeader>) {
+        let header = header.into();
+        if !header.is_reasoning() && self.header != header {
+            self.sample = None;
+        }
+        if self.sample.is_none() && self.header.text != header.text {
             self.header_started_at = Instant::now();
+        }
+        self.header = header;
+    }
+
+    pub(crate) fn extend_reasoning(&mut self, item_id: Option<&str>, part: usize, summary: &str) {
+        if let Some(sample) = &mut self.sample {
+            sample.header.extend(item_id, part, summary);
         }
     }
 
@@ -166,7 +234,7 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn header(&self) -> &str {
-        &self.header
+        &self.header.text
     }
 
     #[cfg(test)]
@@ -224,7 +292,7 @@ impl StatusIndicator<'_> {
     // wide Unicode characters, remapped interrupt hints, and elapsed-time text.
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let row = self.row;
-        let now = Instant::now();
+        let now = row.prepared_at.unwrap_or_else(Instant::now);
         let elapsed_duration = self.timer.display_started_at.map_or_else(
             || self.timer.elapsed_at(now),
             |started_at| now.saturating_duration_since(started_at),
@@ -232,23 +300,18 @@ impl StatusIndicator<'_> {
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
         let progress =
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.progress);
-        let shimmer =
-            MotionMode::from_animations_enabled(row.animations_enabled && row.effects.shimmer);
-
         let mut spans = Vec::with_capacity(5);
+        let mut label_columns = usize::from(width);
         if let Some(indicator) = activity_indicator(
             Some(self.timer.last_resume_at),
             progress,
             ReducedMotionIndicator::Hidden,
         ) {
+            label_columns = label_columns.saturating_sub(indicator.width() + 1);
             spans.push(indicator);
             spans.push(" ".into());
         }
-        spans.extend(summary_shimmer(
-            &row.header,
-            now.saturating_duration_since(row.header_started_at),
-            shimmer,
-        ));
+        spans.extend(row.header_spans(now, label_columns));
         if !spans.is_empty() {
             spans.push(" ".into());
         }
@@ -306,7 +369,7 @@ impl Renderable for StatusIndicator<'_> {
             let interval_ms = if self.row.animations_enabled
                 && (self.row.effects.progress
                     || (self.row.effects.shimmer
-                        && !contains_rtl_or_arabic_number(&self.row.header)))
+                        && !contains_rtl_or_arabic_number(self.row.header())))
             {
                 32
             } else {
