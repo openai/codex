@@ -2,7 +2,7 @@ use super::helpers::drain_insert_history_transcript as drain_insert_history;
 use super::*;
 use pretty_assertions::assert_eq;
 
-fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
+pub(super) fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             environment_id: None,

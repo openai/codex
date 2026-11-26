@@ -305,8 +305,7 @@ impl ChatWidget {
     pub(crate) fn desired_program_status(&self) -> ProgramStatus {
         if let Some(kind) = self.bottom_pane.program_status_blocked_kind() {
             ProgramStatus::Blocked(kind)
-        } else if self.bottom_pane.is_task_running()
-            || self.is_user_turn_pending_or_running()
+        } else if self.is_user_turn_pending_or_running()
             || (self.status_state.program_status_after_turn == ProgramStatus::Done
                 && self
                     .current_goal_status

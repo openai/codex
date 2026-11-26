@@ -1,6 +1,7 @@
 //! Exercises terminal status across live, interrupted, and replayed turns.
 //! Replayed results and work already underway must never appear as new completions.
 
+use super::mcp_startup::notify_mcp_status;
 use super::*;
 use crate::terminal_program_status::ProgramStatus;
 use pretty_assertions::assert_eq;
@@ -24,9 +25,12 @@ async fn program_status_tracks_live_results_and_resolved_approvals() {
         let status = chat.desired_program_status();
         format!("{status:?} {}", draw.frame.display())
     };
+    // MCP startup alone is idle, even if a turn starts before the server is ready.
+    notify_mcp_status(&mut chat, "slow", McpServerStartupState::Starting);
     let mut statuses = vec![status(&mut chat)];
     handle_turn_started(&mut chat, "status-turn");
     statuses.push(status(&mut chat));
+    notify_mcp_status(&mut chat, "slow", McpServerStartupState::Ready);
     handle_exec_approval_request(
         &mut chat,
         "status-approval",
@@ -51,7 +55,10 @@ async fn program_status_tracks_live_results_and_resolved_approvals() {
     statuses.push(status(&mut chat));
     handle_turn_completed(&mut chat, "status-turn", /*duration_ms*/ None);
     statuses.push(status(&mut chat));
-    // A second draw must leave the unread result in place.
+    // Reloading MCP must leave the unread result in place throughout the round.
+    notify_mcp_status(&mut chat, "slow", McpServerStartupState::Starting);
+    statuses.push(status(&mut chat));
+    notify_mcp_status(&mut chat, "slow", McpServerStartupState::Ready);
     statuses.push(status(&mut chat));
     chat.acknowledge_program_status();
     statuses.push(status(&mut chat));
@@ -79,6 +86,7 @@ async fn program_status_tracks_live_results_and_resolved_approvals() {
     Working frame-56.png
     Blocked(Permission) frame-48.png
     Working frame-56.png
+    Done frame-64.png
     Done frame-64.png
     Done frame-64.png
     Idle frame-0.png
