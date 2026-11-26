@@ -1,4 +1,8 @@
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::message_from_parts;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
@@ -13,6 +17,7 @@ use super::ConversationTranscriptConfig;
 use super::ConversationTranscriptEntry;
 use super::ConversationTranscriptEntryKind;
 use super::ConversationTranscriptOptions;
+use super::MANUAL_APPROVAL_CONTENT_KIND;
 use super::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 use super::TranscriptEntryLimits;
 use crate::ContextSection;
@@ -304,10 +309,12 @@ fn entry(kind: ConversationTranscriptEntryKind, text: &str) -> ConversationTrans
 
 #[test]
 fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution() {
+    const ACTION_REPETITIONS: usize = 1_000;
     let approved_action = format!(
         "{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: {}",
-        "exact action ".repeat(/*n*/ 1_000)
+        "exact action ".repeat(ACTION_REPETITIONS)
     );
+    let approval_kind = ContentItemKind(MANUAL_APPROVAL_CONTENT_KIND.to_owned());
     let history = vec![
         serde_json::from_value(serde_json::json!({
             "type": "message",
@@ -329,28 +336,35 @@ fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution(
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
-        ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "ordinary developer context".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: approved_action.clone(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
+        serde_json::from_value(serde_json::json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": approved_action}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": [MANUAL_APPROVAL_CONTENT_KIND]
+            }
+        }))
+        .unwrap(),
+        message_from_parts(
+            "developer",
+            vec![
+                AnnotatedContent::text(
+                    format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: write a draft"),
+                    approval_kind.clone(),
+                    ContentItemMetadata::command_hook(),
+                ),
+                AnnotatedContent::text(
+                    format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: edit the README"),
+                    ContentItemKind("permissions.instructions".to_owned()),
+                    ContentItemMetadata::harness(),
+                ),
+                AnnotatedContent::text(
+                    &approved_action,
+                    approval_kind,
+                    ContentItemMetadata::harness(),
+                ),
+            ],
+        ),
         ResponseItem::Message {
             status: None,
             encrypted_content: None,

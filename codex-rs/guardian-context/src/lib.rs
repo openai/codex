@@ -55,6 +55,7 @@ pub use entry::TranscriptContent;
 pub use history::TranscriptHistory;
 pub use transcript::ConversationTranscriptConfig;
 pub use transcript::ConversationTranscriptOptions;
+pub use transcript::MANUAL_APPROVAL_CONTENT_KIND;
 pub use transcript::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 pub use transcript::TranscriptEntryLimits;
 pub use transcript::TranscriptRetentionConfig;

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use codex_protocol::mcp::is_node_repl_backed_tool;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemProvenance;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -35,7 +36,10 @@ use crate::audio_transcripts::collect_audio_transcript;
 
 pub(crate) const TRANSCRIPT_OMISSION_NOTICE: &str = "Some conversation entries were omitted.";
 
-/// Trusted developer marker that preserves an explicit manual action approval.
+/// Content kind for the harness record of an explicit manual action approval.
+pub const MANUAL_APPROVAL_CONTENT_KIND: &str = "guardian.approved_action";
+
+/// Opening text of a rendered manual action approval.
 pub const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
     "The user has manually approved a specific action that was previously `Rejected`.";
 
@@ -208,10 +212,29 @@ fn collect_transcript_for_review(
             } => {
                 let text = content
                     .iter()
-                    .filter_map(|item| match item {
+                    .enumerate()
+                    .filter_map(|(index, item)| match item {
                         ContentItem::InputText { text } | ContentItem::OutputText { text, .. }
                             if !text.is_empty() =>
                         {
+                            // Check each approval part before joining developer text.
+                            if role == "developer" {
+                                let metadata =
+                                    internal_chat_message_metadata_passthrough.as_ref()?;
+                                let kinds = metadata.content_item_kinds.as_ref()?;
+                                let sources = metadata.content_item_metadata.as_ref()?;
+                                if !text.starts_with(MANUAL_APPROVAL_DEVELOPER_PREFIX)
+                                    || kinds.len() != content.len()
+                                    || sources.len() != content.len()
+                                    || kinds[index].as_str() != MANUAL_APPROVAL_CONTENT_KIND
+                                    || !matches!(
+                                        sources[index].provenance,
+                                        ContentItemProvenance::Harness { hook: false }
+                                    )
+                                {
+                                    return None;
+                                }
+                            }
                             Some(text.as_str())
                         }
                         ContentItem::InputText { .. }
@@ -235,9 +258,7 @@ fn collect_transcript_for_review(
                         ConversationTranscriptEntryKind::Assistant
                     }
                     "user" => ConversationTranscriptEntryKind::User,
-                    "developer" if text.starts_with(MANUAL_APPROVAL_DEVELOPER_PREFIX) => {
-                        ConversationTranscriptEntryKind::Developer
-                    }
+                    "developer" => ConversationTranscriptEntryKind::Developer,
                     "assistant"
                         if matches!(
                             phase,

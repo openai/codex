@@ -3,6 +3,8 @@
 
 use anyhow::Result;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::message_from_parts;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
@@ -10,11 +12,13 @@ use codex_core::config::RolloutBudgetConfig;
 use codex_core::context::GuardianContextMode;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_guardian_context::MANUAL_APPROVAL_CONTENT_KIND;
+use codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 use codex_guardian_context::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -141,25 +145,28 @@ async fn independent_review_preserves_oversized_instruction_order() -> Result<()
     test.submit_text_turn(&initial).await?;
     ThreadIdle::wait(&test.codex).await;
     let followup = format!("{padding}{padding}Keep all files private.{padding}{padding}");
-    let approval = format!(
-        "{}\nApproved action: {command}",
-        codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX
-    );
+    let approval = format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: {command}");
+    let hook_context =
+        format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: write scratch/notes.txt");
     let restriction = "Revoke permission to edit files. Only run the echo command.";
     test.codex
         .inject_response_items(vec![
             responses::user_message_item(&followup),
-            ResponseItem::Message {
-                status: None,
-                encrypted_content: None,
-                id: None,
-                role: "developer".to_owned(),
-                content: vec![ContentItem::InputText {
-                    text: approval.clone(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
+            message_from_parts(
+                "developer",
+                vec![
+                    AnnotatedContent::text(
+                        hook_context,
+                        ContentItemKind("hooks.additional_context".to_owned()),
+                        ContentItemMetadata::command_hook(),
+                    ),
+                    AnnotatedContent::text(
+                        &approval,
+                        ContentItemKind(MANUAL_APPROVAL_CONTENT_KIND.to_owned()),
+                        ContentItemMetadata::harness(),
+                    ),
+                ],
+            ),
         ])
         .await?;
     test.submit_text_turn(restriction).await?;
@@ -194,6 +201,7 @@ async fn independent_review_preserves_oversized_instruction_order() -> Result<()
         .split_once(">>> TRANSCRIPT DELTA END\n")
         .expect("legacy transcript delta end")
         .0;
+    assert!(!transcript.contains("write scratch/notes.txt"));
     let approval_start = transcript.find(&approval).expect("complete prior approval");
     let restriction_start = transcript.find(restriction).expect("later restriction");
     assert!(approval_start + approval.len() < restriction_start);

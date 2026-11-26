@@ -4,6 +4,11 @@ use crate::async_scorer::conversation::ConversationBackend;
 
 use super::*;
 use crate::async_scorer::authorization::ScoreAuthorization;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::message_from_parts;
+use codex_guardian_context::MANUAL_APPROVAL_CONTENT_KIND;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
@@ -155,17 +160,14 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         let mut history = checkpoint.iter().cloned().collect::<Vec<_>>();
         history.push(user);
         if matches!(evidence, BudgetEvidence::UserInstructions) {
-            history.push(ResponseItem::Message {
-                status: None,
-                encrypted_content: None,
-                id: None,
-                role: "developer".to_owned(),
-                content: vec![ContentItem::InputText {
-                    text: approval.clone(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            });
+            history.push(message_from_parts(
+                "developer",
+                vec![AnnotatedContent::text(
+                    &approval,
+                    ContentItemKind(MANUAL_APPROVAL_CONTENT_KIND.to_owned()),
+                    ContentItemMetadata::harness(),
+                )],
+            ));
             history.push(user_instruction(restriction));
         }
         history.extend(commentary.into_iter().map(|text| ResponseItem::Message {

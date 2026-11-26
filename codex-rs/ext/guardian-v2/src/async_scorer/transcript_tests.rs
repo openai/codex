@@ -1,12 +1,17 @@
 use super::ContextInput;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::message_from_parts;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ResponseItem;
 use codex_guardian_context::ContextTarget;
+use codex_guardian_context::MANUAL_APPROVAL_CONTENT_KIND;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
@@ -901,17 +906,14 @@ fn transcript_preserves_newest_manual_approval_when_message_budget_overflows() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
-        ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: approval_text,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
+        message_from_parts(
+            "developer",
+            vec![AnnotatedContent::text(
+                approval_text,
+                ContentItemKind(MANUAL_APPROVAL_CONTENT_KIND.to_owned()),
+                ContentItemMetadata::harness(),
+            )],
+        ),
     ];
 
     let transcript = TranscriptConfig {

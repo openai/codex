@@ -1,5 +1,6 @@
 use super::ContextualUserFragment;
 use crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
+use codex_guardian_context::MANUAL_APPROVAL_CONTENT_KIND;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
@@ -10,7 +11,7 @@ pub(crate) struct GuardianApprovedAction {
 }
 
 impl GuardianApprovedAction {
-    pub(crate) const KIND: &str = "guardian.approved_action";
+    pub(crate) const KIND: &str = MANUAL_APPROVAL_CONTENT_KIND;
 
     pub(crate) fn new(approved_action_json: String) -> Self {
         Self {
