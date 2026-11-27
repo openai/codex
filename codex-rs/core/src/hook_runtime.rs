@@ -62,6 +62,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use crate::agent::host::AgentRuntimeServices;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -140,26 +141,26 @@ pub(crate) async fn run_pending_session_start_hooks(
     while let Some(session_start_source) = sess.pending_session_start_source().await {
         // Spawned subagents can start fresh or fork their parent's history, so both
         // sources dispatch SubagentStart. Internal/system subagents skip start hooks.
-        let target = match &turn_context.session_source {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
+        let subagent = lifecycle_subagent_hook_context(sess, turn_context);
+        let target = match (&turn_context.session_source, subagent) {
+            (_, Some(context))
                 if matches!(
                     session_start_source,
                     codex_hooks::SessionStartSource::Startup
                         | codex_hooks::SessionStartSource::Fork
                 ) =>
             {
-                let context = subagent_hook_context(sess, agent_role);
                 StartHookTarget::SubagentStart {
                     turn_id: turn_context.sub_id.clone(),
                     agent_id: context.agent_id,
                     agent_type: context.agent_type,
                 }
             }
-            SessionSource::SubAgent(_) => {
+            (_, Some(_)) | (SessionSource::SubAgent(_), None) => {
                 sess.take_pending_session_start_source().await;
                 return false;
             }
-            _ => StartHookTarget::SessionStart {
+            (_, None) => StartHookTarget::SessionStart {
                 source: session_start_source,
             },
         };
@@ -398,35 +399,36 @@ pub(crate) async fn run_turn_stop_hooks(
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
     let turn_context = &step_context.turn;
-    // Resolve the stop hook kind from the session source before building the
-    // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
-    let (target, transcript_path) = match &turn_context.session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            agent_role,
-            parent_thread_id,
-            ..
-        }) => {
-            let context = subagent_hook_context(sess, agent_role);
+    let subagent = lifecycle_subagent_hook_context(sess, turn_context);
+    let (target, transcript_path) = match (&turn_context.session_source, subagent) {
+        (source, Some(context)) => {
             let agent_transcript_path = sess.hook_transcript_path().await;
-            let parent_transcript_path = match sess
-                .services
-                .thread_store
-                .read_thread(ReadThreadParams {
-                    thread_id: *parent_thread_id,
-                    include_archived: true,
-                    include_history: false,
-                })
-                .await
+            // A hosted session ID identifies the root, which may not be the immediate parent.
+            let parent_transcript_path = if let Some(parent_thread_id) =
+                source.parent_thread_id().or(turn_context.parent_thread_id)
             {
-                Ok(thread) => thread.rollout_path,
-                Err(error) => {
-                    tracing::warn!(
-                        parent_thread_id = %parent_thread_id,
-                        error = %error,
-                        "failed to resolve parent transcript path for subagent hook"
-                    );
-                    None
+                match sess
+                    .services
+                    .thread_store
+                    .read_thread(ReadThreadParams {
+                        thread_id: parent_thread_id,
+                        include_archived: true,
+                        include_history: false,
+                    })
+                    .await
+                {
+                    Ok(thread) => thread.rollout_path,
+                    Err(error) => {
+                        tracing::warn!(
+                            parent_thread_id = %parent_thread_id,
+                            error = %error,
+                            "failed to resolve parent transcript path for subagent hook"
+                        );
+                        None
+                    }
                 }
+            } else {
+                None
             };
             (
                 StopHookTarget::SubagentStop {
@@ -439,12 +441,12 @@ pub(crate) async fn run_turn_stop_hooks(
         }
         // Internal/synthetic subagents do not expose user-configured lifecycle
         // hooks, so there is no Stop or SubagentStop request to dispatch.
-        SessionSource::SubAgent(_) => return StopOutcome::default(),
-        SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => (
+        (SessionSource::SubAgent(_), None) => return StopOutcome::default(),
+        (SessionSource::Internal(InternalSessionSource::MemoryConsolidation), None) => (
             StopHookTarget::MemoryConsolidation,
             sess.hook_transcript_path().await,
         ),
-        _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
+        (_, None) => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
     let request_metadata = build_request_metadata(Some(step_context), turn_context);
     let request = codex_hooks::StopRequest {
@@ -1132,6 +1134,20 @@ fn hook_permission_mode(approval_policy: AskForApproval) -> String {
         }
     }
     .to_string()
+}
+
+/// Hosted workers keep the host's session source and inherit the root's session ID.
+fn lifecycle_subagent_hook_context(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+) -> Option<SubagentHookContext> {
+    if matches!(sess.agent_runtime, AgentRuntimeServices::Host(_))
+        && !turn_context.session_source.is_non_root_agent()
+        && sess.session_id() != SessionId::from(sess.thread_id())
+    {
+        return Some(subagent_hook_context(sess, /*agent_role*/ &None));
+    }
+    thread_spawn_subagent_hook_context(sess, turn_context)
 }
 
 fn thread_spawn_subagent_hook_context(

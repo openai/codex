@@ -7,6 +7,10 @@ use codex_agent_graph_store::ThreadSpawnEdgeStatus;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
+use codex_core::AgentRuntimeOwnership;
+use codex_core::AgentTurnAdmission;
+use codex_core::InheritedSessionId;
+use codex_core::RestrictRootCapabilities;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::TurnInputRequest;
@@ -38,6 +42,7 @@ use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_thread_store::DeleteThreadsParams;
@@ -778,6 +783,92 @@ async fn subagent_start_replaces_session_start_and_injects_context(
         Some(spawned_id.as_str())
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_child_runs_subagent_start_and_stop_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("child"),
+            ev_assistant_message("answer", "worker done"),
+            ev_completed("child"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "default")
+                .expect("write lifecycle hooks");
+        })
+        .with_config(trust_discovered_hooks)
+        // Command hooks run on the host and require a host-native working directory.
+        .build(&server)
+        .await?;
+
+    let session_id = test.session_configured.session_id;
+    let mut options = test.start_thread_options().await;
+    options.session_source = Some(SessionSource::Custom("host".into()));
+    options.thread_source = Some(ThreadSource::Subagent);
+    options
+        .thread_extension_init
+        .insert(AgentRuntimeOwnership::Host);
+    options
+        .thread_extension_init
+        .insert(Arc::new(super::agent_control::HostRuntime) as Arc<dyn AgentTurnAdmission>);
+    options
+        .thread_extension_init
+        .insert(RestrictRootCapabilities);
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(session_id));
+    let child = test.thread_manager.start_thread(options).await?;
+    child
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: CHILD_PROMPT.into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&child.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    child.thread.shutdown_and_wait().await?;
+
+    let home = test.codex_home_path();
+    let start = read_hook_log(home, "subagent_start_hook_log.jsonl")?;
+    let stop = read_hook_log(home, "subagent_stop_hook_log.jsonl")?;
+    assert_eq!(
+        (
+            start.len(),
+            stop.len(),
+            read_hook_log(home, "session_start_hook_log.jsonl")?.len(),
+            read_hook_log(home, "stop_hook_log.jsonl")?.len()
+        ),
+        (1, 1, 0, 0),
+        "expected SubagentStart and SubagentStop only"
+    );
+    for input in [&start[0], &stop[0]] {
+        assert_eq!(input["session_id"], session_id.to_string());
+        assert_eq!(input["agent_id"], child.thread_id.to_string());
+        assert_eq!(input["agent_type"], "default");
+    }
+    assert!(
+        response
+            .single_request()
+            .body_contains_text(SUBAGENT_START_CONTEXT)
+    );
+    assert_eq!(stop[0]["last_assistant_message"], "worker done");
+    assert_eq!(
+        stop[0]["agent_transcript_path"],
+        start[0]["transcript_path"]
+    );
+    assert_eq!(stop[0]["transcript_path"], Value::Null);
     Ok(())
 }
 
