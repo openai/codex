@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use super::SharedPluginMetricsSidecar;
 use super::UnifiedExecContext;
@@ -138,6 +139,7 @@ pub(crate) fn spawn_exit_watcher(
     output_buffer: Arc<Mutex<OutputBuffers>>,
     started_at: Instant,
     network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
+    publication: Option<TaskTrackerToken>,
     plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
 ) {
     let session_ref = Arc::clone(&context.session);
@@ -150,6 +152,7 @@ pub(crate) fn spawn_exit_watcher(
     let interaction_lock = process.interaction_lock();
 
     tokio::spawn(async move {
+        let _publication = publication;
         exit_token.cancelled().await;
         output_drained.notified().await;
         // Deferred network denial deliberately remains observable for a short

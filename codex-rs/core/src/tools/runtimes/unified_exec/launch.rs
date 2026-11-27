@@ -66,7 +66,7 @@ pub(super) async fn with_launch_failure_events(
     let call_id = ctx.call_id.clone();
     let message = message.clone();
     // The failure write is registered, so the proposal can release its shutdown token.
-    let proposal_started_at_ms = command_approval.handoff();
+    let (proposal_started_at_ms, _) = command_approval.handoff().unzip();
     // Dropping the join handle on cancellation leaves both lifecycle events running.
     let publish = async move {
         let model_context = step_context.model_context();

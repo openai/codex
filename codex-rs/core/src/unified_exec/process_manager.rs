@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use uuid::Uuid;
 
 use super::oneshot::Completion;
@@ -538,7 +539,7 @@ impl UnifiedExecProcessManager {
         let UnifiedExecAttempt {
             mut command_approval,
             process,
-            metrics_sidecar,
+            mut metrics_sidecar,
             permissions,
         } = attempt;
         let process = Arc::new(process);
@@ -559,13 +560,24 @@ impl UnifiedExecProcessManager {
             /*turn_diff_tracker*/ None,
         );
         event_ctx.model_context = Some(&model_context);
+        let mut attribution_interrupted = false;
         let plugin_attribution = if prepared.turn_environment.environment().is_remote() {
             let file_system = prepared.turn_environment.environment().get_filesystem();
-            context
+            let lookup = context
                 .step_context
                 .turn
-                .plugin_attribution_for_executor_command(command, &cwd, file_system.as_ref())
-                .await
+                .plugin_attribution_for_executor_command(command, &cwd, file_system.as_ref());
+            // A canceled one-shot still drives execution to its terminal event.
+            tokio::select! {
+                biased;
+                _ = context.cancellation_token.cancelled(), if completion.is_some() => {
+                    attribution_interrupted = true;
+                    // Reading the optional metrics file would wait on the same filesystem.
+                    metrics_sidecar = None;
+                    None
+                }
+                attribution = lookup => attribution,
+            }
         } else {
             cwd.to_abs_path().ok().and_then(|cwd| {
                 context
@@ -581,7 +593,11 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.to_string()),
             plugin_attribution.clone(),
         );
-        event_ctx.proposal_started_at_ms = command_approval.handoff();
+        let (started_at_ms, publication) = command_approval.handoff().unzip();
+        event_ctx.proposal_started_at_ms = started_at_ms;
+        // If interrupted during startup, keep history open until this task or
+        // the exit watcher publishes the approved one-shot's terminal item.
+        let mut publication = publication.filter(|_| attribution_interrupted);
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         // Serialize remote collection with later polls and final transcript publication.
@@ -619,6 +635,7 @@ impl UnifiedExecProcessManager {
                 prepared.tty,
                 deferred_network_approval.clone(),
                 network_denial_monitor,
+                publication.take(),
                 initial_exec_command_guard.metrics_sidecar.take(),
                 Arc::clone(&output_buffer),
                 Arc::clone(&initial_exec_command_active),
@@ -639,7 +656,7 @@ impl UnifiedExecProcessManager {
             .ok_or_else(|| UnifiedExecError::process_failed("timeout_ms is too large".into()))?;
         let collected_output = Self::collect_output_until_deadline(
             process.output_handles(),
-            Some(context.session.subscribe_elicitation_pause_state()),
+            (!attribution_interrupted).then(|| context.session.subscribe_elicitation_pause_state()),
             deadline,
         )
         .await;
@@ -1209,6 +1226,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
         network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
+        publication: Option<TaskTrackerToken>,
         metrics_sidecar: Option<PluginMetricsSidecar>,
         output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
         initial_exec_command_active: Arc<AtomicBool>,
@@ -1246,6 +1264,7 @@ impl UnifiedExecProcessManager {
             output_buffer,
             started_at,
             network_denial_monitor,
+            publication,
             plugin_metrics_sidecar,
         );
         // Install the watcher before cancellable cleanup, and outside the process-store lock.

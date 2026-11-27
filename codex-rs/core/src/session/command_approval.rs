@@ -95,10 +95,11 @@ impl CommandApproval {
         Ok(())
     }
 
-    /// Release the proposal when execution takes over completion.
-    /// Its original start time is used for the legacy begin event.
-    pub(crate) fn handoff(&mut self) -> Option<i64> {
-        self.0.take().map(|command| command.started_at_ms)
+    /// Transfer the legacy begin timestamp and shutdown token to execution.
+    pub(crate) fn handoff(&mut self) -> Option<(i64, TaskTrackerToken)> {
+        self.0
+            .take()
+            .map(|command| (command.started_at_ms, command.publication))
     }
 
     pub(crate) async fn fail(&mut self) {

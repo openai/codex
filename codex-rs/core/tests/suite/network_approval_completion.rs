@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_exec_server::ExecParams;
+use codex_history::RolloutItem;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::environment_policy_from_config;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -20,9 +21,11 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::sandbox::SandboxType;
 use codex_protocol::user_input::UserInput;
+use codex_rollout::RolloutRecorder;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -37,6 +40,7 @@ use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -443,18 +447,24 @@ async fn respond_to_setup_or_hook_request(
     send_exec_server_json(websocket, json!({"id": request["id"], "result": result})).await;
 }
 
+#[test_case(AskForApproval::Never, ""; "resumable")]
+#[test_case(AskForApproval::UnlessTrusted, "[features]\nunified_exec = false\nshell_tool = true\n"; "approved_one_shot")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Result<()> {
+async fn interrupt_during_exec_startup_terminates_unregistered_process(
+    approval_policy: AskForApproval,
+    requirements: &str,
+) -> Result<()> {
     let server = start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let home = Arc::new(tempfile::TempDir::new()?);
     super::super::plugins::write_remote_plugin_script_and_config(home.as_ref());
+    let call_id = "interrupted-startup";
     let _response = core_test_support::responses::mount_sse_once(
         &server,
         sse(vec![
             ev_function_call(
-                "interrupted-startup",
+                call_id,
                 "exec_command",
                 &json!({
                     "cmd": "/bin/sh /opt/plugins/cache/openai-curated-remote/sample/1.2.3/scripts/run.sh",
@@ -465,7 +475,6 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
         ]),
     ).await;
     let (startup_blocked, blocked) = tokio::sync::oneshot::channel();
-    let (terminated, termination) = tokio::sync::oneshot::channel();
     let exec_server =
         tokio::spawn(async move {
             let mut websocket = accept_initialized_exec_server(listener).await;
@@ -483,8 +492,8 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
                     })).await;
                     }
                     Some("process/start") => {
-                        let params: ExecParams =
-                            serde_json::from_value(request["params"].clone()).unwrap();
+                        let params: ExecParams = serde_json::from_value(request["params"].clone())
+                            .expect("process start");
                         assert!(
                             params.network_proxy.is_some(),
                             "the command needs a network observer"
@@ -505,8 +514,8 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
                             .take()
                             .expect("one blocked lookup")
                             .send(())
-                            .unwrap();
-                        // Leave this RPC pending until the tool call is interrupted.
+                            .expect("notify test of blocked lookup");
+                        // Leave this RPC pending through session shutdown.
                     }
                     Some("process/read") => {
                         send_exec_server_json(
@@ -522,7 +531,7 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
                     Some("process/terminate") => {
                         assert_eq!(
                             request["params"]["processId"],
-                            json!(started_process.unwrap())
+                            json!(started_process.expect("process started before termination"))
                         );
                         send_exec_server_json(
                             &mut websocket,
@@ -531,8 +540,7 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
                             }),
                         )
                         .await;
-                        terminated.send(()).unwrap();
-                        return;
+                        return websocket;
                     }
                     _ => respond_to_setup_or_hook_request(&mut websocket, &request).await,
                 }
@@ -540,6 +548,10 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
         });
     let test = test_codex()
         .with_home(home)
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        )
         .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_exec_server_url(exec_server_url)
         .with_config(|config| {
@@ -547,7 +559,7 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
             config
                 .permissions
                 .set_permission_profile(PermissionProfile::workspace_write())
-                .unwrap();
+                .expect("set workspace-write profile");
             config.project_doc_max_bytes = 0;
             config.approvals_reviewer = ApprovalsReviewer::User;
             #[cfg(windows)]
@@ -556,7 +568,12 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
         // The existing fake executor provides a deterministic RPC boundary for interruption.
         .build(&server)
         .await?;
-    let selection = test.codex.environment_selections().await.pop().unwrap();
+    let selection = test
+        .codex
+        .environment_selections()
+        .await
+        .pop()
+        .context("remote environment")?;
     let mut config = environment_config_for_selection(&test.config, &selection);
     config.network_policy = Some(environment_policy_from_config(
         &NetworkProxyConfig {
@@ -573,23 +590,68 @@ async fn interrupt_during_exec_startup_terminates_unregistered_process() -> Resu
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                approval_policy: Some(AskForApproval::Never),
+                approval_policy: Some(approval_policy),
                 ..Default::default()
             }),
         )
         .await?;
+    if approval_policy == AskForApproval::UnlessTrusted {
+        let approval = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::ExecApprovalRequest(prompt) if prompt.starts_command() => {
+                Some(Op::ExecApproval {
+                    id: prompt.effective_approval_id(),
+                    turn_id: Some(prompt.turn_id.clone()),
+                    decision: ReviewDecision::Approved,
+                })
+            }
+            _ => None,
+        })
+        .await;
+        test.codex.submit(approval).await?;
+    }
     timeout(STARTUP_TIMEOUT, blocked)
         .await
         .context("startup did not reach attribution")??;
+    if approval_policy == AskForApproval::UnlessTrusted {
+        // Keep an unrelated prompt open through shutdown.
+        test.codex.increment_out_of_band_elicitation_count().await?;
+    }
     test.codex.submit(Op::Interrupt).await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnAborted(_))
     })
     .await;
-    let cleanup = timeout(Duration::from_secs(/*secs*/ 5), termination).await;
-    exec_server.abort();
-    let _ = exec_server.await;
-    cleanup.context("interruption left an unregistered process running")??;
+    // Keep the connection open so disconnecting cannot unblock the lookup.
+    let _connection = timeout(Duration::from_secs(/*secs*/ 5), exec_server)
+        .await
+        .context("interruption left an unregistered process running")??;
+    timeout(
+        Duration::from_secs(/*secs*/ 5),
+        test.codex.shutdown_and_wait(),
+    )
+    .await
+    .context("shutdown stalled after process termination")??;
+    if approval_policy == AskForApproval::UnlessTrusted {
+        let path = test.codex.rollout_path().context("rollout path")?;
+        let (items, _, parse_errors) = RolloutRecorder::load_rollout_items(&path).await?;
+        assert_eq!(parse_errors, 0);
+        let statuses = items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::EventMsg {
+                    event: EventMsg::ItemCompleted(event),
+                    ..
+                } => match &event.item {
+                    TurnItem::CommandExecution(command) if command.id == call_id => {
+                        Some(&command.status)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statuses, [&CommandExecutionStatus::Failed]);
+    }
     Ok(())
 }
 

@@ -109,6 +109,7 @@ async fn completed_output_preserves_bytes_before_subscription(
         output_buffer,
         Instant::now(),
         /*network_denial_monitor*/ None,
+        /*publication*/ None,
         /*plugin_metrics_sidecar*/ None,
     );
     stdout_tx.send(late_output.to_vec())?;
@@ -325,6 +326,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         output_buffer,
         Instant::now(),
         Some(network_denial_monitor),
+        /*publication*/ None,
         /*plugin_metrics_sidecar*/ None,
     );
 
