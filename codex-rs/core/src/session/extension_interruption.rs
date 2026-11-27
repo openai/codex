@@ -91,6 +91,7 @@ impl Session {
                 active_turn,
                 TurnAbortReason::Interrupted,
                 /*error*/ None,
+                std::future::ready(()),
             )
             .await;
         }

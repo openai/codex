@@ -1,4 +1,4 @@
-//! Failed one-shot launches must finish publishing their lifecycle after interruption.
+//! Exercises interruption while a one-shot command's completion is waiting to reach history.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,18 +12,25 @@ use codex_config::Constrained;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
+use codex_extension_api::CommandStartInput;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutRecorder;
@@ -36,7 +43,7 @@ use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
-const CALL_ID: &str = "interrupted-launch-failure";
+const CALL_ID: &str = "gated-command";
 
 #[derive(Default)]
 struct PauseCommandCompletion {
@@ -61,6 +68,153 @@ impl TurnLifecycleContributor for PauseCommandCompletion {
             }
         })
     }
+}
+
+#[tokio::test]
+async fn cancelling_approval_stops_running_sibling_and_preserves_completed_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_target_windows!(Ok(()), "runs a POSIX sleep command");
+
+    #[derive(Default)]
+    struct SiblingResults {
+        completed: Notify,
+        release_first: Notify,
+    }
+
+    impl ToolLifecycleContributor for SiblingResults {
+        fn on_command_start<'a>(&'a self, input: CommandStartInput<'a>) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                if input.call_id == CALL_ID {
+                    self.completed.notified().await;
+                }
+            })
+        }
+
+        fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                match input.call_id {
+                    "sibling" => self.release_first.notified().await,
+                    "finished" => {
+                        assert_eq!(input.outcome, ToolCallOutcome::Completed { success: true });
+                        self.completed.notify_one();
+                    }
+                    _ => {}
+                }
+            })
+        }
+    }
+
+    let server = responses::start_mock_server().await;
+    let gate = Arc::new(PauseCommandCompletion::default());
+    let results = Arc::new(SiblingResults::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(gate.clone());
+    extensions.tool_lifecycle_contributor(results.clone());
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[features]\nunified_exec = false\nshell_tool = true\n",
+            ),
+        )
+        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::User)
+        .build_with_auto_env(&server)
+        .await?;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("parallel"),
+                responses::ev_exec_command_call_with_args(
+                    "sibling",
+                    &json!({"cmd": "sleep 120", "timeout_ms": 120_000}),
+                ),
+                responses::ev_exec_command_call_with_args(
+                    "finished",
+                    &json!({"cmd": "echo sibling-output", "login": false}),
+                ),
+                responses::ev_exec_command_call_with_args(
+                    CALL_ID,
+                    &json!({"cmd": "echo pending", "sandbox_permissions": "require_escalated",
+                    "justification": "Run outside the sandbox?"}),
+                ),
+                responses::ev_completed("parallel"),
+            ]),
+            responses::sse(vec![responses::ev_completed("follow-up")]),
+        ],
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run the commands".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(
+                codex_protocol::protocol::ThreadSettingsOverrides {
+                    approval_policy: Some(AskForApproval::OnRequest),
+                    permission_profile: Some(PermissionProfile::workspace_write()),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await?;
+    let mut started = false;
+    let mut prompt = None;
+    while !started || prompt.is_none() {
+        match test.codex.next_event().await?.msg {
+            EventMsg::ExecCommandBegin(event) if event.call_id == "sibling" => {
+                assert!(event.process_id.is_some());
+                started = true;
+            }
+            EventMsg::ExecApprovalRequest(event) if event.call_id == CALL_ID => {
+                prompt = Some(event)
+            }
+            _ => {}
+        }
+    }
+    let prompt = prompt.unwrap();
+    test.codex
+        .submit(Op::ExecApproval {
+            id: prompt.effective_approval_id(),
+            turn_id: Some(prompt.turn_id),
+            decision: ReviewDecision::Abort,
+        })
+        .await?;
+
+    gate.entered.notified().await;
+    // The sibling should stop even while history is waiting to record the decline.
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::ExecCommandEnd(end) if end.call_id == "sibling"),
+    )
+    .await;
+    // Results drain in call order. Hold the first result and the decline beyond
+    // the abort grace period, with the successful second result queued behind it.
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::resume();
+    results.release_first.notify_one();
+    gate.release.notify_one();
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ItemCompleted(completed)
+            if matches!(&completed.item, TurnItem::CommandExecution(command)
+                if command.id == CALL_ID && command.status == CommandExecutionStatus::Declined))
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    test.submit_text_turn("What did the finished command print?")
+        .await?;
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1]
+        .function_call_output_text("finished")
+        .context("finished command output")?;
+    assert!(output.contains("sibling-output"), "{output}");
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -195,22 +195,26 @@ impl Session {
             return;
         };
         let decision = pending.validate(decision);
-        pending.resolve_command(&decision).await;
         if decision == ReviewDecision::Abort {
             let turn_id = if pending.kind == ExecApprovalKind::HumanCommand {
-                Some(&pending.turn_id)
+                Some(pending.turn_id.clone())
             } else {
-                active_turn_id.as_ref()
+                active_turn_id
             };
             if let Some(turn_id) = turn_id {
-                self.abort_turn_if_active(
-                    turn_id,
+                self.abort_turn_if_active_with_publication(
+                    &turn_id,
                     TurnAbortReason::Interrupted,
                     /*error*/ None,
+                    pending.resolve_command(&decision),
                 )
                 .await;
+                pending.reply(decision);
+                return;
             }
-        } else if let ReviewDecision::ApprovedExecpolicyAmendment {
+        }
+        pending.resolve_command(&decision).await;
+        if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
             && let Err(err) = self
