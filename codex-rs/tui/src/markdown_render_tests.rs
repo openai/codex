@@ -1060,6 +1060,10 @@ second](guide.md)
   [Map](guide.md#L2-L4) details
 - # Explicit
   [`Map`](./guide.md#L2-L4) details
+- # Inline
+  `Map` details
+- # Plain
+  Map details
 - # Source
   [source.rs:2-4](source.rs:2-4) notes
 

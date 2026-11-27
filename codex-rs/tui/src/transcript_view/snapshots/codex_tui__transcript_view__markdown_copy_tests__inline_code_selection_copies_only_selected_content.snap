@@ -6,6 +6,9 @@ before `something` after
 Selected "something" → ("something", PlainText)
 before `something` after
 Selected "some" → ("some", PlainText)
+- # Reading
+  `gauge` value
+Selected "aug" → ("aug", PlainText)
 before `something` after
 Selected "thing" → ("thing", PlainText)
 before `closeRequested_` after

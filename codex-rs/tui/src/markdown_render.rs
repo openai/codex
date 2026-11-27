@@ -1052,6 +1052,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         self.needs_newline = false;
     }
 
+    /// Begin an inline run at the list marker or after the preceding block.
+    fn start_pending_inline_line(&mut self) {
+        if (self.pending_marker_line || self.needs_newline) && !self.in_table_cell() {
+            self.push_line(Line::default());
+            self.needs_newline = false;
+        }
+    }
+
     fn code(&mut self, code: CowStr<'a>) {
         if self.buffer_link_label(&code) {
             self.push_local_link_label_span(Span::from(code.into_string()).style(self.styles.code));
@@ -1063,10 +1071,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             return;
         }
 
-        if self.pending_marker_line {
-            self.push_line(Line::default());
-            self.pending_marker_line = false;
-        }
+        self.start_pending_inline_line();
         let span = Span::from(code.into_string()).style(self.styles.code);
         self.push_span(span);
     }
@@ -2385,10 +2390,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
     }
 
     fn push_link(&mut self, dest_url: String, source: usize) {
-        if (self.pending_marker_line || self.needs_newline) && !self.in_table_cell() {
-            self.push_line(Line::default());
-            self.needs_newline = false;
-        }
+        self.start_pending_inline_line();
         let style_label = (self.is_hidden_link_destination)(&dest_url);
         if style_label {
             self.push_inline_style(self.styles.link);

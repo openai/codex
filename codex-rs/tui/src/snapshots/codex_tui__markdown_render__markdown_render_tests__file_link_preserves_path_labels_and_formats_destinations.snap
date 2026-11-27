@@ -35,6 +35,12 @@ second (guide.md)
 • # Explicit
   Map (./guide.md:2-4) details
 
+• # Inline
+  Map details
+
+• # Plain
+  Map details
+
 • # Source
   source.rs:2-4 notes
 
