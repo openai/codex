@@ -1,9 +1,8 @@
 ---
 source: tui/src/app/agents_overview_discovery_tests.rs
-assertion_line: 127
 expression: screen
 ---
-  Agent command center  Group: Pr…
+  Command Center  by Project  g
    All 1   Needs you 0           ›
   ────────────────────────────────
 

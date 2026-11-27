@@ -2,7 +2,7 @@
 source: tui/src/app/agent_center_tests.rs
 expression: "screen(&view, 40, 12)"
 ---
-  Agent command center  Group: Projec…
+  Command Center  by Project  g
   ‹  Working 0   Ready 1   Inactive 1
   ────────────────────────────────────
       Tasks

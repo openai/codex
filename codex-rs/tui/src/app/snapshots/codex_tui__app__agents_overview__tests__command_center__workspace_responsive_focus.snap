@@ -3,7 +3,7 @@ source: tui/src/app/agent_center_tests.rs
 expression: "screens.join(\"\\n\\n\")"
 ---
 Wide Command Center
-  Agent command center  Group: Pr…  │ Response row 22
+  Command Center  by Project  g     │ Response row 22
    All 1   Needs you 0           ›  │ Response row 23
   ────────────────────────────────  │ Response row 24
                                     │ Response row 25

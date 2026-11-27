@@ -1344,13 +1344,13 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
     let side = app.conversation_frame.panel_area().unwrap();
     let middle = app.conversation_area(Rect::new(0, 0, 185, 18));
     assert!(center.right() <= middle.x && middle.right() <= side.x && !middle.is_empty());
-    let labels = ["Agent command center", "Keep this draft", "Open in sidebar"].map(|label| {
+    let labels = ["Command Center", "Keep this draft", "Open in sidebar"].map(|label| {
         combined
             .lines()
             .find_map(|line| line.find(label))
             .map(|_| label)
     });
-    insta::assert_snapshot!(format!("{labels:?}"),@"[Some(\"Agent command center\"), Some(\"Keep this draft\"), Some(\"Open in sidebar\")]");
+    insta::assert_snapshot!(format!("{labels:?}"),@"[Some(\"Command Center\"), Some(\"Keep this draft\"), Some(\"Open in sidebar\")]");
     let divider = app
         .conversation_frame
         .divider_area()
@@ -1567,6 +1567,24 @@ async fn workspace_navigation_preserves_the_draft_and_reading_position() -> Resu
     );
     server.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn grouping_header_fits_directory_and_a_custom_chord_in_the_dock() {
+    let mut app = make_test_app().await;
+    let config = toml::from_str("[agents]\ntoggle_grouping = 'f11 g'").unwrap();
+    app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+    app.agents_overview.view_state.lock().unwrap().grouping = AgentsOverviewGrouping::Directory;
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    let headers = [24, 36, 60].map(|width| {
+        let screen = screen(&view, width, /*height*/ 16);
+        format!("{width} columns: {}", screen.lines().next().unwrap().trim())
+    });
+    insta::assert_snapshot!(headers.join("\n"), @"
+    24 columns: Group: Directory
+    36 columns: Command Center  Directory  f11 g
+    60 columns: Agent command center  Group: Directory  f11 g
+    ");
 }
 
 #[tokio::test]

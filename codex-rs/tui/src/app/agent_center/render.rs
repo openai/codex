@@ -142,24 +142,47 @@ impl Renderable for AgentsOverviewView {
         } else {
             String::new()
         };
+        const DIRECTORY: &str = "Directory";
         let grouping = match state.grouping {
             AgentsOverviewGrouping::Project => "Project",
-            AgentsOverviewGrouping::Directory => "Directory",
+            AgentsOverviewGrouping::Directory => DIRECTORY,
             AgentsOverviewGrouping::Status => "Status",
             AgentsOverviewGrouping::Model => "Model",
         };
-        let group_key = self
+        let hint = self
             .agents_keymap
-            .primary_hint("toggle_grouping", &self.agents_keymap.toggle_grouping)
-            .filter(|_| header_active && !state.task_actions_blocked())
-            .filter(|hint| self.editing_allows_hint(&state, *hint))
-            .map(ShortcutHint::display_label)
+            .primary_hint("toggle_grouping", &self.agents_keymap.toggle_grouping);
+        let key = hint
+            .map(|hint| format!("  {}", hint.display_label()))
             .unwrap_or_default();
+        let width = usize::from(inset(layout.header).width);
+        // Reserve the longest group and the configured hint even when parked. Cycling
+        // groups or moving focus should keep the title in place.
+        let label = |key_width| {
+            [
+                ("Agent command center", "  Group: "),
+                ("Command Center", "  by "),
+                ("Command Center", "  "),
+                ("Group:", " "),
+            ]
+            .into_iter()
+            .find(|(title, prefix)| {
+                title.width() + prefix.width() + DIRECTORY.width() + key_width <= width
+            })
+        };
+        let (title, mut group_label) = match label(key.width()).or_else(|| label(0)) {
+            Some((title, prefix)) => (title, format!("{prefix}{grouping}")),
+            None => (grouping, String::new()),
+        };
+        if header_active
+            && !state.task_actions_blocked()
+            && hint.is_some_and(|hint| self.editing_allows_hint(&state, hint))
+            && title.width() + group_label.width() + key.width() <= width
+        {
+            group_label.push_str(&key);
+        }
         line(
-            vec![
-                "Agent command center".bold(),
-                format!("  Group: {grouping}  {group_key}").dim(),
-            ],
+            vec![title.bold(), group_label.dim()],
             inset(layout.header),
             buf,
         );
