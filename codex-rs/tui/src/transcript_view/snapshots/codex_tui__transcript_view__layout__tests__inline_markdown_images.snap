@@ -1,0 +1,18 @@
+---
+source: tui/src/transcript_view/layout_tests.rs
+expression: displayed.trim_end()
+---
+• ▣
+  ▣
+
+  Before
+  ▣
+  after.
+
+  • ▣
+    caption
+
+  remote and missing.
+
+  Final
+  ▣

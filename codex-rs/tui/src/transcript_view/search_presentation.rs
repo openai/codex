@@ -116,6 +116,7 @@ impl TranscriptView {
             self.search.current = current;
             layout?
         };
+        let layout = layout.for_search();
         self.search.scanning_layout = Some((anchor.key, Arc::clone(&layout)));
         Some(layout)
     }

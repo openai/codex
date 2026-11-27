@@ -122,6 +122,7 @@ impl Inline {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CopyLine {
+    pub(crate) images: Vec<MarkdownImage>,
     pub(crate) block: Option<Arc<block::Block>>,
     pub(crate) prefix: String,
     pub(crate) continuation: String,
@@ -178,7 +179,20 @@ pub(crate) fn has_visible_markup(
             }))
 }
 
+/// A local image and its rendered label in this line's byte coordinates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MarkdownImage {
+    pub(crate) path: Arc<std::path::Path>,
+    pub(crate) label: Range<usize>,
+}
+
 impl CopyLine {
+    pub(crate) fn byte_len(&self) -> usize {
+        self.runs
+            .last()
+            .map_or(/*default*/ 0, |(range, _)| range.end)
+    }
+
     pub(crate) fn has_list_marker(&self) -> bool {
         self.prefix != self.continuation
     }
@@ -198,10 +212,7 @@ impl CopyLine {
             .collect::<Vec<_>>();
         inline.sort();
         inline.dedup();
-        let start = self
-            .runs
-            .last()
-            .map_or(/*default*/ 0, |(range, _)| range.end);
+        let start = self.byte_len();
         // Keep literal spans separate so they never split context-sensitive prose escaping.
         if literal {
             if let Some(range) = self.literal_ranges.last_mut()

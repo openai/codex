@@ -98,6 +98,25 @@ pub(crate) fn is_markdown_file(path: &str) -> bool {
     })
 }
 
+pub(super) fn local_image_path(
+    destination: &str,
+    cwd: Option<&Path>,
+) -> Option<std::path::PathBuf> {
+    let link = sidebar_file_link(destination)?;
+    let path = Path::new(&link.path);
+    if link.location.is_some() || is_absolute_local_link_path(&link.path) != path.is_absolute() {
+        return None;
+    }
+    let resolved = cwd.unwrap_or_else(|| Path::new("")).join(path);
+    #[cfg(windows)]
+    if !matches!(resolved.components().next(), Some(std::path::Component::Prefix(p))
+        if matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)))
+    {
+        return None;
+    }
+    resolved.is_absolute().then_some(resolved)
+}
+
 pub(crate) fn sidebar_file_link(destination: &str) -> Option<FileLink> {
     if destination.len() > 8192 || destination.contains('?') {
         return None;

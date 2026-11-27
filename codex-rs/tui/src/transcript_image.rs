@@ -83,6 +83,12 @@ pub(crate) enum PreviewKind {
 }
 
 impl TranscriptImage {
+    pub(crate) fn fits(&self, available_columns: u16, cell_size: Option<(u32, u32)>) -> bool {
+        self.columns <= available_columns
+            && (self.protocol != ImageProtocol::Sixel
+                || cell_size == Some((self.cell_width, self.cell_height)))
+    }
+
     fn load_pixels(path: &Path, max_width: u32, max_height: u32) -> Option<RgbaImage> {
         if max_width == 0 || max_height == 0 {
             return None;
@@ -118,21 +124,48 @@ impl TranscriptImage {
         kind: PreviewKind,
     ) -> Option<Self> {
         let columns = width.saturating_sub(2);
+        Self::load_for_cells(path, columns, protocol, kind, terminal_cell_size())
+    }
+
+    pub(crate) fn load_for_cells(
+        path: &Path,
+        columns: u16,
+        protocol: ImageProtocol,
+        kind: PreviewKind,
+        cell_size: Option<(u32, u32)>,
+    ) -> Option<Self> {
         if columns == 0 {
             return None;
         }
         // Sixel paints physical pixels. Guessing could paint outside the reserved rows.
         let (cell_width, cell_height) = match protocol {
-            ImageProtocol::Sixel => terminal_cell_size()?,
+            ImageProtocol::Sixel => cell_size?,
             ImageProtocol::Kitty | ImageProtocol::KittyLocalFile => match kind {
                 PreviewKind::Inspected => (8, 16),
-                PreviewKind::Generated => terminal_cell_size().unwrap_or((8, 16)),
+                PreviewKind::Generated => cell_size.unwrap_or((8, 16)),
             },
         };
         let image = Self::decode(path)?;
-        // Keep the current Sixel encoding and tmux placeholder budgets.
         let (columns, max_width, max_height) = match (protocol, kind) {
-            (ImageProtocol::Sixel, _) => (columns.min(48), 160, 80.min(6 * cell_height)),
+            (ImageProtocol::Sixel, PreviewKind::Generated) => {
+                // Fit the original 160 x 80 pixel budget to the source aspect ratio.
+                // The encoder scans each six-row band once per active color, so
+                // also bound width times band count (including a partial last band).
+                const PIXELS: u32 = 160 * 80;
+                const BAND_COLUMNS: u32 = 160 * 80_u32.div_ceil(6);
+                let height_at_budget = (u64::from(PIXELS) * u64::from(image.height())
+                    / u64::from(image.width()))
+                .isqrt() as u32;
+                let height = height_at_budget
+                    .clamp(1, 80)
+                    .min(image.height())
+                    .min(6 * cell_height);
+                let width = (PIXELS / height).min(BAND_COLUMNS / height.div_ceil(6));
+                (columns.min(48), width, height)
+            }
+            (ImageProtocol::Sixel, PreviewKind::Inspected) => {
+                (columns.min(48), 160, 80.min(6 * cell_height))
+            }
             (_, PreviewKind::Inspected) => (columns.min(48), 384, 6 * cell_height),
             (_, PreviewKind::Generated) => {
                 let ratio = f64::from(image.width()) / f64::from(image.height());
@@ -152,9 +185,12 @@ impl TranscriptImage {
             }
         };
         let max_width = (u32::from(columns) * cell_width).min(max_width);
-        let pixels = image
+        let mut pixels = image
             .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
             .to_rgba8();
+        if kind == PreviewKind::Generated && protocol != ImageProtocol::Sixel {
+            pixels = pad_to_cells(pixels, cell_width, cell_height);
+        }
         Some(Self {
             protocol,
             columns: pixels.width().div_ceil(cell_width) as u16,
@@ -224,3 +260,22 @@ impl TranscriptImage {
         Ok(file)
     }
 }
+
+/// Kitty stretches a placement to whole cells. Fill the last partial cells
+/// with transparency so the fitted pixels keep their scale even when clipped.
+fn pad_to_cells(pixels: RgbaImage, cell_width: u32, cell_height: u32) -> RgbaImage {
+    let width = pixels.width().next_multiple_of(cell_width);
+    let height = pixels.height().next_multiple_of(cell_height);
+    // Bound the allocation even for implausible terminal-reported cell sizes.
+    if pixels.dimensions() == (width, height) || u64::from(width) * u64::from(height) > 1024 * 1024
+    {
+        return pixels;
+    }
+    let mut canvas = RgbaImage::new(width, height);
+    image::imageops::replace(&mut canvas, &pixels, /*x*/ 0, /*y*/ 0);
+    canvas
+}
+
+#[cfg(test)]
+#[path = "transcript_image_tests.rs"]
+mod tests;

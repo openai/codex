@@ -17,6 +17,7 @@ mod follow_control;
 mod footer;
 mod input;
 mod layout;
+mod markdown_images;
 mod mutations;
 mod prompt_header;
 mod search;
@@ -51,6 +52,7 @@ use select_mode::SelectMode;
 use selection::Selection;
 use snapshot::ViewSnapshot;
 pub(crate) use text::TextLayout;
+use text::images;
 
 pub(crate) use bookmark::TranscriptBookmark;
 pub(crate) use input::JumpTarget;
@@ -465,6 +467,27 @@ impl TranscriptView {
         }
     }
 
+    pub(crate) fn request_visible_images(
+        &mut self,
+        frames: &crate::tui::FrameRequester,
+        local_workspace: impl Future<Output = bool> + Send + 'static,
+        streaming: Option<&Arc<dyn HistoryCell>>,
+    ) {
+        if self.image_protocol.is_none() || self.mode != HistoryRenderMode::Rich {
+            return;
+        }
+        let streaming = streaming.map(EntryKey::cell);
+        let visible = self
+            .visible
+            .chunk_by(|a, b| a.index == b.index)
+            .filter(|rows| Some(rows[0].key) != streaming)
+            .flat_map(|rows| {
+                let first = &rows[0];
+                images::visible_requests(&first.layout, first.row..first.row + rows.len())
+            });
+        self.cache.images.request(visible, frames, local_workspace);
+    }
+
     pub(crate) fn image_placements(&self) -> Vec<crate::transcript_image::ImagePlacement> {
         let mut placements = Vec::new();
         let mut y = self.area.y;
@@ -472,33 +495,30 @@ impl TranscriptView {
             let entry_y = y;
             y += rows.len() as u16;
             let visible = &rows[0];
-            let Some(image) = visible.layout.visible_image() else {
-                continue;
-            };
-            let image_start = visible.layout.text_row_count();
-            let skip = image_start.saturating_sub(visible.row);
-            if skip >= rows.len() {
-                continue;
+            for (start, indent, image) in images::regions(&visible.layout) {
+                let top = start.max(visible.row);
+                let bottom = (start + usize::from(image.rows)).min(visible.row + rows.len());
+                if top >= bottom
+                    || !image.fits(
+                        self.area.width.saturating_sub(indent),
+                        self.cache.cell_size(),
+                    )
+                {
+                    continue;
+                }
+                placements.push(crate::transcript_image::ImagePlacement {
+                    image: Arc::clone(image),
+                    area: Rect::new(
+                        self.area.x + indent,
+                        entry_y + (top - visible.row) as u16,
+                        image.columns,
+                        (bottom - top) as u16,
+                    ),
+                    first_row: top - start,
+                    file: None,
+                    terminal_id: None,
+                });
             }
-            let image_indent = if visible.layout.image_left_aligned {
-                // Match the two-column prefix the assistant's Markdown uses.
-                2
-            } else {
-                self.area.width.saturating_sub(image.columns) / 2
-            };
-            let area = Rect::new(
-                self.area.x + image_indent,
-                entry_y + skip as u16,
-                image.columns,
-                (rows.len() - skip) as u16,
-            );
-            placements.push(crate::transcript_image::ImagePlacement {
-                image: Arc::clone(image),
-                area,
-                first_row: visible.row.saturating_sub(image_start),
-                file: None,
-                terminal_id: None,
-            });
         }
         placements
     }
@@ -844,10 +864,7 @@ impl TranscriptView {
             Position::Reading(anchor) => {
                 let index = self.resolve(cells, anchor);
                 let row = self.layout(cells, index).map_or(/*default*/ 0, |layout| {
-                    layout
-                        .row_for_offset(anchor.offset)
-                        .saturating_add_signed(anchor.row_bias.saturating_neg())
-                        .min(layout.row_count().saturating_sub(/*rhs*/ 1))
+                    layout.reading_row(anchor.offset, anchor.row_bias)
                 });
                 self.position = Position::Reading(Anchor {
                     key: self.entry_key(cells, index),

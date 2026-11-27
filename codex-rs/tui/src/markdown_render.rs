@@ -43,6 +43,7 @@
 //! Inline code and local file paths share the active syntax theme's raw-markup foreground.
 
 use crate::line_truncation::span_width;
+use crate::markdown_copy::MarkdownImage;
 use crate::markdown_text_merge::DecodedTextMerge;
 use crate::render::highlight::current_syntax_theme;
 use crate::render::highlight::foreground_color_for_scopes;
@@ -547,6 +548,8 @@ struct Writer<'a, 'policy> {
     copy_inline: Vec<crate::markdown_copy::Inline>,
     blocks: crate::markdown_copy::block::Stack,
     copy_line: crate::markdown_copy::CopyLine,
+    image_depth: usize,
+    image: Option<MarkdownImage>,
     quote_sources: Vec<std::sync::Arc<str>>,
     code_sources: Vec<crate::markdown_copy::SourceBlock>,
     transformed_code_source: Option<std::sync::Arc<str>>,
@@ -596,6 +599,8 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             copy_inline: Vec::new(),
             blocks: Default::default(),
             copy_line: Default::default(),
+            image_depth: 0,
+            image: None,
             quote_sources: Vec::new(),
             code_sources: Vec::new(),
             transformed_code_source: None,
@@ -821,14 +826,33 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string(), range.start),
+            Tag::Image { dest_url, .. } => {
+                self.image_depth += 1;
+                if self.image_depth == 1
+                    && !self.in_table_cell()
+                    && self.link.is_none()
+                    && let Some(path) =
+                        local_links::local_image_path(&dest_url, self.cwd.as_deref())
+                {
+                    if self.current_line_content.is_none()
+                        || self.needs_newline
+                        || self.pending_marker_line
+                    {
+                        self.push_line(Line::default());
+                        self.needs_newline = false;
+                    }
+                    let start = self.copy_line.byte_len();
+                    self.image = Some(MarkdownImage {
+                        path: path.into(),
+                        label: start..start,
+                    });
+                }
+            }
             Tag::Table(alignments) => self.start_table(alignments),
             Tag::TableHead => self.start_table_head(),
             Tag::TableRow => self.start_table_row(range),
             Tag::TableCell => self.start_table_cell(),
-            Tag::HtmlBlock
-            | Tag::FootnoteDefinition(_)
-            | Tag::Image { .. }
-            | Tag::MetadataBlock(_) => {}
+            Tag::HtmlBlock | Tag::FootnoteDefinition(_) | Tag::MetadataBlock(_) => {}
         }
     }
 
@@ -873,14 +897,20 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
+            TagEnd::Image => {
+                self.image_depth -= 1;
+                if self.image_depth == 0
+                    && let Some(mut image) = self.image.take()
+                {
+                    image.label.end = self.copy_line.byte_len();
+                    self.copy_line.images.push(image);
+                }
+            }
             TagEnd::Table => self.end_table(),
             TagEnd::TableHead => self.end_table_head(),
             TagEnd::TableRow => self.end_table_row(),
             TagEnd::TableCell => self.end_table_cell(),
-            TagEnd::HtmlBlock
-            | TagEnd::FootnoteDefinition
-            | TagEnd::Image
-            | TagEnd::MetadataBlock(_) => {}
+            TagEnd::HtmlBlock | TagEnd::FootnoteDefinition | TagEnd::MetadataBlock(_) => {}
         }
     }
 
@@ -2601,6 +2631,11 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         if let Some(mut line) = self.current_line_content.take() {
             let style = self.current_line_style;
             let mut source = crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+            if let Some(image) = &mut self.image {
+                image.label.end = source.text.len();
+                self.copy_line.images.push(image.clone());
+                image.label = 0..0;
+            }
             if !self.current_line_in_code_block
                 && crate::wrapping::text_contains_url_like(&source.text)
             {

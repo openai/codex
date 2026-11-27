@@ -30,7 +30,7 @@ pub(super) struct SideCompanion {
 pub(super) struct SideAnswer {
     turn_id: String,
     item_id: String,
-    index: usize,
+    pub(super) index: usize,
     pending: String,
 }
 

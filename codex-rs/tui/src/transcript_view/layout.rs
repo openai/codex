@@ -117,6 +117,7 @@ fn is_rich_user_prompt(cell: &dyn HistoryCell, mode: HistoryRenderMode) -> bool 
 
 #[derive(Default)]
 pub(super) struct LayoutCache {
+    pub(super) images: markdown_images::MarkdownImages,
     entries: Vec<CachedLayout>,
     document_resize_preview: bool,
     frame: u64,
@@ -212,6 +213,8 @@ impl TranscriptView {
         if let Some(layout) = self
             .snapshot()
             .and_then(|snapshot| snapshot.pinned.get(&key))
+            // Refresh previews after selection releases the pinned text layout.
+            .filter(|layout| self.selection.is_some() || !layout.has_markdown_images)
         {
             return Some(Arc::clone(layout));
         }
@@ -332,6 +335,10 @@ impl TranscriptView {
 }
 
 impl LayoutCache {
+    pub(super) fn cell_size(&self) -> Option<(u32, u32)> {
+        self.render_state.as_ref().and_then(|state| state.cell_size)
+    }
+
     pub(super) fn set_document_resize_preview(&mut self, active: bool) {
         if self.document_resize_preview && !active {
             // Markdown tables and other width-dependent content need an exact final layout.
@@ -362,6 +369,9 @@ impl LayoutCache {
         if self.render_state.as_ref() != Some(&state) {
             self.entries.clear();
             self.render_state = Some(state);
+        }
+        if let Some(reply) = self.images.poll() {
+            self.entries.retain(|entry| !entry.source.ptr_eq(&reply));
         }
     }
 
@@ -395,7 +405,13 @@ impl LayoutCache {
             }
             return layout;
         }
-        let layout = render();
+        let mut layout = render();
+        if let Some(protocol) = presentation.image_protocol
+            && cell.as_any().is::<crate::history_cell::AgentMarkdownCell>()
+        {
+            let size = self.cell_size();
+            images::attach(&mut layout, cell, protocol, size, &self.images);
+        }
         let layout = if presentation.separated {
             layout.with_leading_separator()
         } else {
@@ -461,6 +477,7 @@ impl LayoutCache {
         let retained_bytes = |entry: &CachedLayout| {
             entry.layout.text().len()
                 + entry.layout.mapping_bytes
+                + images::retained_bytes(&entry.layout)
                 + entry
                     .layout
                     .image

@@ -166,6 +166,112 @@ fn recent_entries_are_reused_and_old_entries_are_evicted() {
     );
 }
 
+#[tokio::test]
+async fn local_markdown_images_appear_at_their_labels_in_compact_replies() {
+    use crate::history_cell::AgentMarkdownCell;
+    use crate::pets::ImageProtocol;
+    use crate::transcript_view::tests::text;
+    use crate::tui::FrameRequester;
+    use crossterm::event::KeyModifiers;
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("toolbar final.png");
+    image::RgbaImage::new(/*width*/ 1, /*height*/ 1)
+        .save(&path)
+        .unwrap();
+    std::fs::copy(&path, dir.path().join("trailing.png")).unwrap();
+    let markdown = format!(
+        "![Installed toolbar](<{}>)![](trailing.png)\n\n\
+         Before ![two\nlines][toolbar] after.\n\n\
+         - ![](toolbar%20final.png) caption\n\n\
+         ![remote](https://example.com/t.png) and ![missing](missing.png).\n\n\
+         Final ![trailing label](trailing.png)\n\n\
+         [toolbar]: toolbar%20final.png",
+        url::Url::from_file_path(&path).unwrap()
+    );
+    let cells: Vec<Arc<dyn HistoryCell>> =
+        vec![Arc::new(AgentMarkdownCell::new(markdown, dir.path()))];
+    let area = Rect::new(
+        /*x*/ 3, /*y*/ 4, /*width*/ 48, /*height*/ 32,
+    );
+    let mut buf = Buffer::empty(area);
+    let mut view = TranscriptView {
+        copy_on_select: true,
+        ..Default::default()
+    };
+    let (tx, mut rx) = tokio::sync::broadcast::channel(/*capacity*/ 1);
+    let frames = FrameRequester::new(tx);
+    view.render(area, &mut buf, &cells);
+    let original = view.layout(&cells, /*index*/ 0).unwrap();
+    assert!(text(&buf).contains("Installed toolbar"));
+
+    view.image_protocol = Some(ImageProtocol::Kitty);
+    view.render(area, &mut buf, &cells);
+    tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), async {
+        while view.image_placements().len() < 5 {
+            view.request_visible_images(&frames, async { true }, /*streaming*/ None);
+            rx.recv().await.unwrap();
+            view.render(area, &mut buf, &cells);
+        }
+    })
+    .await
+    .unwrap();
+    for placement in view.image_placements() {
+        buf[(placement.area.x, placement.area.y)].set_symbol("▣");
+    }
+    let displayed = crate::terminal_hyperlinks::strip_osc8(&text(&buf));
+    let layout = view.layout(&cells, /*index*/ 0).unwrap();
+    assert_eq!(layout.text(), original.text());
+    let search = Arc::clone(&layout).for_search();
+    assert_eq!(search.row_count(), original.row_count());
+    assert_eq!(images::regions(&search).count(), 0);
+    assert!(search.has_markdown_images);
+    assert_eq!(images::regions(&layout.rewrap(/*width*/ 1)).count(), 0);
+
+    let preview = view.image_placements().last().unwrap().area;
+    assert_eq!(preview.height, 1);
+    let before = (preview.x, preview.y - 1);
+    for (column, expected) in [
+        (preview.right() - 1, "Final "),
+        (preview.right(), "Final trailing label"),
+        (preview.right() + 2, "Final trailing label"),
+    ] {
+        let after = (column, preview.y);
+        for (from, to) in [(before, after), (after, before)] {
+            for (kind, (column, row)) in [
+                (MouseEventKind::Down(MouseButton::Left), from),
+                (MouseEventKind::Drag(MouseButton::Left), to),
+            ] {
+                view.handle_mouse(
+                    MouseEvent {
+                        kind,
+                        column,
+                        row,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    &cells,
+                );
+            }
+            let Some(ViewAction::CopyOnSelect(copied)) = view.handle_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: to.0,
+                    row: to.1,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &cells,
+            ) else {
+                panic!("expected a copy on release for {from:?} → {to:?}");
+            };
+            assert_eq!(copied, expected, "{from:?} → {to:?}");
+        }
+    }
+    insta::assert_snapshot!("inline_markdown_images", displayed.trim_end());
+}
+
 #[test]
 fn fullscreen_image_previews_follow_layout_without_entering_text_surfaces() {
     use crate::history_cell::new_image_generation_call;

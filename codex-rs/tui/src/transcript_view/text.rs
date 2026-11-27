@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 #[path = "text_blocks.rs"]
 pub(super) mod blocks;
+#[path = "text_images.rs"]
+pub(super) mod images;
 #[path = "text_logical.rs"]
 mod logical;
 
@@ -54,6 +56,8 @@ pub(crate) struct TextLayout {
     blocks: std::sync::OnceLock<blocks::BlockIndex>,
     pub(super) image: Option<std::sync::Arc<crate::transcript_image::TranscriptImage>>,
     pub(super) image_left_aligned: bool,
+    pub(super) has_markdown_images: bool,
+    inline_images: Vec<images::InlineImage>,
     logical: Vec<LogicalLine>,
     text: String,
     rows: Vec<TextRow>,
@@ -225,7 +229,21 @@ impl TextLayout {
 
     /// Reflow the same displayed content revision, retaining styles, links and disclosure label.
     pub(super) fn rewrap(&self, width: u16) -> Self {
+        self.reflow(width, self.inline_images.clone())
+    }
+
+    pub(super) fn for_search(self: Arc<Self>) -> Arc<Self> {
+        if self.inline_images.is_empty() {
+            self
+        } else {
+            Arc::new(self.reflow(self.width, Vec::new()))
+        }
+    }
+
+    fn reflow(&self, width: u16, images: Vec<images::InlineImage>) -> Self {
         let mut layout = Self::from_logical(self.logical.clone(), width);
+        layout.has_markdown_images = self.has_markdown_images;
+        images::place(&mut layout, images);
         if let Some(control) = &self.disclosure_control {
             layout = layout.with_control(control.label.clone(), control.anchor);
         }
@@ -735,6 +753,9 @@ impl TextLayout {
 
     /// Resolve a cell coordinate to a grapheme boundary, clamping padding to the row's text.
     pub(super) fn position_at(&self, row: usize, column: u16) -> usize {
+        if let Some(end) = images::label_end_at(self, row, column) {
+            return end;
+        }
         let Some(row) = self.rows.get(row) else {
             return self.text.len();
         };
@@ -864,6 +885,17 @@ impl TextLayout {
                 .graphemes(/*is_extended*/ true)
                 .next()
                 .map_or(/*default*/ 0, str::len)
+    }
+
+    pub(super) fn reading_row(&self, offset: usize, bias: isize) -> usize {
+        let row = self.row_for_offset(offset);
+        let target = row.saturating_add_signed(bias.saturating_neg());
+        // A resize may briefly replace several rows at one offset with a single label.
+        if bias > 0 && !self.inline_images.is_empty() {
+            let first = self.rows.partition_point(|r| r.source.start < offset);
+            return target.max(first.min(row));
+        }
+        target.min(self.row_count().saturating_sub(/*rhs*/ 1))
     }
 
     /// Find the display row containing a source position, including omitted wrapping whitespace.
@@ -1109,6 +1141,8 @@ impl TextLayout {
             blocks: Default::default(),
             image: None,
             image_left_aligned: false,
+            has_markdown_images: false,
+            inline_images: Vec::new(),
             logical,
             text,
             mapping_bytes: rows

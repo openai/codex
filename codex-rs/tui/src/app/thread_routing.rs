@@ -19,7 +19,14 @@ const REALTIME_STOP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 impl App {
     pub(super) fn displayed_conversation_backend_id(&self) -> Option<crate::backend_id::BackendId> {
-        self.current_displayed_thread_id()
+        self.conversation_backend_id(self.current_displayed_thread_id())
+    }
+
+    pub(super) fn conversation_backend_id(
+        &self,
+        thread_id: Option<ThreadId>,
+    ) -> Option<crate::backend_id::BackendId> {
+        thread_id
             .and_then(|thread_id| {
                 self.thread_event_channels
                     .get(&thread_id)
