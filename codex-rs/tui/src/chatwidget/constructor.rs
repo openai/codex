@@ -262,6 +262,7 @@ impl ChatWidget {
             read_only_thread: None,
             read_only_history: false,
             thread_settings_confirmed: false,
+            confirmed_permissions: None,
             provider_error: None,
             fork_in_progress: false,
             misalignment_policy_violation: None,

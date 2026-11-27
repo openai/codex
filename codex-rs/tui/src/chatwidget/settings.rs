@@ -560,6 +560,16 @@ impl ChatWidget {
                 return;
             }
         };
+        // Transcript replay follows restoration of the latest cached session.
+        if replay_kind.is_none() {
+            self.confirmed_permissions =
+                Some(crate::session_state::ConfirmedPermissions::from_update(
+                    &settings,
+                    &permission_profile,
+                    &cwd,
+                    self.confirmed_permissions.as_deref(),
+                ));
+        }
         let cwd_changed = self.current_cwd != cwd;
         self.status_line_project_root_name_cache = None;
         if let Ok(local) = cwd.to_abs_path()

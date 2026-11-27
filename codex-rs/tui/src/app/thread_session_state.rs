@@ -84,6 +84,7 @@ impl App {
                 // `thread/read` does not include all thread settings, so do not carry
                 // thread-scoped state from the currently active session.
                 session.thread_settings_confirmed = false;
+                session.confirmed_permissions = None;
                 session.primary_environment_cwd = None;
                 session.collaboration_mode = None;
                 session.daybreak_enabled = false;
@@ -93,6 +94,7 @@ impl App {
             ThreadSessionState {
                 read_only_history: true,
                 thread_settings_confirmed: false,
+                confirmed_permissions: None,
                 primary_environment_cwd: None,
                 daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -196,6 +198,16 @@ mod tests {
         ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: Some(std::sync::Arc::new(
+                crate::session_state::ConfirmedPermissions {
+                    profile: PermissionProfile::read_only(),
+                    active: None,
+                    policy: AskForApproval::Never,
+                    reviewer: ApprovalsReviewer::User,
+                    cwd: cwd.abs().into(),
+                    roots: vec![cwd.abs().into()],
+                },
+            )),
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -496,6 +508,7 @@ mod tests {
             .permissions
             .permission_profile()
             .clone();
+        assert_eq!(session.confirmed_permissions, None);
         assert_eq!(session.permission_profile, expected_permission_profile);
         assert_ne!(
             session.permission_profile,
@@ -520,6 +533,7 @@ mod tests {
             .lock()
             .await;
         let started = store.session.as_ref().expect("inferred session");
+        assert_eq!(started.confirmed_permissions, None);
         assert_eq!(
             (started.forked_from_id, &started.fork_parent_title),
             (None, &None)

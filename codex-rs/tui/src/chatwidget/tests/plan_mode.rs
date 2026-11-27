@@ -18,6 +18,7 @@ fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSession
     crate::session_state::ThreadSessionState {
         read_only_history: false,
         thread_settings_confirmed: true,
+        confirmed_permissions: None,
         primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -1241,6 +1242,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let configured = crate::session_state::ThreadSessionState {
         read_only_history: false,
         thread_settings_confirmed: true,
+        confirmed_permissions: None,
         primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,

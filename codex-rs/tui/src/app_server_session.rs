@@ -3256,6 +3256,7 @@ async fn thread_session_state_from_thread_start_response(
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
+        Some(&response.sandbox),
         response.active_permission_profile.clone().map(Into::into),
         cwd,
         response.runtime_workspace_roots.clone(),
@@ -3295,6 +3296,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
+        Some(&response.sandbox),
         response.active_permission_profile.clone().map(Into::into),
         cwd,
         response.runtime_workspace_roots.clone(),
@@ -3333,6 +3335,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
+        Some(&response.sandbox),
         response.active_permission_profile.clone().map(Into::into),
         cwd,
         response.runtime_workspace_roots.clone(),
@@ -3398,6 +3401,7 @@ async fn thread_session_state_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
+    sandbox: Option<&codex_app_server_protocol::SandboxPolicy>,
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: PathUri,
     runtime_workspace_roots: Vec<LegacyAppPathString>,
@@ -3417,7 +3421,27 @@ async fn thread_session_state_from_thread_response(
         &local_settings.history,
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
+    let runtime_workspace_roots = runtime_workspace_roots
+        .into_iter()
+        .map(PathUri::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    // Embedded sessions may substitute a local execution profile. Keep the wire
+    // projection even then, without changing how execution settings are adopted.
+    let confirmed_permissions = sandbox
+        .and_then(|policy| policy.permission_profile_for_cwd(&cwd).ok())
+        .map(|profile| {
+            std::sync::Arc::new(crate::session_state::ConfirmedPermissions {
+                profile,
+                active: active_permission_profile.clone(),
+                policy: approval_policy,
+                reviewer: approvals_reviewer,
+                cwd: cwd.clone(),
+                roots: runtime_workspace_roots.clone(),
+            })
+        });
     Ok(ThreadSessionState {
+        confirmed_permissions,
         read_only_history: false,
         thread_settings_confirmed: true,
         daybreak_enabled: false,
@@ -3437,11 +3461,7 @@ async fn thread_session_state_from_thread_response(
         permission_profile,
         active_permission_profile,
         cwd,
-        runtime_workspace_roots: runtime_workspace_roots
-            .into_iter()
-            .map(PathUri::try_from)
-            .collect::<Result<_, _>>()
-            .map_err(|err| err.to_string())?,
+        runtime_workspace_roots,
         instruction_source_paths,
         reasoning_effort,
         collaboration_mode: None,
@@ -5697,6 +5717,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             PermissionProfile::read_only(),
+            /*sandbox*/ None,
             /*active_permission_profile*/ None,
             test_path_buf("/tmp/project").abs().into(),
             Vec::new(),
@@ -5707,6 +5728,7 @@ mod tests {
         .await
         .expect("session should map");
 
+        assert_eq!(session.confirmed_permissions, None);
         let metadata = session
             .message_history
             .expect("session should include message-history metadata");
@@ -5733,6 +5755,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             PermissionProfile::read_only(),
+            Some(&codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             /*active_permission_profile*/ None,
             test_path_buf("/tmp/project").abs().into(),
             Vec::new(),
@@ -5744,6 +5767,11 @@ mod tests {
         .expect("session should map");
 
         assert_eq!(session.forked_from_id, Some(forked_from_id));
+        assert_eq!(
+            session.confirmed_permissions.unwrap().profile,
+            PermissionProfile::Disabled
+        );
+        assert_eq!(session.permission_profile, PermissionProfile::read_only());
     }
 
     #[test]

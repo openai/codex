@@ -8888,6 +8888,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let session = ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: None,
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -9636,6 +9637,7 @@ pub(super) fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSe
     ThreadSessionState {
         read_only_history: false,
         thread_settings_confirmed: true,
+        confirmed_permissions: None,
         primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -10901,6 +10903,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
         let session = ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: None,
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -10977,6 +10980,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
         .handle_thread_session(crate::session_state::ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: None,
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -12394,6 +12398,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         let event = crate::session_state::ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: None,
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -13188,6 +13193,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         .handle_thread_session(crate::session_state::ThreadSessionState {
             read_only_history: false,
             thread_settings_confirmed: true,
+            confirmed_permissions: None,
             primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,

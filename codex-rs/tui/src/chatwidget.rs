@@ -706,6 +706,7 @@ pub(crate) struct ChatWidget {
     read_only_thread: Option<ReadOnlyThread>,
     read_only_history: bool,
     thread_settings_confirmed: bool,
+    confirmed_permissions: Option<Arc<crate::session_state::ConfirmedPermissions>>,
     provider_error: Option<codex_app_server_protocol::ModelProviderError>,
     /// Covers both queued and executing forks so repeated shortcuts cannot queue another one.
     pub(crate) fork_in_progress: bool,

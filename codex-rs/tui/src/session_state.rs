@@ -4,6 +4,7 @@
 //! TUI, this module holds the small internal state shape used by app orchestration and widgets.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ThreadEnvironment;
@@ -26,6 +27,53 @@ pub(crate) struct MessageHistoryMetadata {
     pub(crate) entry_count: usize,
 }
 
+/// Display-only snapshot of the server's legacy sandbox projection and approval settings.
+/// A profile name does not imply that we know the profile's full definition.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConfirmedPermissions {
+    pub(crate) profile: PermissionProfile,
+    pub(crate) active: Option<ActivePermissionProfile>,
+    pub(crate) policy: AskForApproval,
+    pub(crate) reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    pub(crate) cwd: PathUri,
+    pub(crate) roots: Vec<PathUri>,
+}
+
+impl ConfirmedPermissions {
+    pub(crate) fn from_update(
+        settings: &codex_app_server_protocol::ThreadSettings,
+        profile: &PermissionProfile,
+        cwd: &PathUri,
+        previous: Option<&Self>,
+    ) -> Arc<Self> {
+        let roots = match &settings.environments {
+            Some(environments) => environments
+                .first()
+                .map(|env| {
+                    env.runtime_workspace_roots
+                        .iter()
+                        .cloned()
+                        .map(PathUri::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default(),
+            None => previous
+                .filter(|snapshot| &snapshot.cwd == cwd)
+                .map(|snapshot| snapshot.roots.clone())
+                .unwrap_or_default(),
+        };
+        Arc::new(Self {
+            profile: profile.clone(),
+            active: settings.active_permission_profile.clone().map(Into::into),
+            policy: settings.approval_policy,
+            reviewer: settings.approvals_reviewer.to_core(),
+            cwd: cwd.clone(),
+            roots,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadSessionState {
     /// This TUI opened saved history without a live attachment.
@@ -41,9 +89,12 @@ pub(crate) struct ThreadSessionState {
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
     pub(crate) service_tier: Option<String>,
+    /// Only server responses and notifications populate this. The execution fields below
+    /// may include local overrides or defaults borrowed from another thread.
+    pub(crate) confirmed_permissions: Option<Arc<ConfirmedPermissions>>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
-    /// Permission snapshot used by TUI display surfaces. Legacy app-server
+    /// Permission snapshot used to restore widget configuration. Legacy app-server
     /// responses are converted to a profile at ingestion time using the
     /// response cwd so cached sessions do not reinterpret cwd-bound grants.
     /// Turn requests must not treat this snapshot as a local permission

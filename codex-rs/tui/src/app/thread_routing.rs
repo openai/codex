@@ -1512,6 +1512,7 @@ impl App {
         let mut session = self.primary_session_configured.clone()?;
         session.read_only_history = false;
         session.thread_settings_confirmed = false;
+        session.confirmed_permissions = None;
         session.primary_environment_cwd = crate::session_state::primary_environment_cwd(
             notification
                 .thread

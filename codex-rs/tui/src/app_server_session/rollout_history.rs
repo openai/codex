@@ -92,6 +92,7 @@ impl AppServerSession {
             AskForApproval::from(config.permissions.approval_policy.value()),
             config.approvals_reviewer,
             config.permissions.permission_profile().clone(),
+            /*sandbox*/ None,
             config.permissions.active_permission_profile(),
             super::decode_thread_cwd(&thread.cwd, self.path_convention())?,
             LegacyAppPathString::from_abs_paths(&config.workspace_roots),

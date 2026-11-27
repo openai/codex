@@ -51,6 +51,16 @@ pub(super) fn configured_thread_session(
     crate::session_state::ThreadSessionState {
         read_only_history: false,
         thread_settings_confirmed: true,
+        confirmed_permissions: Some(std::sync::Arc::new(
+            crate::session_state::ConfirmedPermissions {
+                profile: PermissionProfile::read_only(),
+                active: None,
+                policy: AskForApproval::Never,
+                reviewer: ApprovalsReviewer::User,
+                cwd: test_path_buf("/tmp/thread-settings").abs().into(),
+                roots: vec![test_path_buf("/tmp/thread-settings").abs().into()],
+            },
+        )),
         primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
@@ -786,11 +796,22 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
     notification.thread_settings.cwd =
         codex_utils_path_uri::LegacyAppPathString::from_string(remote_cwd);
+    let root = test_path_buf("/tmp/primary-workspace").abs();
+    notification.thread_settings.environments =
+        Some(vec![codex_app_server_protocol::ThreadEnvironment {
+            environment_id: "primary".into(),
+            cwd: root.clone().into(),
+            runtime_workspace_roots: vec![root.clone().into()],
+        }]);
     chat.handle_server_notification(
         ServerNotification::ThreadSettingsUpdated(notification),
         /*replay_kind*/ None,
     );
 
+    assert_eq!(
+        chat.confirmed_permissions.as_ref().unwrap().roots,
+        vec![codex_utils_path_uri::PathUri::from_abs_path(&root)]
+    );
     assert_eq!(chat.session_cwd().inferred_native_path_string(), remote_cwd);
     assert_eq!(
         chat.current_workspace_roots.as_slice(),
@@ -864,8 +885,10 @@ async fn thread_settings_updated_during_replay_restores_effort_without_animating
     };
     crate::terminal_palette::with_test_palette(/*colors*/ None, || {
         // Switching back restores the current session before replaying older settings.
+        let confirmed = chat.confirmed_permissions.clone();
         let replay = Some(ReplayKind::ThreadSnapshot);
         chat.handle_server_notification(settings(ReasoningEffortConfig::High), replay);
+        assert_eq!(chat.confirmed_permissions, confirmed);
         chat.handle_server_notification(settings(ReasoningEffortConfig::Max), replay);
         assert!(render_bottom_popup(&chat, /*width*/ 80).contains("max"));
         chat.handle_server_notification(settings(ReasoningEffortConfig::Ultra), replay);

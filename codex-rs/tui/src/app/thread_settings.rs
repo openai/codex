@@ -299,6 +299,12 @@ pub(super) fn apply_thread_settings_to_session(
     session.service_tier = settings.service_tier.clone();
     session.approval_policy = settings.approval_policy;
     session.approvals_reviewer = settings.approvals_reviewer.to_core();
+    session.confirmed_permissions = Some(crate::session_state::ConfirmedPermissions::from_update(
+        settings,
+        &permission_profile,
+        cwd,
+        session.confirmed_permissions.as_deref(),
+    ));
     session.permission_profile = permission_profile;
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     if let Some(environments) = &settings.environments {

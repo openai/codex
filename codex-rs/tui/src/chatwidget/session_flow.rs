@@ -102,6 +102,7 @@ impl ChatWidget {
         self.thread_id = Some(session.thread_id);
         self.read_only_history = session.read_only_history;
         self.thread_settings_confirmed = session.thread_settings_confirmed;
+        self.confirmed_permissions = session.confirmed_permissions.clone();
         self.sync_context_window_visibility();
         self.daybreak_enabled = self.config.features.enabled(Feature::CliDaybreak)
             && session.daybreak_enabled

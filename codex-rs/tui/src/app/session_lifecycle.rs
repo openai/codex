@@ -505,6 +505,7 @@ impl App {
                 if let Some(channel) = self.thread_event_channels.get(&thread_id)
                     && let Some(cached) = channel.store.lock().await.session.as_ref()
                 {
+                    session.confirmed_permissions = cached.confirmed_permissions.clone();
                     session.approval_policy = cached.approval_policy;
                     session.permission_profile = cached.permission_profile.clone();
                     session.active_permission_profile = cached.active_permission_profile.clone();
