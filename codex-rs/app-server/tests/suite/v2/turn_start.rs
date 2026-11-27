@@ -64,6 +64,8 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
@@ -3276,13 +3278,25 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_exec_approval_cancel_completes_command_before_turn_v2() -> Result<()> {
+    run_turn_start_exec_approval_rejection_v2(
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Cancel,
+        })?,
+        CommandExecutionStatus::Declined,
+        /*expected_rejection*/ None,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     run_turn_start_exec_approval_rejection_v2(
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
             decision: CommandExecutionApprovalDecision::Decline,
         })?,
         CommandExecutionStatus::Declined,
-        "rejected by user",
+        Some("rejected by user"),
     )
     .await
 }
@@ -3292,7 +3306,7 @@ async fn turn_start_exec_approval_invalid_response_v2() -> Result<()> {
     run_turn_start_exec_approval_rejection_v2(
         json!({ "unexpected": "response" }),
         CommandExecutionStatus::Failed,
-        "approval request failed",
+        Some("approval request failed"),
     )
     .await
 }
@@ -3300,7 +3314,7 @@ async fn turn_start_exec_approval_invalid_response_v2() -> Result<()> {
 async fn run_turn_start_exec_approval_rejection_v2(
     approval_response: Value,
     expected_status: CommandExecutionStatus,
-    expected_rejection: &str,
+    expected_rejection: Option<&str>,
 ) -> Result<()> {
     // TODO(anp): Remove after command approval routing accepts target-native Windows cwd.
     skip_if_wine_exec!(
@@ -3324,15 +3338,15 @@ async fn run_turn_start_exec_approval_rejection_v2(
     let expected_display_command =
         expected_approval_command.replace(bearer_token, "[REDACTED_SECRET]");
 
-    let responses = vec![
-        create_escalated_command_execution_sse_response(
-            shell_command,
-            /*workdir*/ None,
-            Some(5000),
-            "call-decline",
-        )?,
-        create_final_assistant_message_sse_response("done")?,
-    ];
+    let mut responses = vec![create_escalated_command_execution_sse_response(
+        shell_command,
+        /*workdir*/ None,
+        Some(5000),
+        "call-decline",
+    )?];
+    if expected_rejection.is_some() {
+        responses.push(create_final_assistant_message_sse_response("done")?);
+    }
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
         .with_approval_policy("on-request")
@@ -3346,6 +3360,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            history_mode: Some(ThreadHistoryMode::Paginated),
             ..Default::default()
         })
         .await?;
@@ -3416,7 +3431,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
             let completed: ItemCompletedNotification =
                 mcp.read_notification("item/completed").await?;
             if let ThreadItemPayload::CommandExecution { .. } = completed.item.payload {
-                return Ok::<ThreadItemPayload, anyhow::Error>(completed.item.payload);
+                return Ok::<_, anyhow::Error>(completed.item);
             }
         }
     })
@@ -3429,7 +3444,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
         exit_code,
         aggregated_output,
         ..
-    } = completed_command_execution
+    } = completed_command_execution.payload.clone()
     else {
         unreachable!("loop ensures we break on command execution items");
     };
@@ -3442,22 +3457,58 @@ async fn run_turn_start_exec_approval_rejection_v2(
     assert!(exit_code.is_none());
     assert!(aggregated_output.is_none());
 
-    timeout(
+    // read_notification buffers anything it skips while looking for item/completed.
+    assert!(
+        !mcp.pending_notification_methods()
+            .iter()
+            .any(|method| method == "turn/completed"),
+        "turn/completed arrived before the command's item/completed"
+    );
+    let completed: TurnCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
+        mcp.read_notification("turn/completed"),
     )
     .await??;
+    assert_eq!(completed.turn.id, turn.id);
+    if let Some(expected_rejection) = expected_rejection {
+        let requests = server
+            .received_requests()
+            .await
+            .context("failed to fetch received requests")?;
+        assert!(
+            requests.iter().any(|request| {
+                request.url.path().ends_with("/responses")
+                    && body_contains(request, expected_rejection)
+            }),
+            "model request should include approval rejection: {expected_rejection}"
+        );
+    } else {
+        assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+    }
 
-    let requests = server
-        .received_requests()
-        .await
-        .context("failed to fetch received requests")?;
-    assert!(
-        requests.iter().any(|request| {
-            request.url.path().ends_with("/responses") && body_contains(request, expected_rejection)
-        }),
-        "model request should include approval rejection: {expected_rejection}"
-    );
+    assert!(mcp.shutdown_gracefully().await?.success());
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .build_initialized()
+        .await?;
+    let page_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id,
+            cursor: None,
+            limit: None,
+            sort_direction: None,
+            items_view: Some(TurnItemsView::Full),
+        })
+        .await?;
+    let page: ThreadTurnsListResponse = mcp.read_response(page_id).await?;
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].id, turn.id);
+    let commands = page.data[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item.payload, ThreadItemPayload::CommandExecution { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(commands, vec![&completed_command_execution]);
 
     Ok(())
 }

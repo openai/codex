@@ -1537,6 +1537,11 @@ impl CodexThread {
         self.session.resume_config_snapshot().await
     }
 
+    /// Fail a pending command prompt when the client could not provide a decision.
+    pub async fn fail_exec_approval(&self, approval_id: &str, turn_id: &str) {
+        self.session.fail_exec_approval(approval_id, turn_id).await;
+    }
+
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
         if let Some((turn, settings, _, _)) = self

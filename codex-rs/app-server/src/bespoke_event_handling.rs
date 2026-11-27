@@ -44,7 +44,6 @@ use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
-use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RawResponseCompletedNotification;
@@ -847,15 +846,11 @@ pub(crate) async fn apply_bespoke_event_handling(
             tokio::spawn(async move {
                 on_command_execution_request_approval_response(
                     event_turn_id,
-                    conversation_id,
-                    approval_id,
-                    call_id,
-                    completion_item,
-                    opened_command_item,
+                    approval_id.unwrap_or(call_id),
+                    completion_item.filter(|_| opened_command_item),
                     pending_request_id,
                     rx,
                     conversation,
-                    outgoing,
                     thread_state,
                     permission_guard,
                 )
@@ -2076,15 +2071,11 @@ async fn on_file_change_request_approval_response(
 #[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
-    conversation_id: ThreadId,
-    approval_id: Option<String>,
-    item_id: String,
-    completion_item: Option<CommandExecutionCompletionItem>,
-    opened_command_item: bool,
+    approval_id: String,
+    opened_command: Option<CommandExecutionCompletionItem>,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
-    outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
     permission_guard: Option<ThreadWatchActiveGuard>,
 ) {
@@ -2098,70 +2089,23 @@ async fn on_command_execution_request_approval_response(
             .lock()
             .await
             .network_approvals
-            .contains_key(approval_id.as_ref().unwrap_or(&item_id))
+            .contains_key(&approval_id)
     {
         return;
     }
-    let (decision, completion_status) = match response {
-        Ok(Ok(value)) => {
-            match serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value) {
-                Ok(response) => match response.decision {
-                    CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
-                    CommandExecutionApprovalDecision::AcceptForSession => {
-                        (ReviewDecision::ApprovedForSession, None)
-                    }
-                    CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
-                        execpolicy_amendment,
-                    } => (
-                        ReviewDecision::ApprovedExecpolicyAmendment {
-                            proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
-                        },
-                        None,
-                    ),
-                    CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
-                        network_policy_amendment,
-                    } => {
-                        let completion_status = match network_policy_amendment.action {
-                            V2NetworkPolicyRuleAction::Allow => None,
-                            V2NetworkPolicyRuleAction::Deny => {
-                                Some(CommandExecutionStatus::Declined)
-                            }
-                        };
-                        (
-                            ReviewDecision::NetworkPolicyAmendment {
-                                network_policy_amendment: network_policy_amendment.into_core(),
-                            },
-                            completion_status,
-                        )
-                    }
-                    CommandExecutionApprovalDecision::Decline => (
-                        ReviewDecision::denied("rejected by user"),
-                        Some(CommandExecutionStatus::Declined),
-                    ),
-                    CommandExecutionApprovalDecision::Cancel => (
-                        ReviewDecision::Abort,
-                        Some(CommandExecutionStatus::Declined),
-                    ),
-                },
-                Err(err) => {
-                    error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
-                    (
-                        ReviewDecision::denied("approval request failed"),
-                        Some(CommandExecutionStatus::Failed),
-                    )
-                }
-            }
-        }
+    let response = match response {
+        Ok(Ok(value)) => serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
+            .map_err(|_| "invalid approval response"),
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => {
             // A late approval can open an item after its turn has already cleaned up.
-            if opened_command_item && let Some(completion_item) = completion_item {
+            if let Some(completion_item) = opened_command {
                 let state = thread_state.lock().await;
                 if !state.turn_summaries.contains_key(&event_turn_id)
                     && let Some(sender) = state.listener_command_tx()
                     && sender
                         .send(ThreadListenerCommand::CompleteLateCommandApproval {
                             turn_id: event_turn_id,
-                            item_id,
+                            item_id: approval_id,
                             completion_item: Box::new(completion_item),
                         })
                         .is_err()
@@ -2171,57 +2115,40 @@ async fn on_command_execution_request_approval_response(
             }
             return;
         }
-        Ok(Err(err)) => {
-            error!("request failed with client error: {err:?}");
-            (
-                ReviewDecision::denied("approval request failed"),
-                Some(CommandExecutionStatus::Failed),
-            )
-        }
-        Err(err) => {
-            error!("request failed: {err:?}");
-            (
-                ReviewDecision::denied("approval request failed"),
-                Some(CommandExecutionStatus::Failed),
-            )
+        Ok(Err(_)) => Err("client approval request failed"),
+        Err(_) => Err("approval response channel closed"),
+    };
+    let decision = match response {
+        Ok(response) => match response.decision {
+            CommandExecutionApprovalDecision::Accept => ReviewDecision::Approved,
+            CommandExecutionApprovalDecision::AcceptForSession => {
+                ReviewDecision::ApprovedForSession
+            }
+            CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment,
+            } => ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+            },
+            CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                network_policy_amendment,
+            } => ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: network_policy_amendment.into_core(),
+            },
+            CommandExecutionApprovalDecision::Decline => ReviewDecision::denied("rejected by user"),
+            CommandExecutionApprovalDecision::Cancel => ReviewDecision::Abort,
+        },
+        Err(message) => {
+            error!("{message}");
+            conversation
+                .fail_exec_approval(&approval_id, &event_turn_id)
+                .await;
+            return;
         }
     };
-
-    let suppress_subcommand_completion_item = {
-        // For regular shell/unified_exec approvals, approval_id is null.
-        // For zsh-fork subcommand approvals, approval_id is present and
-        // item_id points to the parent command item.
-        if approval_id.is_some() {
-            let state = thread_state.lock().await;
-            state
-                .command_start_times
-                .get(&event_turn_id)
-                .is_some_and(|starts| starts.contains_key(&item_id))
-        } else {
-            false
-        }
-    };
-
-    if let Some(status) = completion_status
-        && !suppress_subcommand_completion_item
-        && let Some(completion_item) = completion_item
-    {
-        complete_command_execution_item(
-            &conversation_id,
-            event_turn_id.clone(),
-            item_id.clone(),
-            completion_item,
-            status,
-            /*completed_at_ms*/ None,
-            &outgoing,
-            &thread_state,
-        )
-        .await;
-    }
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: approval_id.unwrap_or_else(|| item_id.clone()),
+            id: approval_id,
             turn_id: Some(event_turn_id),
             decision,
         })

@@ -291,6 +291,7 @@ mod rollout_budget;
 mod rollout_reconstruction;
 mod sampling_interrupt;
 pub(crate) use sampling_interrupt::SamplingInterrupt;
+pub(crate) mod command_approval;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod startup_prewarm;
@@ -3200,6 +3201,25 @@ impl Session {
         content_token_count: Option<u64>,
         user_input_extension_data: Option<&BTreeMap<String, Value>>,
     ) {
+        let event = self
+            .prepare_item_completed(
+                turn_context,
+                item,
+                content_token_count,
+                user_input_extension_data,
+            )
+            .await;
+        self.send_event(turn_context, EventMsg::ItemCompleted(event))
+            .await;
+    }
+
+    async fn prepare_item_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        content_token_count: Option<u64>,
+        user_input_extension_data: Option<&BTreeMap<String, Value>>,
+    ) -> ItemCompletedEvent {
         record_turn_ttfm_metric(turn_context, &item).await;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
@@ -3226,18 +3246,14 @@ impl Session {
                 );
                 completed_at_ms
             });
-        self.send_event(
-            turn_context,
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: self.thread_id,
-                turn_id: turn_context.sub_id.clone(),
-                item,
-                content_token_count,
-                started_at_ms: Some(started_at_ms),
-                completed_at_ms,
-            }),
-        )
-        .await;
+        ItemCompletedEvent {
+            thread_id: self.thread_id,
+            turn_id: turn_context.sub_id.clone(),
+            item,
+            content_token_count,
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms,
+        }
     }
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
@@ -3415,9 +3431,9 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn request_command_approval(
+    pub(crate) async fn request_command_approval(
         &self,
-        turn_context: &TurnContext,
+        turn_context: &Arc<TurnContext>,
         kind: ExecApprovalKind,
         model_context: ModelInvocationContext,
         call_id: String,
@@ -3439,48 +3455,6 @@ impl Session {
         //  command-level approvals use `call_id`.
         // `approval_id` identifies subcommand callbacks and stdin writes.
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-        // Add the tx_approve callback to the map before sending the request.
-        let (tx_approve, rx_approve) = oneshot::channel();
-        let (prev_entry, _network_prompt) = {
-            let mut active = self.active_turn.lock().await;
-            // The proxy reviews with the active turn's settings. A sandbox retry
-            // keeps its originating step's settings even after a background cell yields.
-            if let Some(binding) = turn_binding
-                && active
-                    .as_ref()
-                    .and_then(|turn| turn.task.as_ref())
-                    .is_none_or(|task| {
-                        binding == NetworkApprovalTurn::Originating
-                            && task.turn_context.sub_id != turn_context.sub_id
-                    })
-            {
-                return ReviewDecision::Abort;
-            }
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    let prev = ts.insert_pending_approval(
-                        effective_approval_id.clone(),
-                        tx_approve,
-                        kind,
-                        turn_context.sub_id.clone(),
-                    );
-                    let prompt = network_approval_context.as_ref().map(|_| {
-                        ts.track_network_prompt(
-                            &self.tx_event,
-                            &turn_context.sub_id,
-                            &effective_approval_id,
-                        )
-                    });
-                    (prev, prompt)
-                }
-                None => (None, None),
-            }
-        };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
-        }
-
         let parsed_cmd = parse_command(&command);
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
@@ -3511,7 +3485,7 @@ impl Session {
             .as_ref()
             .map(PluginCommandAttribution::serialized_fields)
             .unzip();
-        let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+        let request = ExecApprovalRequestEvent {
             model_context: Some(model_context),
             kind,
             call_id,
@@ -3522,7 +3496,7 @@ impl Session {
             environment_id,
             started_at_ms: now_unix_timestamp_ms(),
             command,
-            cwd: cwd.into(),
+            cwd: cwd.clone().into(),
             reason,
             network_approval_context,
             proposed_execpolicy_amendment,
@@ -3530,9 +3504,57 @@ impl Session {
             additional_permissions,
             available_decisions: Some(available_decisions),
             parsed_cmd,
-        });
+        };
+        let command = command_approval::ProposedCommand::from_request(turn_context, &request, cwd);
+        // Add the tx_approve callback to the map before sending the request.
+        let (tx_approve, rx_approve) = oneshot::channel();
+        let (prev_entry, _network_prompt) = {
+            let mut active = self.active_turn.lock().await;
+            // The proxy reviews with the active turn's settings. A sandbox retry
+            // keeps its originating step's settings even after a background cell yields.
+            if let Some(binding) = turn_binding
+                && active
+                    .as_ref()
+                    .and_then(|turn| turn.task.as_ref())
+                    .is_none_or(|task| {
+                        binding == NetworkApprovalTurn::Originating
+                            && task.turn_context.sub_id != turn_context.sub_id
+                    })
+            {
+                return ReviewDecision::Abort;
+            }
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    let prev = ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        PendingApproval {
+                            sender: tx_approve,
+                            kind,
+                            turn_id: turn_context.sub_id.clone(),
+                            command,
+                        },
+                    );
+                    let prompt = request.network_approval_context.as_ref().map(|_| {
+                        ts.track_network_prompt(
+                            &self.tx_event,
+                            &turn_context.sub_id,
+                            &effective_approval_id,
+                        )
+                    });
+                    (prev, prompt)
+                }
+                // Without an active turn there is no owner to receive a reply.
+                None => return ReviewDecision::Abort,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
+        }
+
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
-        self.send_event(turn_context, event).await;
+        self.send_event(turn_context, EventMsg::ExecApprovalRequest(request))
+            .await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
@@ -3560,9 +3582,12 @@ impl Session {
                     let mut ts = at.turn_state.lock().await;
                     ts.insert_pending_approval(
                         approval_id.clone(),
-                        tx_approve,
-                        ExecApprovalKind::Command,
-                        turn_context.sub_id.clone(),
+                        PendingApproval {
+                            sender: tx_approve,
+                            kind: ExecApprovalKind::Command,
+                            turn_id: turn_context.sub_id.clone(),
+                            command: None,
+                        },
                     )
                 }
                 None => None,

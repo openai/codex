@@ -91,7 +91,7 @@ async fn command_approval_holds_an_elicitation_until_response(capture: bool, pro
         async move {
             session
                 .request_command_approval(
-                    turn_context.as_ref(),
+                    &turn_context,
                     ExecApprovalKind::Command,
                     crate::guardian::GuardianReviewContext::from(turn_context.clone())
                         .model_context(),

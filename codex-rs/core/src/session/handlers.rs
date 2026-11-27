@@ -188,13 +188,14 @@ impl Session {
         turn_id: Option<String>,
         decision: ReviewDecision,
     ) {
-        let Some((pending, active_turn_id)) = self
+        let Some((mut pending, active_turn_id)) = self
             .take_pending_approval(&approval_id, turn_id.as_deref())
             .await
         else {
             return;
         };
         let decision = pending.validate(decision);
+        pending.resolve_command(self, &decision).await;
         if decision == ReviewDecision::Abort {
             let turn_id = if pending.kind == ExecApprovalKind::HumanCommand {
                 Some(&pending.turn_id)

@@ -24,6 +24,7 @@ use crate::agent::types::AgentExecutionGuard;
 use crate::session::PendingUserInput;
 use crate::session::SamplingInterrupt;
 use crate::session::TurnInputQueue;
+use crate::session::command_approval::ProposedCommand;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
@@ -124,6 +125,7 @@ pub(crate) struct TurnState {
 }
 
 pub(crate) struct PendingApproval {
+    pub(crate) command: Option<Box<ProposedCommand>>,
     pub(crate) sender: oneshot::Sender<ReviewDecision>,
     pub(crate) kind: codex_protocol::approvals::ExecApprovalKind,
     // A yielded cell can emit a prompt for its original turn while a later turn services it.
@@ -199,21 +201,12 @@ impl TurnState {
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
-        tx: oneshot::Sender<ReviewDecision>,
-        kind: codex_protocol::approvals::ExecApprovalKind,
-        turn_id: String,
+        pending: PendingApproval,
     ) -> Option<PendingApproval> {
         self.pending_approvals
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                key,
-                PendingApproval {
-                    sender: tx,
-                    kind,
-                    turn_id,
-                },
-            )
+            .insert(key, pending)
     }
 
     pub(crate) fn remove_pending_approval(

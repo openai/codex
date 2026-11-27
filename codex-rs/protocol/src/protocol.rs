@@ -1780,11 +1780,7 @@ impl EventMsg {
     /// Stdin and network reviews have their own prompts for an existing operation.
     pub fn command_approval_start(&self) -> Option<(&str, i64)> {
         match self {
-            Self::ExecApprovalRequest(request)
-                if request.kind == crate::approvals::ExecApprovalKind::Command
-                    && request.approval_id.is_none()
-                    && request.network_approval_context.is_none() =>
-            {
+            Self::ExecApprovalRequest(request) if request.starts_command() => {
                 Some((&request.call_id, request.started_at_ms))
             }
             Self::GuardianAssessment(assessment)

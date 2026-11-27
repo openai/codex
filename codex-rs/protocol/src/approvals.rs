@@ -356,6 +356,13 @@ pub struct ExecApprovalRequestEvent {
 }
 
 impl ExecApprovalRequestEvent {
+    /// Only a top-level command prompt opens a new execution item.
+    pub fn starts_command(&self) -> bool {
+        self.kind == ExecApprovalKind::Command
+            && self.approval_id.is_none()
+            && self.network_approval_context.is_none()
+    }
+
     pub fn effective_approval_id(&self) -> String {
         self.approval_id
             .clone()
