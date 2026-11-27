@@ -25,6 +25,23 @@ impl Default for StatusTimer {
 }
 
 impl StatusTimer {
+    pub(super) fn display_elapsed_at(&self, now: Instant) -> Duration {
+        self.display_started_at.map_or_else(
+            || self.elapsed_at(now),
+            |started_at| now.saturating_duration_since(started_at),
+        )
+    }
+
+    /// Time until the displayed second changes, independent of decorative motion.
+    pub(super) fn next_tick_delay(&self, now: Instant) -> Option<Duration> {
+        if self.is_paused && self.display_started_at.is_none() {
+            return None;
+        }
+        let elapsed = self.display_elapsed_at(now);
+        let fraction = Duration::from_nanos(u64::from(elapsed.subsec_nanos()));
+        Some(Duration::from_secs(1) - fraction)
+    }
+
     pub(crate) fn reset(&mut self, elapsed: Duration) {
         self.elapsed_running = elapsed;
         self.last_resume_at = Instant::now();

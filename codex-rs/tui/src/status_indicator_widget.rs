@@ -293,10 +293,7 @@ impl StatusIndicator<'_> {
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let row = self.row;
         let now = row.prepared_at.unwrap_or_else(Instant::now);
-        let elapsed_duration = self.timer.display_started_at.map_or_else(
-            || self.timer.elapsed_at(now),
-            |started_at| now.saturating_duration_since(started_at),
-        );
+        let elapsed_duration = self.timer.display_elapsed_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
         let progress =
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.progress);
@@ -365,19 +362,16 @@ impl Renderable for StatusIndicator<'_> {
         if area.is_empty() {
             return;
         }
-        if self.row.animations_enabled || self.timer.display_started_at.is_some() {
-            let interval_ms = if self.row.animations_enabled
-                && (self.row.effects.progress
-                    || (self.row.effects.shimmer
-                        && !contains_rtl_or_arabic_number(self.row.header())))
-            {
-                32
-            } else {
-                1_000
-            };
-            self.row
-                .frame_requester
-                .schedule_frame_in(Duration::from_millis(interval_ms));
+        let animated = self.row.animations_enabled
+            && (self.row.effects.progress
+                || (self.row.effects.shimmer && !contains_rtl_or_arabic_number(self.row.header())));
+        let delay = if animated {
+            Some(Duration::from_millis(32))
+        } else {
+            self.timer.next_tick_delay(Instant::now())
+        };
+        if let Some(delay) = delay {
+            self.row.frame_requester.schedule_frame_in(delay);
         }
         Paragraph::new(Text::from(self.lines(area.width))).render(area, buf);
     }
@@ -412,19 +406,20 @@ mod tests {
     }
 
     #[test]
-    fn static_bidi_headers_only_schedule_clock_ticks_without_progress() {
-        for (header, progress, expected_ms) in [
-            ("שלום עולם", false, 1_000),
-            ("Checking lines ١٢-٣٤", false, 1_000),
-            ("Working", false, 32),
-            ("שלום עולם", true, 32),
+    fn static_headers_schedule_clock_ticks_and_animated_headers_schedule_faster_frames() {
+        for (header, animations, progress, expected_ms) in [
+            ("Working", false, true, 1_000),
+            ("שלום עולם", true, false, 1_000),
+            ("Checking lines ١٢-٣٤", true, false, 1_000),
+            ("Working", true, false, 32),
+            ("שלום עולם", true, true, 32),
         ] {
             let (tx, _rx) = unbounded_channel();
             let (requester, mut requests) = FrameRequester::test_channel();
             let mut row = StatusIndicatorWidget::new(
                 AppEventSender::new(tx),
                 requester,
-                /*animations_enabled*/ true,
+                animations,
                 codex_config::types::TuiEffects {
                     progress,
                     shimmer: true,
@@ -434,7 +429,7 @@ mod tests {
             row.update_header(header.to_owned());
             let timer = StatusTimer::default();
             let area = Rect::new(0, 0, 80, 1);
-            let before = Instant::now();
+            let before = timer.last_resume_at;
             row.with_timer(&timer)
                 .render(area, &mut Buffer::empty(area));
             let after = Instant::now();
@@ -539,7 +534,7 @@ mod tests {
             Default::default(),
         );
         let mut timer = StatusTimer::default();
-        timer.pause_at(timer.last_resume_at);
+        timer.pause_at(timer.last_resume_at + Duration::from_secs(1));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
         terminal
@@ -550,7 +545,7 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
 
-        assert!(line.starts_with("Working (0s • esc to interrupt)"));
+        insta::assert_snapshot!(line.trim_end(), @"Working (1s • esc to interrupt)");
     }
 
     #[test]
