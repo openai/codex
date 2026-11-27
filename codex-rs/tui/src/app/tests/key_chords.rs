@@ -1493,6 +1493,34 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
         if key == KeyCode::Esc {
             let frame = super::side_frame(&mut app, &mut tui, size)?;
             insta::assert_snapshot!("sidebar_new_chat", frame);
+            let mut destinations = Vec::new();
+            for direction in ['h', 'l'] {
+                Box::pin(press(&mut app, &mut tui, &mut server, ctrl('x'))).await?;
+                tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
+                let frame = super::side_frame(
+                    &mut app,
+                    &mut tui,
+                    ratatui::layout::Size::new(size.width, /*height*/ 24),
+                )?;
+                let labels = ["Pane left", "Pane right", "Previous tab", "Next tab"]
+                    .into_iter()
+                    .filter(|label| frame.contains(*label))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                destinations.push(labels);
+                Box::pin(press(
+                    &mut app,
+                    &mut tui,
+                    &mut server,
+                    KeyCode::Char(direction).into(),
+                ))
+                .await?;
+            }
+            insta::assert_snapshot!(destinations.join("\n"), @"
+            Pane left
+            Pane right
+            ");
+            super::side_frame(&mut app, &mut tui, size)?;
             app.begin_pane_resize(&mut tui)?;
             let resizing = super::side_frame(&mut app, &mut tui, size)?;
             let footer = resizing.lines().last().unwrap().split_once('│').unwrap().1;

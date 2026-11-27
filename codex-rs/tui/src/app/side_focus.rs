@@ -389,6 +389,8 @@ impl App {
             self.step_sidebar_tab(tui, app_server, step).await
         } else if tabs {
             self.open_sidebar_tabs(tui, app_server).await
+        } else if sidebar && self.sidebar_is_hidden() {
+            self.restore_sidebar(tui, app_server).await
         } else if resize {
             self.begin_pane_resize(tui)
         } else if let Some(percent) = focused_percent {

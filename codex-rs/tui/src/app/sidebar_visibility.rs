@@ -7,6 +7,12 @@ use super::*;
 use crate::sidebar_tab_strip::SidebarTab;
 
 impl App {
+    pub(super) fn sidebar_is_hidden(&self) -> bool {
+        self.sidebar()
+            .and_then(sidebar::SidebarPane::hidden_content)
+            .is_some()
+    }
+
     /// Hide the sidebar while returning input to its parent conversation.
     pub(super) async fn hide_sidebar(
         &mut self,
@@ -64,9 +70,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
                 return Ok(());
             }
-            let hidden = self
-                .sidebar()
-                .is_some_and(|pane| pane.hidden_content().is_some());
+            let hidden = self.sidebar_is_hidden();
             let agent = (tab == SidebarTab::Subagents)
                 .then(|| self.sidebar().and_then(|pane| pane.agents.detail))
                 .flatten();

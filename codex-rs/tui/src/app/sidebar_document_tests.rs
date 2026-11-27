@@ -887,6 +887,28 @@ size 123
         }
     }
     assert!(app.sidebar().unwrap().visible_content() == document);
+
+    // Repeat the pointer round trip with the default workspace shortcut.
+    app.local_settings.tui.keymap = Default::default();
+    enable_side_retention(&mut app)?;
+    let leader = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+    let toggle = KeyEvent::from(KeyCode::Char('s'));
+    for key in [leader, toggle, leader] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+    }
+    tokio::time::pause();
+    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
+    side_frame(&mut app, &mut tui, Size::new(size.width, /*height*/ 30))?;
+    let hud = tui.shortcut_hud_area.expect("workspace shortcuts");
+    let guide = (hud.y..hud.bottom())
+        .map(|row| visible_sidebar_row(&tui, hud, row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("restore_hidden_sidebar_guide", guide);
+    tokio::time::resume();
+    Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(toggle))).await?;
+    assert!(app.sidebar().unwrap().visible_content() == document);
+    assert!(side_frame(&mut app, &mut tui, size)?.contains("Updated ending."));
     server.shutdown().await?;
     Ok(())
 }

@@ -27,7 +27,14 @@ impl App {
         let center = self.workspace_center_owns_input();
         let center_open = self.agents_overview.workspace.is_open();
         let side = !center && self.sidebar_has_focus();
-        let can_switch = self.panel_focus().is_some() || self.switchable_side_child().is_some();
+        let panel_open = self.panel_focus().is_some();
+        let can_switch = panel_open || self.switchable_side_child().is_some();
+        let can_step = self.sidebar().is_some_and(|pane| {
+            pane.adjacent_tab(/*step*/ 1).is_some_and(|next| {
+                self.chooser_focus().is_some()
+                    || Some(next) != pane.recent_tab(/*excluding*/ None)
+            })
+        });
         let can_size = super::side_pane::split_layout(self, tui, area).is_some();
         let can_resize = can_size && side && self.zoomed_thread.is_none();
         let mut groups = [
@@ -41,6 +48,7 @@ impl App {
                 "focus_main_composer" => (0, "Main composer"),
                 "focus_sidebar_tabs" => (0, "Open in sidebar"),
                 "focus_sidebar_content" if side => (0, "Hide sidebar"),
+                "focus_sidebar_content" if self.sidebar_is_hidden() => (0, "Restore sidebar"),
                 "focus_sidebar_content" => (0, "Sidebar content"),
                 "resize_panes" if can_size => (2, "Resize panes"),
                 "resize_panes" => continue,
@@ -57,6 +65,7 @@ impl App {
                     (2, "Close tab")
                 }
                 "close_sidebar_tab" => continue,
+                "sidebar_up" | "sidebar_down" if !can_step => continue,
                 "sidebar_up" => (1, "Previous tab"),
                 "sidebar_down" => (1, "Next tab"),
                 "hide_pane" if side => (2, "Hide pane"),
@@ -64,7 +73,10 @@ impl App {
                     (1, "Pane left")
                 }
                 "focus_pane_right"
-                    if center || (!side && can_switch && self.open_pane_focus().is_some()) =>
+                    if center
+                        || (!side
+                            && (panel_open
+                                || (can_switch && self.open_pane_focus().is_some()))) =>
                 {
                     (1, "Pane right")
                 }

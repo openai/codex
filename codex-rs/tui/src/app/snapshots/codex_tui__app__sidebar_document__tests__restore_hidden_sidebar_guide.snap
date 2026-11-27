@@ -1,0 +1,17 @@
+---
+source: tui/src/app/sidebar_document_tests.rs
+expression: guide
+---
+─ ⌃x · Conversation ────────────────────────────────────────
+
+Panes
+c       Main composer
+s       Restore sidebar
+t       Open in sidebar
+a       Command Center
+
+This pane
+[       Select transcript
+p       Presets ›
+
+Esc cancel
