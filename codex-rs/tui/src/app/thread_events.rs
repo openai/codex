@@ -192,8 +192,19 @@ impl ThreadEventStore {
             .map(|prefix| self.buffer.split_off(prefix.min(self.buffer.len())));
         self.buffer.retain_mut(Self::event_survives_session_refresh);
         self.buffered_agent_message_delta_bytes = 0;
-        for event in tail.into_iter().flatten() {
-            self.push_buffered_event(event);
+        if let Some(tail) = tail {
+            // Status broadcasts can predate the subscription. Only replay the latest
+            // status against the snapshot, even if we missed the newer TurnStarted.
+            let is_status = |event: &ThreadBufferedEvent| {
+                matches!(event, ThreadBufferedEvent::Notification(n)
+                    if matches!(n.as_ref(), ServerNotification::ThreadStatusChanged(_)))
+            };
+            let latest = tail.iter().rposition(is_status);
+            for (index, event) in tail.into_iter().enumerate() {
+                if Some(index) == latest || !is_status(&event) {
+                    self.push_buffered_event(event);
+                }
+            }
         }
     }
 
@@ -976,6 +987,38 @@ mod tests {
         let mut refreshed_store = ThreadEventStore::new(/*capacity*/ 8);
         refreshed_store.set_session(session, turns);
         assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
+
+        let status = |status| {
+            ServerNotification::ThreadStatusChanged(
+                codex_app_server_protocol::ThreadStatusChangedNotification {
+                    thread_id: thread_id.to_string(),
+                    status,
+                },
+            )
+        };
+        let idle = status(codex_app_server_protocol::ThreadStatus::Idle);
+        // Before subscription we can see both broadcasts but miss turn-2's start.
+        refreshed_store.attachment_prefix = Some(0);
+        refreshed_store.push_notification(idle.clone());
+        refreshed_store.push_notification(status(
+            codex_app_server_protocol::ThreadStatus::Active {
+                active_flags: Vec::new(),
+            },
+        ));
+        refreshed_store.set_turns(store.turns.clone());
+        refreshed_store.rebase_buffer_after_session_refresh();
+        assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
+        assert_eq!(refreshed_store.snapshot().events.len(), 1);
+
+        // Idle can also arrive after subscription before the history is installed.
+        refreshed_store.attachment_prefix = Some(0);
+        refreshed_store.push_notification(idle.clone());
+        refreshed_store.set_turns(store.turns);
+        refreshed_store.rebase_buffer_after_session_refresh();
+        assert_eq!(refreshed_store.active_turn_id(), None);
+        refreshed_store.push_notification(turn_started_notification(thread_id, "turn-3"));
+        refreshed_store.push_notification(idle);
+        assert_eq!(refreshed_store.active_turn_id(), Some("turn-3"));
     }
 
     #[test]

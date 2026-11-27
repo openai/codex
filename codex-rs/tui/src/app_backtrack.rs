@@ -713,6 +713,9 @@ pub(crate) fn backtrack_revert_before_turn_id(
             }
             return Ok(before_turn_id);
         }
+        if turn.status == TurnStatus::Interrupted {
+            review_mode = false;
+        }
     }
     bail!("the selected prompt was not found in the persisted thread");
 }

@@ -586,6 +586,7 @@ impl App {
             )
         });
         store.set_session(session, turns);
+        store.rebase_buffer_after_session_refresh();
         if let Some((active, latest, evicted, reasoning)) = live_turn {
             store.active_turn_id = active;
             store.latest_turn_id = latest;
@@ -599,7 +600,6 @@ impl App {
         }
         store.replay_may_have_output |= replay_may_have_output;
         store.merge_recap_progress(recap_progress);
-        store.rebase_buffer_after_session_refresh();
         live_attached
     }
 

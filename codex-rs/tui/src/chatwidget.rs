@@ -1212,7 +1212,8 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
-    fn restore_pre_review_token_info(&mut self) {
+    fn reset_review_mode(&mut self) {
+        self.review.is_review_mode = false;
         if let Some(saved) = self.review.pre_review_token_info.take() {
             match saved {
                 Some(info) => self.apply_token_info(info),
@@ -1357,8 +1358,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
-        self.review.is_review_mode = false;
-        self.restore_pre_review_token_info();
+        self.reset_review_mode();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));

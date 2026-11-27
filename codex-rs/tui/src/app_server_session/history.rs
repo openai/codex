@@ -450,9 +450,9 @@ impl AppServerSession {
             .wrap_err("invalid thread id in bounded history response")?;
         if thread.history_mode == ThreadHistoryMode::Legacy {
             if thread.turns.is_empty() {
-                thread.turns = Box::pin(self.thread_read(thread_id, /*include_turns*/ true))
-                    .await?
-                    .turns;
+                let latest = Box::pin(self.thread_read(thread_id, /*include_turns*/ true)).await?;
+                thread.status = latest.status;
+                thread.turns = latest.turns;
             }
             self.history_pagination.entry(thread_id).or_default();
             return Ok(());

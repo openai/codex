@@ -1805,6 +1805,31 @@ async fn replayed_in_progress_turn_marks_task_running() {
                 std::iter::from_fn(|| rx.try_recv().ok())
                     .all(|event| !matches!(event, AppEvent::Exit(_)))
             );
+
+            let input = chat.capture_thread_input_state();
+            chat.restore_reconnected_input(input, &[]);
+            replay_entered_review_mode(&mut chat, "current changes");
+            let idle = ServerNotification::ThreadStatusChanged(
+                codex_app_server_protocol::ThreadStatusChangedNotification {
+                    thread_id: chat.thread_id.unwrap().to_string(),
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                },
+            );
+            chat.bottom_pane
+                .reset_status_timer(std::time::Duration::from_secs(/*secs*/ 125));
+            chat.handle_server_notification(idle.clone(), /*replay_kind*/ None);
+            assert!(!chat.bottom_pane.is_task_running());
+
+            super::helpers::handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+            let completion = drain_insert_history(&mut rx)
+                .into_iter()
+                .map(|lines| lines_to_single_string(&lines))
+                .collect::<String>();
+            assert!(completion.contains("Worked for 2m 5s"), "{completion}");
+
+            handle_turn_started(&mut chat, "turn-2");
+            chat.handle_server_notification(idle, /*replay_kind*/ None);
+            assert!(chat.bottom_pane.is_task_running());
         }
     }
 }

@@ -19,6 +19,8 @@ pub(super) struct TurnLifecycleState {
     pub(super) sleep_inhibitor: SleepInhibitor,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     pub(super) agent_turn_running: bool,
+    pub(super) running_from_history: bool,
+    pub(super) elapsed_at_idle: Option<(String, std::time::Duration)>,
     pub(super) last_turn_id: Option<String>,
     pub(super) steer_hint: SteerHint,
     /// A live or restored turn makes the parent available for side-chat creation.
@@ -37,6 +39,8 @@ impl TurnLifecycleState {
         Self {
             sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             agent_turn_running: false,
+            running_from_history: false,
+            elapsed_at_idle: None,
             last_turn_id: None,
             steer_hint: SteerHint::Hidden,
             has_turn_history: false,
@@ -51,6 +55,7 @@ impl TurnLifecycleState {
     pub(super) fn start(&mut self, now: Instant) {
         self.steer_hint = SteerHint::Hidden;
         self.agent_turn_running = true;
+        self.running_from_history = false;
         self.goal_status_active_turn_started_at = Some(now);
         self.sleep_inhibitor.set_turn_running(/*turn_running*/ true);
     }
@@ -58,6 +63,7 @@ impl TurnLifecycleState {
     pub(super) fn finish(&mut self) {
         self.steer_hint = SteerHint::Hidden;
         self.agent_turn_running = false;
+        self.running_from_history = false;
         self.goal_status_active_turn_started_at = None;
         self.sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -77,6 +83,7 @@ impl TurnLifecycleState {
     pub(super) fn reset_thread(&mut self) {
         self.finish();
         self.last_turn_id = None;
+        self.elapsed_at_idle = None;
         self.has_turn_history = false;
         self.admitted_turn_id = None;
         self.budget_limited_turn_ids.clear();

@@ -213,6 +213,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                                 restored_previous.clone().unwrap()
                             };
                             if changed_child_permissions && thread.id != child.to_string() {
+                                thread.status = ThreadStatus::Active { active_flags: Vec::new() };
                                 thread.turns = vec![test_turn("saved", TurnStatus::InProgress, Vec::new())];
                             }
                             let (approval, sandbox) = if changed_child_permissions && thread.id != child.to_string() {

@@ -197,6 +197,7 @@ impl ChatWidget {
                 self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
                 self.on_replayed_task_started(started_at);
+                self.turn_lifecycle.running_from_history = true;
             }
             let trailing_reasoning_id = (status == TurnStatus::InProgress)
                 .then(|| items.last())
@@ -256,6 +257,10 @@ impl ChatWidget {
             } else {
                 status
             };
+            // A crash can leave a review start in history without the corresponding exit.
+            if status == TurnStatus::Interrupted {
+                self.reset_review_mode();
+            }
             if status == TurnStatus::InProgress {
                 self.status_state.reasoning_resume_turn_id = Some(turn_id.clone());
             }

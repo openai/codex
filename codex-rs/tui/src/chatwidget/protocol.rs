@@ -101,6 +101,24 @@ impl ChatWidget {
             ServerNotification::ThreadSettingsUpdated(notification) => {
                 self.apply_thread_settings(notification, replay_kind);
             }
+            ServerNotification::ThreadStatusChanged(notification) => {
+                // Idle has no turn ID. Only retire activity restored from history;
+                // a newer live turn must finish through its own completion event.
+                if notification.status == codex_app_server_protocol::ThreadStatus::Idle
+                    && self.turn_lifecycle.agent_turn_running
+                    && self.turn_lifecycle.running_from_history
+                {
+                    self.turn_lifecycle.elapsed_at_idle = self
+                        .turn_lifecycle
+                        .last_turn_id
+                        .clone()
+                        .zip(self.bottom_pane.status_elapsed());
+                    self.reset_review_mode();
+                    self.turn_lifecycle.finish();
+                    self.update_task_running_state();
+                    self.request_redraw();
+                }
+            }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.has_turn_history = true;
                 if self
@@ -405,7 +423,6 @@ impl ChatWidget {
             | ServerNotification::GatewayOAuthChanged(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
-            | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadReadStateChanged(_)
             | ServerNotification::ThreadSectionChanged(_)
             | ServerNotification::ThreadReverted(_)

@@ -1330,12 +1330,7 @@ impl App {
                 session.thread_name.clone_from(&update.thread_name);
             }
             let previous_pending_status = guard.side_parent_pending_status();
-            let turn_stopped = match &notification {
-                ServerNotification::TurnCompleted(notification) => {
-                    guard.active_turn_id() == Some(notification.turn.id.as_str())
-                }
-                _ => false,
-            };
+            let was_running = guard.active_turn_id().is_some();
             let notification = if guard.active {
                 guard.push_notification_ref(&notification);
                 Some(notification)
@@ -1383,7 +1378,7 @@ impl App {
                 notification,
                 previous_pending_status,
                 guard.side_parent_pending_status(),
-                turn_stopped,
+                was_running && guard.active_turn_id().is_none(),
             )
         };
         if is_turn_started {

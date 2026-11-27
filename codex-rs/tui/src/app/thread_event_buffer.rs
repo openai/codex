@@ -48,6 +48,17 @@ impl ThreadEventStore {
                 .buffered_agent_message_delta_bytes
                 .saturating_add(delta.delta.len());
         }
+        // Also reconcile notifications buffered while resume was fetching history.
+        if let ThreadBufferedEvent::Notification(notification) = &event
+            && let ServerNotification::ThreadStatusChanged(status) = notification.as_ref()
+            && status.status == codex_app_server_protocol::ThreadStatus::Idle
+            && self.turns.last().is_some_and(|turn| {
+                turn.status == codex_app_server_protocol::TurnStatus::InProgress
+                    && self.active_turn_id() == Some(turn.id.as_str())
+            })
+        {
+            self.clear_active_turn_id();
+        }
         self.buffer.push_back(event);
         self.evict_overflowing_events();
     }
