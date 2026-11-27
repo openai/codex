@@ -1584,6 +1584,11 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
     let allowed = blocked.join("allowed");
     std::fs::create_dir_all(&allowed).expect("create blocked/allowed dir");
     let allowed_target = allowed.join("note.txt");
+    let sources = tempfile::tempdir_in("/tmp").expect("source directory");
+    let approved = sources.path().join("approved.txt");
+    std::fs::write(&approved, "approved").expect("write source file");
+    let logical = allowed.join("logical");
+    std::os::unix::fs::symlink(&approved, &logical).expect("link to source");
     // These tests bypass the usual legacy-policy bridge, so explicitly keep
     // the sandbox helper binary and minimal runtime paths readable.
     let sandbox_helper_dir = codex_linux_sandbox_exe()
@@ -1592,6 +1597,12 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         .to_path_buf();
 
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::try_from(approved.as_path())
+                .unwrap()
+                .into(),
+            FileSystemAccessMode::Read,
+        ),
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::Minimal,
@@ -1644,11 +1655,19 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         &[
             "bash",
             "-lc",
-            &format!(
-                "printf allowed > {} && cat {}",
-                allowed_target.to_string_lossy(),
-                allowed_target.to_string_lossy()
-            ),
+            r#"
+set -eu
+[ "$(cat "$2")" = approved ]
+if mv "$3" "$3.moved"; then exit 1; fi
+if mkdir /dev/ungranted; then exit 1; fi
+printf x > /dev/null
+printf allowed > "$1"
+cat "$1"
+"#,
+            "bash",
+            allowed_target.to_str().unwrap(),
+            logical.to_str().unwrap(),
+            sources.path().to_str().unwrap(),
         ],
         permission_profile,
         LONG_TIMEOUT_MS,
