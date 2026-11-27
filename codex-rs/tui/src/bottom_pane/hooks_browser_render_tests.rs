@@ -75,6 +75,11 @@ fn wrapped_hook_command_preserves_the_complete_url_destination() {
         AppEventSender::new(tx_raw),
     );
     view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    for detail in view.detail_lines(HookEventName::PreToolUse, /*width*/ 40) {
+        for span in detail.line.spans {
+            assert_eq!(span.style, Style::default(), "{}", span.content);
+        }
+    }
     let buf = render_buffer(&view, /*width*/ 44);
     let linked = buf
         .content

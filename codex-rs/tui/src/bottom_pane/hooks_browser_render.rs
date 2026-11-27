@@ -168,7 +168,7 @@ impl Renderable for HooksBrowserView {
 pub(super) fn detail_line(label: &str, value: &str) -> crate::terminal_hyperlinks::HyperlinkLine {
     crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(vec![
         format!("{label:<10}").into(),
-        value.to_string().dim(),
+        value.to_string().into(),
     ]))
 }
 
@@ -185,7 +185,7 @@ pub(super) fn detail_wrapped_lines(
         .split('\n')
         .flat_map(|text| {
             let source =
-                crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().dim().into());
+                crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().into());
             let wrapped = crate::wrapping::wrap_ranges_trim(text, available)
                 .into_iter()
                 .map(|range| {
@@ -196,7 +196,7 @@ pub(super) fn detail_wrapped_lines(
                         " ".repeat(label_width)
                     };
                     crate::wrapping::WrappedLine {
-                        line: vec![prefix.into(), text[range.clone()].to_owned().dim()].into(),
+                        line: vec![prefix.into(), text[range.clone()].to_owned().into()].into(),
                         range,
                         prefix_bytes: label_width,
                     }
