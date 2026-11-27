@@ -1780,7 +1780,8 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
 
 #[tokio::test]
 async fn worktrees_overview_groups_by_project_or_directory() {
-    let mut app = make_test_app_with_chat().await;
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    attach_thread(&mut app, ThreadId::new());
     let root = tempfile::tempdir().unwrap();
     let primary = root.path().join("primary");
     let linked = root.path().join("linked");
@@ -1847,8 +1848,18 @@ async fn worktrees_overview_groups_by_project_or_directory() {
     });
     let width = 160;
     let view = app.agents_overview_view(threads, /*selected_thread_id*/ None);
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    for row in &view.rows {
+        app.agents_overview
+            .threads
+            .insert(row.thread_id, Some(row.thread.clone()));
+    }
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let project_popup = render_bottom_popup(&app.chat_widget, width);
+    let initial = render_bottom_popup(&app.chat_widget, width);
+    for (heading, _) in &directory_headings[..2] {
+        assert!(initial.contains(&format!("{heading}  2")), "{initial}");
+    }
+    let selected = app.overview_selected_thread_id().unwrap();
     let project_root = primary.join("");
     let project_headings = [
         (&project_root, "/tmp/worktree-root/primary"),
@@ -1864,14 +1875,23 @@ async fn worktrees_overview_groups_by_project_or_directory() {
             stable,
         )
     });
-    assert!(
-        project_popup.contains(&format!("{}  4", project_headings[0].0)),
-        "{project_popup}"
-    );
-    assert!(
-        project_popup.contains(&format!("{}  2", project_headings[1].0)),
-        "{project_popup}"
-    );
+    let mut project_popup = initial;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        while !project_popup.contains(&format!("{}  4", project_headings[0].0))
+            || !project_popup.contains(&format!("{}  2", project_headings[1].0))
+        {
+            if matches!(
+                events.recv().await.unwrap(),
+                AppEvent::AgentsOverviewGroupsUpdated
+            ) {
+                app.repaint_agents_overview();
+                project_popup = render_bottom_popup(&app.chat_widget, width);
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("Timed out waiting for grouped worktrees\n{project_popup}"));
+    assert_eq!(app.overview_selected_thread_id(), Some(selected));
     let mut project_grouping = project_popup
         .lines()
         .map(|line| line.split('│').next().unwrap_or(line).trim_end())

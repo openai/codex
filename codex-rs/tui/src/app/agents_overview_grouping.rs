@@ -1,13 +1,110 @@
 //! Command Center grouping, including restoration and client-local preference persistence.
 //! Directory is view-local so selecting it never writes a value that older clients reject.
+//! Saved paths are sufficient for navigation while local workspace identities resolve.
 
 use super::super::App;
 use super::super::agents_overview::AgentsOverviewState;
 use super::super::agents_overview_discovery::matches_query;
+use super::AgentsOverviewProjectGroup;
+use super::AgentsOverviewRow;
 use super::AgentsOverviewView;
+use super::AgentsOverviewViewState;
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
+use crate::thread_label::ThreadLabelStyle;
 use codex_app_server_protocol::Thread;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+
+type WorkspaceGroup = (AgentsOverviewProjectGroup, PathBuf);
+
+fn workspace_group(cwd: &Path, worktrees_enabled: bool) -> WorkspaceGroup {
+    (
+        AgentsOverviewProjectGroup::for_cwd(cwd, worktrees_enabled),
+        super::directory_group_key(cwd, worktrees_enabled),
+    )
+}
+
+#[derive(Default)]
+pub(super) struct WorkspaceGroups {
+    /// None while queued or in flight. Each saved path is probed once per opening.
+    by_cwd: HashMap<PathBuf, Option<WorkspaceGroup>>,
+    queue: VecDeque<PathBuf>,
+    workers: usize,
+    repaint_pending: bool,
+}
+
+impl WorkspaceGroups {
+    pub(super) fn for_rows(
+        state: &Arc<Mutex<AgentsOverviewViewState>>,
+        rows: &[AgentsOverviewRow],
+        worktrees_enabled: bool,
+        events: &AppEventSender,
+    ) -> (Vec<AgentsOverviewProjectGroup>, Vec<PathBuf>) {
+        let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
+        let groups = &mut guard.workspace_groups;
+        groups.repaint_pending = false;
+        let snapshot = rows
+            .iter()
+            .map(|row| {
+                let cwd = row.thread.cwd.as_path();
+                if worktrees_enabled && row.label_style != ThreadLabelStyle::Cloud {
+                    let resolved = groups.by_cwd.entry(cwd.to_owned()).or_insert_with(|| {
+                        groups.queue.push_back(cwd.to_owned());
+                        None
+                    });
+                    if let Some(group) = resolved {
+                        return group.clone();
+                    }
+                }
+                workspace_group(cwd, /*worktrees_enabled*/ false)
+            })
+            .unzip();
+
+        // A mount can block indefinitely. Bound the number of detached workers and
+        // keep these calls off Tokio's blocking pool, which waits for them at shutdown.
+        const MAX_WORKERS: usize = 4;
+        for _ in 0..groups.queue.len().min(MAX_WORKERS - groups.workers) {
+            let state = Arc::downgrade(state);
+            let events = events.clone();
+            let worker = std::thread::Builder::new().spawn(move || {
+                while let Some(state) = state.upgrade() {
+                    let cwd = {
+                        let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
+                        let groups = &mut guard.workspace_groups;
+                        let Some(cwd) = groups.queue.pop_front() else {
+                            groups.workers -= 1;
+                            return;
+                        };
+                        cwd
+                    };
+                    let group = workspace_group(&cwd, /*worktrees_enabled*/ true);
+                    let changed = group != workspace_group(&cwd, /*worktrees_enabled*/ false);
+                    let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    let groups = &mut guard.workspace_groups;
+                    groups.by_cwd.insert(cwd, Some(group));
+                    if changed && !groups.repaint_pending {
+                        groups.repaint_pending = true;
+                        drop(guard);
+                        events.send(AppEvent::AgentsOverviewGroupsUpdated);
+                    }
+                }
+            });
+            if worker.is_err() {
+                break;
+            }
+            groups.workers += 1;
+        }
+        snapshot
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::app) enum AgentsOverviewGrouping {
@@ -129,6 +226,16 @@ impl AgentsOverviewView {
 }
 
 impl AgentsOverviewState {
+    /// Retry unavailable paths on reopen without duplicating blocked lookups.
+    pub(in crate::app) fn refresh_workspace_groups(&self) {
+        self.view_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .workspace_groups
+            .by_cwd
+            .retain(|_, group| group.is_none());
+    }
+
     pub(in super::super) fn new(grouping: codex_config::types::AgentsOverviewGrouping) -> Self {
         let state = Self::default();
         state

@@ -161,6 +161,7 @@ impl App {
     pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
         let dock = self.local_settings.workspace_enabled(&self.config);
         let overview = &mut self.agents_overview;
+        overview.refresh_workspace_groups();
         let threads = overview.threads.values().flatten().cloned().collect();
         let selected_thread_id = overview.selection_after_removal.take().or_else(|| {
             let index = overview.workspace.selected_index()?;

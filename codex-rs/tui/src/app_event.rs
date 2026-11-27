@@ -405,6 +405,7 @@ pub(crate) enum AppEvent {
         backend_id: Option<crate::backend_id::BackendId>,
         cwd: Option<PathBuf>,
     },
+    AgentsOverviewGroupsUpdated,
     /// Update the agents overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {
         request_id: Uuid,

@@ -166,6 +166,7 @@ impl App {
                     | AppEvent::ArchiveFinished { .. }
                     | AppEvent::OpenAgentsOverview
                     | AppEvent::ShowMoreAgentsOverview
+                    | AppEvent::AgentsOverviewGroupsUpdated
                     | AppEvent::AgentsOverviewThreadsLoaded { .. }
                     | AppEvent::AgentsOverviewUsageLoaded { .. }
                     | AppEvent::AppendMessageHistoryEntry { .. }
@@ -3546,6 +3547,7 @@ impl App {
             AppEvent::NewAgentsOverviewSession { cwd, .. } => {
                 return Box::pin(self.new_agents_overview_session(tui, app_server, cwd)).await;
             }
+            AppEvent::AgentsOverviewGroupsUpdated => self.repaint_agents_overview(),
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
             }

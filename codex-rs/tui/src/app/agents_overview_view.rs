@@ -9,6 +9,7 @@ pub(super) mod command_center;
 mod grouping;
 
 pub(super) use grouping::AgentsOverviewGrouping;
+use grouping::WorkspaceGroups;
 use grouping::model_name;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
@@ -135,10 +136,8 @@ struct AgentsOverviewProjectGroup {
 }
 
 impl AgentsOverviewProjectGroup {
-    fn for_thread(thread: &Thread, worktrees_enabled: bool) -> Self {
-        if worktrees_enabled
-            && let Some(identity) = codex_git_utils::repository_identity(thread.cwd.as_path())
-        {
+    fn for_cwd(cwd: &Path, worktrees_enabled: bool) -> Self {
+        if worktrees_enabled && let Some(identity) = codex_git_utils::repository_identity(cwd) {
             Self {
                 key: (
                     identity.common_dir.into_path_buf(),
@@ -148,8 +147,8 @@ impl AgentsOverviewProjectGroup {
             }
         } else {
             Self {
-                key: (thread.cwd.to_path_buf(), PathBuf::new()),
-                heading: thread.cwd.to_path_buf(),
+                key: (cwd.to_path_buf(), PathBuf::new()),
+                heading: cwd.to_path_buf(),
             }
         }
     }
@@ -177,6 +176,7 @@ pub(super) struct OpeningTask {
 
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
+    workspace_groups: WorkspaceGroups,
     row_hits: Vec<(RowTarget, Rect)>,
     scroll: usize,
     page_height: usize,
@@ -301,14 +301,8 @@ impl AgentsOverviewView {
             })
             .or_else(|| rows.iter().position(|row| row.is_current))
             .unwrap_or(0);
-        let project_groups = rows
-            .iter()
-            .map(|row| AgentsOverviewProjectGroup::for_thread(&row.thread, worktrees_enabled))
-            .collect();
-        let directory_group_keys = rows
-            .iter()
-            .map(|row| directory_group_key(row.thread.cwd.as_path(), worktrees_enabled))
-            .collect();
+        let (project_groups, directory_group_keys) =
+            WorkspaceGroups::for_rows(&state, &rows, worktrees_enabled, &app_event_tx);
         let center_shortcut_keys = crate::keymap::keymap_action_ids()
             .filter(|action| matches!(action.context, KeymapContext::List | KeymapContext::Agents))
             .flat_map(|action| {
