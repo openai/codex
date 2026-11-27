@@ -15,13 +15,16 @@ use codex_protocol::protocol::SessionSource;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(not(target_os = "windows"))]
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy)]
 pub(super) enum HostRead {
     Current,
     Unavailable,
+    #[cfg(not(target_os = "windows"))]
     Reloaded,
+    #[cfg(not(target_os = "windows"))]
     Stalled,
 }
 
@@ -29,13 +32,14 @@ pub(super) struct HostGuardianContext {
     evidence: GuardianRootEvidence,
     worker_path: AgentPath,
     pub(super) read: Mutex<HostRead>,
+    #[cfg(not(target_os = "windows"))]
     pub(super) stalled: Notify,
 }
 
 impl AgentGuardianContext for HostGuardianContext {
     fn root_snapshot(&self) -> BoxFuture<'_, CodexResult<GuardianRootSnapshot>> {
         Box::pin(async move {
-            let mut snapshot = self.evidence.project(&self.worker_path)?;
+            let snapshot = self.evidence.project(&self.worker_path)?;
             let read = *self.read.lock().expect("host read mode");
             match read {
                 HostRead::Current => {}
@@ -43,9 +47,13 @@ impl AgentGuardianContext for HostGuardianContext {
                     return Err(CodexErr::Fatal("root context unavailable".into()));
                 }
                 // Keep every counter unchanged across a root reload.
+                #[cfg(not(target_os = "windows"))]
                 HostRead::Reloaded => {
-                    snapshot.authorization_version.root_runtime_id = Some([1; 16])
+                    let mut snapshot = snapshot;
+                    snapshot.authorization_version.root_runtime_id = Some([1; 16]);
+                    return Ok(snapshot);
                 }
+                #[cfg(not(target_os = "windows"))]
                 HostRead::Stalled => {
                     // A concurrent startup prewarm must not release the review gate.
                     if codex_guardian_reviewer::root_evidence_limits().is_some() {
@@ -79,6 +87,7 @@ impl HostGuardianContext {
             evidence,
             worker_path: AgentPath::try_from("/root/worker").expect("worker path"),
             read: Mutex::new(HostRead::Current),
+            #[cfg(not(target_os = "windows"))]
             stalled: Notify::new(),
         });
         let admission: Arc<dyn AgentTurnAdmission> = Arc::new(AllowAdmission);
