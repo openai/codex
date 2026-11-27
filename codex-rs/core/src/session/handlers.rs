@@ -466,6 +466,10 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
 
     sess.drain_code_mode_messages().await;
 
+    let writes = &sess.services.unified_exec_manager.launch_failure_writes;
+    writes.close();
+    writes.wait().await;
+
     crate::hook_runtime::run_session_end_hooks(sess).await;
     emit_thread_stop_lifecycle(sess).await;
 }

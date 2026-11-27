@@ -220,3 +220,89 @@ async fn interrupted_one_shot_launch_failure_completes_and_persists() -> Result<
     request.single_request();
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_during_launch_failure_preserves_the_failed_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let gate = Arc::new(PauseCommandCompletion::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(gate.clone());
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("enable unified exec");
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("disable sandboxing");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let request = responses::mount_sse_once(&server, responses::sse(vec![
+        responses::ev_response_created("launch"),
+        responses::ev_exec_command_call_with_args(CALL_ID,
+            &json!({"cmd": "echo unreachable", "workdir": "missing-work-directory", "login": false})),
+        responses::ev_completed("launch"),
+    ])).await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Run the command.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    gate.entered.notified().await;
+    test.codex.submit(Op::Interrupt).await?;
+    let EventMsg::TurnAborted(aborted) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await
+    else {
+        unreachable!()
+    };
+
+    // Try to close the writer while the command completion is paused before its append.
+    test.codex.submit(Op::Shutdown).await?;
+    let shutdown = timeout(Duration::from_secs(1), test.codex.wait_until_terminated()).await;
+    gate.release.notify_one();
+    test.codex.wait_until_terminated().await;
+
+    let path = test.codex.rollout_path().context("rollout path")?;
+    let (items, _, errors) = RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(errors, 0);
+    let mut history = ThreadHistoryBuilder::new();
+    for item in &items {
+        history.handle_rollout_item(item);
+    }
+    let turn = history
+        .turn_snapshot(aborted.turn_id.as_deref().context("turn id")?)
+        .context("interrupted turn in persisted history")?;
+    assert_eq!(turn.status, TurnStatus::Interrupted);
+    let commands = turn
+        .item_payloads()
+        .filter_map(|item| match item {
+            ThreadItemPayload::CommandExecution { id, status, .. } => Some((id.as_str(), status)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        vec![(
+            CALL_ID,
+            &codex_app_server_protocol::CommandExecutionStatus::Failed
+        )]
+    );
+    assert!(
+        shutdown.is_err(),
+        "session closed while failure publication was paused"
+    );
+    request.single_request();
+    Ok(())
+}

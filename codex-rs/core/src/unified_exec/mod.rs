@@ -35,6 +35,7 @@ use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -158,6 +159,7 @@ impl ProcessStore {
 }
 
 pub(crate) struct UnifiedExecProcessManager {
+    pub(crate) launch_failure_writes: TaskTracker,
     process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
 }
@@ -165,6 +167,7 @@ pub(crate) struct UnifiedExecProcessManager {
 impl UnifiedExecProcessManager {
     pub(crate) fn new(max_write_stdin_yield_time_ms: u64) -> Self {
         Self {
+            launch_failure_writes: TaskTracker::new(),
             process_store: Mutex::new(ProcessStore::default()),
             max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
                 .max(MIN_EMPTY_YIELD_TIME_MS),

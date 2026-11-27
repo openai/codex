@@ -1,6 +1,6 @@
 //! Reports terminal process-creation failures as command attempts without a process handle.
 //! Approval rejections retain their own lifecycle, and sandbox denials remain retryable.
-//! Once started, failure event publication survives caller cancellation.
+//! Session shutdown drains failure publications that outlive the caller.
 
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -42,6 +42,16 @@ pub(super) async fn with_launch_failure_events(
                 .plugin_attribution_for_command(&req.resolved.command, &cwd)
         })
     };
+    // Register before checking closure so shutdown waits for every admitted write.
+    let writes = &ctx
+        .session
+        .services
+        .unified_exec_manager
+        .launch_failure_writes;
+    let write = writes.token();
+    if writes.is_closed() {
+        return result;
+    }
     let emitter = ToolEmitter::unified_exec(
         &req.resolved.command,
         req.cwd.clone(),
@@ -71,6 +81,7 @@ pub(super) async fn with_launch_failure_events(
                 ToolEventStage::Failure(ToolEventFailure::Message(message)),
             )
             .await;
+        drop(write);
     };
     if let Err(err) = tokio::spawn(publish.in_current_span()).await {
         tracing::warn!(%err, "failed to publish unified exec launch failure");
