@@ -164,7 +164,7 @@ impl ChatWidget {
         self.selected_statusline_provider().is_some()
     }
 
-    pub(crate) fn handle_statusline_read(
+    pub(crate) async fn handle_statusline_read(
         &mut self,
         event: StatuslineReadEvent,
         owner: &AppServerSession,
@@ -189,7 +189,7 @@ impl ChatWidget {
             }
             ReadStep::Snapshot(backend, reply) => {
                 if backend == owner.backend_id()
-                    && let Some(state) = self.statusline_state()
+                    && let Some(state) = self.provider_statusline_state(owner).await
                 {
                     let _ = reply.send(state);
                 }

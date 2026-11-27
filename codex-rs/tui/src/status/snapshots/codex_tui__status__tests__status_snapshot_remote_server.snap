@@ -14,7 +14,7 @@ expression: sanitized
 
   Model:           gpt-5.1-codex-max (reasoning medium)
   Directory:       [[workspace]]
-  Permissions:     Custom (workspace with network access, Ask for approval)
+  Permissions:     Unknown
   Agents.md:       <none>
 
   Token usage:     750 total  (500 input + 250 output)

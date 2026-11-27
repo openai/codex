@@ -144,14 +144,16 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
         &server,
         &metrics,
         &app_config,
-    );
+    )
+    .await;
     chat.refresh_status_line();
     let ready = footer(&chat).unwrap();
     insta::assert_snapshot!(format!("{initializing}\n{ready}"), @"
     Initializing…
     Ready
     ");
-    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config);
+    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config)
+        .await;
     chat.refresh_status_line();
     assert_eq!(footer(&chat).as_deref(), Some(""));
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("native-agent-label"));
@@ -164,7 +166,8 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
     chat.read_only_history = false;
     chat.refresh_status_line();
     let [resumed] = read_events(&mut rx).try_into().unwrap();
-    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config);
+    chat.handle_statusline_read(finish(token, /*root*/ None), &server, &metrics, &app_config)
+        .await;
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
     let token = resumed.token;
     chat.primary_environment_cwd = Some(crate::session_state::EnvironmentCwd {
@@ -184,7 +187,8 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
         &server,
         &metrics,
         &app_config,
-    );
+    )
+    .await;
     assert!(snapshot.await.is_err());
     let [replacement] = read_events(&mut rx).try_into().unwrap();
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
@@ -196,7 +200,8 @@ async fn statusline_reader_waits_for_the_displayed_thread_and_keeps_its_result()
         &server,
         &metrics,
         &app_config,
-    );
+    )
+    .await;
     assert_eq!(footer(&chat).as_deref(), Some("Initializing…"));
     assert!(collector.snapshot().is_empty());
 }
@@ -247,15 +252,16 @@ impl Reader {
         reader
     }
 
-    fn handle(&mut self, event: StatuslineReadEvent) {
+    async fn handle(&mut self, event: StatuslineReadEvent) {
         self.chat
-            .handle_statusline_read(event, &self.owner, &self.metrics, &self.app_config);
+            .handle_statusline_read(event, &self.owner, &self.metrics, &self.app_config)
+            .await;
     }
 
     async fn dispatch(&mut self) {
         while let Some(event) = self.events.recv().await {
             if let AppEvent::StatuslineRead(event) = event {
-                self.handle(event);
+                self.handle(event).await;
                 return;
             }
         }
@@ -603,7 +609,9 @@ async fn statusline_changing_provider_or_reconnecting_discards_the_previous_read
         held.closed().await;
         for result in [Ok(UiTree(None)), Err(Failure::Snapshot)] {
             let step = ReadStep::Finished(reader.owner.backend_id(), result);
-            reader.handle(StatuslineReadEvent { token: old, step });
+            reader
+                .handle(StatuslineReadEvent { token: old, step })
+                .await;
         }
         assert_eq!(footer(&reader.chat).as_deref(), Some("Initializing…"));
         held = next;

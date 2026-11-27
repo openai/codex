@@ -121,6 +121,60 @@ async fn session_header_uses_catalog_display_name_without_changing_model() {
 }
 
 #[tokio::test]
+async fn permission_status_follows_the_displayed_thread() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.local_settings.tui.status_line = Some(vec!["permissions".into(), "approval-mode".into()]);
+    let rendered = |chat: &mut ChatWidget| {
+        chat.add_status_output(
+            /*refreshing_rate_limits*/ false, /*request_id*/ None,
+        );
+        let card = chat
+            .transcript
+            .last_status_copy_targets
+            .as_ref()
+            .unwrap()
+            .handle
+            .copy_text();
+        let permissions = card
+            .lines()
+            .find_map(|line| line.split_once("Permissions:"))
+            .unwrap()
+            .1
+            .trim();
+        format!(
+            "{} | {permissions}",
+            status_line_text(chat).unwrap_or_else(|| "<hidden>".into())
+        )
+    };
+    let mut first = configured_thread_session(ThreadId::new());
+    // A pending selection can be restored into execution config when switching threads.
+    first.permission_profile = PermissionProfile::Disabled;
+    first.approval_policy = AskForApproval::OnRequest;
+    first.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    chat.handle_thread_session(first.clone());
+    let before = rendered(&mut chat);
+    let mut history = configured_thread_session(ThreadId::new());
+    history.read_only_history = true;
+    history.confirmed_permissions = None;
+    chat.handle_thread_session_quiet(history);
+    let unknown = rendered(&mut chat);
+    let mut update = thread_settings_for_test("gpt-5.2", first.thread_id);
+    update
+        .thread_settings
+        .active_permission_profile
+        .as_mut()
+        .unwrap()
+        .id = "restricted".into();
+    chat.on_thread_settings_updated(update.clone());
+    assert_eq!(rendered(&mut chat), unknown);
+    chat.handle_thread_session_quiet(first);
+    assert_eq!(rendered(&mut chat), before);
+    chat.on_thread_settings_updated(update);
+    let confirmed = rendered(&mut chat);
+    insta::assert_snapshot!(format!("{before}\n{unknown}\n{confirmed}"));
+}
+
+#[tokio::test]
 async fn session_and_settings_sync_server_provider_id() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.config.model_provider.base_url = Some("https://local-provider.example/v1".to_string());

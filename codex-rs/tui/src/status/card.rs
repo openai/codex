@@ -4,6 +4,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::plain_lines;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
+use crate::session_state::ConfirmedPermissions;
 use crate::style::accent_color;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
@@ -16,7 +17,6 @@ use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
@@ -220,6 +220,14 @@ pub(crate) fn new_status_output_with_rate_limits(
 ) -> CompositeHistoryCell {
     new_status_output_with_rate_limits_handle(
         config,
+        Some(&ConfirmedPermissions {
+            profile: config.permissions.effective_permission_profile(),
+            active: config.permissions.active_permission_profile(),
+            policy: config.permissions.approval_policy.value().into(),
+            reviewer: config.approvals_reviewer,
+            cwd: PathUri::from_abs_path(&config.cwd),
+            roots: config.effective_workspace_roots(),
+        }),
         config.model_provider.requires_openai_auth,
         /*model_provider_id*/ None,
         /*remote_connection*/ None,
@@ -244,6 +252,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits_handle(
     config: &Config,
+    confirmed_permissions: Option<&ConfirmedPermissions>,
     requires_openai_auth: bool,
     model_provider_id: Option<&str>,
     remote_connection: Option<&RemoteConnectionStatus>,
@@ -265,6 +274,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = Arc::new(StatusHistoryCell::new(
         config,
+        confirmed_permissions,
         requires_openai_auth,
         model_provider_id,
         remote_connection,
@@ -297,6 +307,7 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
+        confirmed_permissions: Option<&ConfirmedPermissions>,
         requires_openai_auth: bool,
         model_provider_id: Option<&str>,
         remote_connection: Option<&RemoteConnectionStatus>,
@@ -315,24 +326,12 @@ impl StatusHistoryCell {
         agents_summary: String,
         refreshing_rate_limits: bool,
     ) -> Self {
-        let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-        let permission_profile = config.permissions.effective_permission_profile();
-        let workspace_roots = config.effective_workspace_roots();
-        let cwd = PathUri::from_abs_path(&config.cwd);
         let model_provider = model_provider_id
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string);
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
-            (
-                "approval",
-                config.permissions.approval_policy.value().to_string(),
-            ),
-            (
-                "sandbox",
-                summarize_permission_profile(&permission_profile, &cwd, &workspace_roots),
-            ),
         ];
         if let Some(provider_id) = &model_provider {
             config_entries.insert(2, ("provider", provider_id.clone()));
@@ -354,23 +353,21 @@ impl StatusHistoryCell {
             }
         }
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
-        let approval = config_entries
-            .iter()
-            .find(|(k, _)| *k == "approval")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        let active_permission_profile = config.permissions.active_permission_profile();
-        let sandbox = status_permission_summary(&permission_profile, &cwd, &workspace_roots);
-        let workspace_root_suffix = workspace_root_suffix(&workspace_roots, &cwd);
-        let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
-        let permissions = status_permissions_label(
-            active_permission_profile.as_ref(),
-            &permission_profile,
-            approval_policy,
-            &sandbox,
-            &approval,
-            workspace_root_suffix.as_deref(),
-        );
+        let permissions = confirmed_permissions
+            .map(|snapshot| {
+                let sandbox =
+                    status_permission_summary(&snapshot.profile, &snapshot.cwd, &snapshot.roots);
+                let suffix = workspace_root_suffix(&snapshot.roots, &snapshot.cwd);
+                status_permissions_label(
+                    snapshot.active.as_ref(),
+                    &snapshot.profile,
+                    snapshot.policy,
+                    &sandbox,
+                    &snapshot.approval_label(),
+                    suffix.as_deref(),
+                )
+            })
+            .unwrap_or_else(|| "Unknown".into());
         let show_chatgpt_usage_link = requires_openai_auth;
         let mut account = compose_account_display(account_display);
         let workspace_matches_provider = if remote_connection.is_some() {
@@ -726,8 +723,13 @@ fn status_permissions_label(
             };
         }
         Some(id) => {
-            let sandbox = decorate_workspace_sandbox_label(sandbox, workspace_root_suffix);
-            return format!("Profile {id} ({sandbox}, {approval})");
+            // The legacy sandbox can omit restrictions of a named profile.
+            return match workspace_root_suffix {
+                Some(roots) if sandbox.starts_with("workspace") => {
+                    format!("Profile {id} (workspace roots{roots}, {approval})")
+                }
+                _ => format!("Profile {id} ({approval})"),
+            };
         }
         None => {}
     }
@@ -755,21 +757,6 @@ fn decorate_workspace_sandbox_label(sandbox: &str, workspace_root_suffix: Option
         Some(suffix) if sandbox.starts_with("workspace") => format!("{sandbox}{suffix}"),
         _ => sandbox.to_string(),
     }
-}
-
-fn status_approval_label(
-    approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
-    approval: &str,
-) -> String {
-    if approval_policy == AskForApproval::OnRequest {
-        return match approvals_reviewer {
-            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
-            ApprovalsReviewer::User => "Ask for approval".to_string(),
-        };
-    }
-
-    approval.to_string()
 }
 
 impl StatusHistoryCell {

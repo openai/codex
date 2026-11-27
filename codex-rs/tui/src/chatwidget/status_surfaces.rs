@@ -8,17 +8,15 @@ use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
-use crate::legacy_core::config::Config;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
+use crate::session_state::ConfirmedPermissions;
 use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
 use crate::terminal_program_status::ProgramStatus;
 use crate::thread_label::ThreadLabelStyle;
-use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
 use codex_config::os_host_name;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_sandbox_summary::summarize_permission_profile;
@@ -771,8 +769,18 @@ impl ChatWidget {
                     }
                 }),
             StatusLineItem::Status => Some(self.run_state_status_text()),
-            StatusLineItem::Permissions => Some(permissions_display(&self.config)),
-            StatusLineItem::ApprovalMode => Some(approval_mode_display(&self.config)),
+            StatusLineItem::Permissions => Some(
+                self.confirmed_permissions
+                    .as_deref()
+                    .map(permissions_display)
+                    .unwrap_or_else(|| "Permissions unknown".into()),
+            ),
+            StatusLineItem::ApprovalMode => Some(
+                self.confirmed_permissions
+                    .as_deref()
+                    .map(ConfirmedPermissions::approval_label)
+                    .unwrap_or_else(|| "Approval mode unknown".into()),
+            ),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
                 let total = usage.blended_total();
@@ -1251,20 +1259,14 @@ fn matches_window_label(window: &RateLimitWindowDisplay, label: &str) -> bool {
         == Some(label)
 }
 
-pub(super) fn permissions_display(config: &Config) -> String {
-    let active_permission_profile = config.permissions.active_permission_profile();
-    if let Some(active_permission_profile) = active_permission_profile.as_ref()
-        && !active_permission_profile.id.starts_with(':')
+pub(super) fn permissions_display(permissions: &ConfirmedPermissions) -> String {
+    if let Some(active) = &permissions.active
+        && !active.id.starts_with(':')
     {
-        return active_permission_profile.id.clone();
+        return active.id.clone();
     }
-
-    let permission_profile = config.permissions.effective_permission_profile();
-    let summary = summarize_permission_profile(
-        &permission_profile,
-        &PathUri::from_abs_path(&config.cwd),
-        &config.effective_workspace_roots(),
-    );
+    let summary =
+        summarize_permission_profile(&permissions.profile, &permissions.cwd, &permissions.roots);
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")
     {
@@ -1275,23 +1277,11 @@ pub(super) fn permissions_display(config: &Config) -> String {
     {
         return "Workspace".to_string();
     }
-    if permission_profile == PermissionProfile::Disabled {
+    if permissions.profile == PermissionProfile::Disabled {
         return "Full Access".to_string();
     }
 
     "Custom permissions".to_string()
-}
-
-fn approval_mode_display(config: &Config) -> String {
-    let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-    if approval_policy == AskForApproval::OnRequest {
-        return match config.approvals_reviewer {
-            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
-            ApprovalsReviewer::User => "Ask for approval".to_string(),
-        };
-    }
-
-    config.permissions.approval_policy.value().to_string()
 }
 
 fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)

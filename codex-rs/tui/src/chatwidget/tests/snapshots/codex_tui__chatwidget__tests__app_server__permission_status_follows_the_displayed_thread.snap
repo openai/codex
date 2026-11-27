@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: "format!(\"{before}\\n{unknown}\\n{confirmed}\")"
+---
+Read Only · never | Read Only (never)
+<hidden> | Unknown
+restricted · Approve for me | Profile restricted (Approve for me)

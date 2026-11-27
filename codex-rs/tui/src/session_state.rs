@@ -9,6 +9,7 @@ use std::sync::Arc;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ThreadEnvironment;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
@@ -40,6 +41,16 @@ pub(crate) struct ConfirmedPermissions {
 }
 
 impl ConfirmedPermissions {
+    pub(crate) fn approval_label(&self) -> String {
+        if self.policy == AskForApproval::OnRequest {
+            return match self.reviewer {
+                ApprovalsReviewer::AutoReview => "Approve for me".into(),
+                ApprovalsReviewer::User => "Ask for approval".into(),
+            };
+        }
+        self.policy.to_core().to_string()
+    }
+
     pub(crate) fn from_update(
         settings: &codex_app_server_protocol::ThreadSettings,
         profile: &PermissionProfile,

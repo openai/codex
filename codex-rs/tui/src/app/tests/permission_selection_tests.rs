@@ -4,6 +4,41 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn statusline_uses_embedded_enforcement_for_an_ambiguous_sandbox() -> Result<()> {
+    let mut app = make_test_app().await;
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+default_permissions = "offline"
+[permissions.offline.filesystem]
+":root" = "write"
+[permissions.offline.network]
+enabled = false
+"#,
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().into())
+        .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    let started = server.start_thread(&config).await?;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+
+    let projection = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(projection["thread"].get("permissions"), None);
+    assert!(projection["thread"]["approval"].is_object());
+    let live = serde_json::to_value(app.chat_widget.provider_statusline_state(&server).await)?;
+    assert_eq!(live["thread"]["permissions"]["type"], "managed");
+    assert_eq!(live["thread"]["permissions"]["profile_id"], "offline");
+    assert_eq!(live["thread"]["approval"], projection["thread"]["approval"]);
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn builtin_permission_selection_adopts_server_settings() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let mut server = start_config_write_test_app_server(&app).await?;
@@ -389,6 +424,8 @@ async fn custom_permission_selection_scenario() -> Result<()> {
     assert!(app.agents_overview.requested_permission_profiles.is_empty());
     let confirmed = RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref());
     let confirmed_config = app.config.clone();
+    let status = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(status["thread"]["permissions"]["profile_id"], "other");
     app.select_permission_profile(
         &mut server,
         PermissionProfileSelection {
@@ -397,6 +434,12 @@ async fn custom_permission_selection_scenario() -> Result<()> {
         },
     )
     .await;
+    let rejected = serde_json::to_value(app.chat_widget.statusline_state())?;
+    assert_eq!(
+        rejected["thread"]["permissions"],
+        status["thread"]["permissions"]
+    );
+    assert_eq!(rejected["thread"]["approval"], status["thread"]["approval"]);
     assert_eq!(
         RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
         confirmed

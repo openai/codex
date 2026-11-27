@@ -719,7 +719,7 @@ async fn status_permissions_user_defined_profile_shows_name() {
 
     assert_eq!(
         permissions_text_for(&config).as_deref(),
-        Some("Profile locked (read-only, Ask for approval)")
+        Some("Profile locked (Ask for approval)")
     );
 }
 
@@ -796,6 +796,7 @@ async fn status_uses_server_provider_id_and_auth_requirement() {
     config.model_provider.requires_openai_auth = true;
     let (composite, _handle) = new_status_output_with_rate_limits_handle(
         &config,
+        /*confirmed_permissions*/ None,
         /*requires_openai_auth*/ false,
         Some("server-ollama"),
         /*remote_connection*/ None,
@@ -827,6 +828,7 @@ async fn status_uses_server_provider_id_and_auth_requirement() {
     };
     let (composite, _handle) = new_status_output_with_rate_limits_handle(
         &config,
+        /*confirmed_permissions*/ None,
         /*requires_openai_auth*/ true,
         Some("server-openai"),
         /*remote_connection*/ None,
@@ -1367,6 +1369,7 @@ async fn status_wraps_long_paths_and_session_ids_without_losing_text() {
     let usage = TokenUsage::default();
     let (status, handle) = new_status_output_with_rate_limits_handle(
         &config,
+        /*confirmed_permissions*/ None,
         /*requires_openai_auth*/ true,
         /*model_provider_id*/ None,
         /*remote_connection*/ None,
@@ -1634,6 +1637,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         let token_info = token_info_for(&model_slug, &config, &usage);
         let (composite, _) = new_status_output_with_rate_limits_handle(
             &config,
+            /*confirmed_permissions*/ None,
             /*requires_openai_auth*/ true,
             /*model_provider_id*/ None,
             remote_connection.as_ref(),
@@ -1747,6 +1751,7 @@ async fn transcript_overlay_remeasures_status_after_rate_limit_refresh() {
 
     let (status, handle) = new_status_output_with_rate_limits_handle(
         &config,
+        /*confirmed_permissions*/ None,
         /*requires_openai_auth*/ true,
         /*model_provider_id*/ None,
         /*remote_connection*/ None,
@@ -2263,7 +2268,7 @@ async fn status_permissions_include_executor_profile_root() {
 
     assert_snapshot!(
         permissions_text_for_width(&config, /*width*/ 160).expect("permissions line"),
-        @r"Profile executor (workspace [\\server\share\foreign], Ask for approval)"
+        @r"Profile executor (workspace roots [\\server\share\foreign], Ask for approval)"
     );
 }
 

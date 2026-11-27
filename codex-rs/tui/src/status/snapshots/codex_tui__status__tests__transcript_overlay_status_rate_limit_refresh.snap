@@ -13,7 +13,7 @@ before:
 
   Model:        gpt-5.1-codex-max (reasoning none, summaries auto)
   Directory:    [[workspace]]
-  Permissions:  Custom (workspace with network access, Ask for approval)
+  Permissions:  Unknown
   Agents.md:    <none>
 
   Token usage:  0 total  (0 input + 0 output)
@@ -45,7 +45,7 @@ after:
 
   Model:         gpt-5.1-codex-max (reasoning none, summaries auto)
   Directory:     [[workspace]]
-  Permissions:   Custom (workspace with network access, Ask for approval)
+  Permissions:   Unknown
   Agents.md:     <none>
 
   Token usage:   0 total  (0 input + 0 output)

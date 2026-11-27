@@ -12,7 +12,7 @@ expression: rendered
   Model:           gpt-5.6-sol (reasoning none, summaries auto)
   Model provider:  server-openai
   Directory:       [[workspace]]
-  Permissions:     Custom (workspace with network access, Ask for approval)
+  Permissions:     Unknown
   Agents.md:       <none>
 
   Token usage:     0 total  (0 input + 0 output)

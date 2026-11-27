@@ -7,7 +7,9 @@ use super::ChatWidget;
 use super::normalize_thread_name;
 use super::status_state::TerminalTitleStatusKind as TerminalTitleStatus;
 use super::status_surfaces::permissions_display;
+use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::StatusLineItem;
+use crate::session_state::ConfirmedPermissions;
 use crate::version::CODEX_CLI_VERSION;
 use codex_protocol::config_types::ApprovalsReviewer as ConfigReviewer;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -219,8 +221,18 @@ enum StatuslineStateFileSystem {
     Unrestricted,
 }
 
-impl From<PermissionProfile> for StatuslineStateEnforcement {
-    fn from(profile: PermissionProfile) -> Self {
+impl StatuslineStatePermissions {
+    fn new(snapshot: &ConfirmedPermissions, profile: &PermissionProfile) -> Self {
+        Self {
+            display_name: permissions_display(snapshot),
+            profile_id: snapshot.active.as_ref().map(|active| active.id.clone()),
+            enforcement: profile.into(),
+        }
+    }
+}
+
+impl From<&PermissionProfile> for StatuslineStateEnforcement {
+    fn from(profile: &PermissionProfile) -> Self {
         match profile {
             PermissionProfile::Managed {
                 file_system,
@@ -230,10 +242,10 @@ impl From<PermissionProfile> for StatuslineStateEnforcement {
                     ManagedFileSystem::Restricted { .. } => StatuslineStateFileSystem::Restricted,
                     ManagedFileSystem::Unrestricted => StatuslineStateFileSystem::Unrestricted,
                 },
-                network,
+                network: *network,
             },
             PermissionProfile::Disabled => Self::Disabled,
-            PermissionProfile::External { network } => Self::External { network },
+            PermissionProfile::External { network } => Self::External { network: *network },
         }
     }
 }
@@ -253,12 +265,36 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) async fn provider_statusline_state(
+        &self,
+        owner: &AppServerSession,
+    ) -> Option<StatuslineState> {
+        let mut state = self.statusline_state()?;
+        // Full-disk managed profiles share a legacy sandbox with external or disabled
+        // enforcement. Only the embedded server can disambiguate those projections.
+        if state.thread.permissions.is_none()
+            && let Some(snapshot) = self.confirmed_permissions.as_deref()
+            && let Ok(Some(live)) = owner.model_preview_permissions(state.thread.id).await
+            && let Ok(cwd) = snapshot.cwd.to_abs_path()
+            && let Ok(projected) = live.profile.to_legacy_sandbox_policy(cwd.as_path())
+            && Some(projected)
+                == snapshot
+                    .profile
+                    .to_legacy_sandbox_policy(cwd.as_path())
+                    .ok()
+        {
+            state.thread.permissions =
+                Some(StatuslineStatePermissions::new(snapshot, &live.profile));
+        }
+        Some(state)
+    }
+
     pub(crate) fn statusline_state(&self) -> Option<StatuslineState> {
         if self.read_only_history {
             return None;
         }
         let id = self.thread_id?;
-        let permissions = &self.config.permissions;
+        let permissions = self.confirmed_permissions.as_deref();
         let selected_model = self.current_model();
         let app = StatuslineStateApp {
             cli_version: CODEX_CLI_VERSION,
@@ -298,29 +334,27 @@ impl ChatWidget {
                 .filter(|_| self.thread_settings_confirmed)
                 .map(str::to_owned),
         };
-        let approval = self
-            .thread_settings_confirmed
-            .then(|| StatuslineStateApproval {
-                policy: match permissions.approval_policy.value() {
-                    AskForApproval::UnlessTrusted => StatuslineStateApprovalPolicy::Untrusted,
-                    AskForApproval::OnRequest => StatuslineStateApprovalPolicy::OnRequest,
-                    AskForApproval::Granular(_) => StatuslineStateApprovalPolicy::Granular,
-                    AskForApproval::Never => StatuslineStateApprovalPolicy::Never,
-                },
-                reviewer: match self.config.approvals_reviewer {
-                    ConfigReviewer::User => StatuslineStateApprovalReviewer::User,
-                    ConfigReviewer::AutoReview => StatuslineStateApprovalReviewer::AutoReview,
-                },
-            });
-        let permissions = self
-            .thread_settings_confirmed
-            .then(|| StatuslineStatePermissions {
-                display_name: permissions_display(&self.config),
-                profile_id: permissions
-                    .active_permission_profile()
-                    .map(|profile| profile.id),
-                enforcement: permissions.effective_permission_profile().into(),
-            });
+        let approval = permissions.map(|permissions| StatuslineStateApproval {
+            policy: match permissions.policy.to_core() {
+                AskForApproval::UnlessTrusted => StatuslineStateApprovalPolicy::Untrusted,
+                AskForApproval::OnRequest => StatuslineStateApprovalPolicy::OnRequest,
+                AskForApproval::Granular(_) => StatuslineStateApprovalPolicy::Granular,
+                AskForApproval::Never => StatuslineStateApprovalPolicy::Never,
+            },
+            reviewer: match permissions.reviewer {
+                ConfigReviewer::User => StatuslineStateApprovalReviewer::User,
+                ConfigReviewer::AutoReview => StatuslineStateApprovalReviewer::AutoReview,
+            },
+        });
+        let permissions = permissions
+            .filter(|snapshot| match &snapshot.profile {
+                PermissionProfile::Managed { .. } => true,
+                PermissionProfile::External { network } => network.is_enabled(),
+                PermissionProfile::Disabled => snapshot.active.as_ref().is_some_and(|active| {
+                    active.id == codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
+                }),
+            })
+            .map(|snapshot| StatuslineStatePermissions::new(snapshot, &snapshot.profile));
         Some(StatuslineState {
             account: self.into(),
             app,
