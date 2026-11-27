@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: "status_preview_line(&mut chat,\n&[StatusLineItem::Permissions, StatusLineItem::ApprovalMode],)"
+---
+No Sandbox · Ask for approval
