@@ -570,8 +570,9 @@ impl ResponsesWebsocketConnection {
         let request_text = Utf8Bytes::from(serialize_websocket_request(&request)?);
         on_encoded(request_text.as_ref());
         let enriched = with_tool_results(request_text.as_str(), &ws_request.tool_results);
+        let private = enriched.is_some();
         let request_text = WsRequestText {
-            private: enriched.is_some(),
+            private,
             text: enriched.map(Utf8Bytes::from).unwrap_or(request_text),
         };
 

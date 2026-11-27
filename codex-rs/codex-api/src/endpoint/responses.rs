@@ -199,3 +199,4 @@ impl<T: HttpTransport> ResponsesClient<T> {
         ))
     }
 }
+
