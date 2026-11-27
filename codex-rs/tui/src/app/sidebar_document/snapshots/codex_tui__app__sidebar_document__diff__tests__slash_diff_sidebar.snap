@@ -1,0 +1,59 @@
+---
+source: tui/src/app/sidebar_document/diff_tests.rs
+expression: "format!(\"Focused at 42 columns\\n{small}\\n\\nRefreshing at 42 columns\\n{refreshing}\\n\\nRefreshed beside chat\\n{sidebar}\\n\\nRefreshing a clean tree beside chat\\n{refreshing_clean}\")"
+---
+Focused at 42 columns
+ Diff       ×                       +  ›
+ diff --git a/fees.rs b/fees.rs
+ @@ -1 +1 @@
+ -const FEE: u32 = 5;
+ +const FEE: u32 = 7;
+
+
+
+
+
+
+ esc close · ↑/↓ read · f3 find …
+
+Refreshing at 42 columns
+ Diff       ×                       +  ›
+ diff --git a/fees.rs b/fees.rs
+ @@ -1 +1 @@
+ -const FEE: u32 = 5;
+ +const FEE: u32 = 7;
+
+
+
+
+
+ Refreshing…
+ esc close · ↑/↓ read · f3 find …
+
+Refreshed beside chat
+ Diff       ×                 +  ›
+ diff --git a/fees.rs b/fees.rs
+ @@ -1 +1 @@
+ -const FEE: u32 = 5;
+ +const FEE: u32 = 8;
+
+
+
+
+
+
+ ⌃x s focus sidebar
+
+Refreshing a clean tree beside chat
+ Diff       ×                 +  ›
+ No changes detected.
+
+
+
+
+
+
+
+
+ Refreshing…
+ ⌃x s focus sidebar

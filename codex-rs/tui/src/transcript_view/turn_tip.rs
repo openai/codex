@@ -32,6 +32,7 @@ impl TranscriptView {
             },
             buf,
             cells,
+            RenderContent::Transcript,
         );
         // The final viewport includes prompt-header and footer reservations. Let the tip yield
         // rather than leave only completion metadata visible on a short terminal.
@@ -39,7 +40,7 @@ impl TranscriptView {
             && self.visible.first().is_none_or(|row| row.key == key)
         {
             self.turn_tip_key = None;
-            self.paint_rows(area, buf, cells);
+            self.paint_rows(area, buf, cells, RenderContent::Transcript);
             return None;
         }
         tip?;

@@ -74,6 +74,54 @@ pub(super) fn text(buffer: &Buffer) -> String {
 }
 
 #[test]
+fn document_scroll_indicators_use_visible_rows_without_laying_out_the_tail() {
+    let tail_renders = Arc::<AtomicUsize>::default();
+    let cells = vec![
+        cell("first\nsecond\nthird\nfourth\nfifth"),
+        Arc::new(TestCell {
+            text: "last line wraps across several rows".into(),
+            renders: Arc::clone(&tail_renders),
+        }) as Arc<dyn HistoryCell>,
+    ];
+    let mut view = TranscriptView::default();
+    view.jump_to_offset(&cells, /*offset*/ 0);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 3,
+    );
+    let viewport = Rect { width: 11, ..area };
+    let mut buffer = Buffer::empty(area);
+    for _ in 0..3 {
+        view.render_document(viewport, &mut buffer, &cells, &[], /*target*/ None);
+        view.paint_document_scroll_indicators(area, &mut buffer, &cells);
+        assert_eq!(
+            [buffer[(11, 0)].symbol(), buffer[(11, 2)].symbol()],
+            [" ", "↓"]
+        );
+    }
+    assert_eq!(tail_renders.load(Ordering::Relaxed), 0);
+
+    // The first chunk ends exactly at the viewport edge, but another chunk follows.
+    view.jump_to_offset(&cells, "first\nsecond\n".len());
+    buffer.reset();
+    view.render_document(viewport, &mut buffer, &cells, &[], /*target*/ None);
+    view.paint_document_scroll_indicators(area, &mut buffer, &cells);
+    assert_eq!(
+        [buffer[(11, 0)].symbol(), buffer[(11, 2)].symbol()],
+        ["↑", "↓"]
+    );
+    assert_eq!(tail_renders.load(Ordering::Relaxed), 0);
+
+    view.jump_to_latest();
+    buffer.reset();
+    view.render_document(viewport, &mut buffer, &cells, &[], /*target*/ None);
+    view.paint_document_scroll_indicators(area, &mut buffer, &cells);
+    assert_eq!(
+        [buffer[(11, 0)].symbol(), buffer[(11, 2)].symbol()],
+        ["↑", " "]
+    );
+}
+
+#[test]
 fn consecutive_user_prompts_share_one_background_block() {
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::new_spoken_user_prompt;

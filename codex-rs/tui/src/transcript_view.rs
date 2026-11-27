@@ -96,6 +96,11 @@ struct VisibleRow {
     activity_ids: Arc<[String]>,
 }
 
+enum RenderContent {
+    Transcript,
+    Document,
+}
+
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
     pub(crate) image_protocol: Option<crate::pets::ImageProtocol>,
@@ -217,11 +222,17 @@ impl TranscriptView {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
-        self.paint_rows(area, buf, cells);
+        self.paint_rows(area, buf, cells, RenderContent::Transcript);
         self.finish_collapse_layout(cells);
     }
 
-    fn paint_rows(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
+    fn paint_rows(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        cells: &[Arc<dyn HistoryCell>],
+        content: RenderContent,
+    ) {
         let previous_viewport_height =
             self.area.height + u16::from(self.prompt_header_target.is_some());
         self.composer_tip = None;
@@ -379,7 +390,11 @@ impl TranscriptView {
         {
             self.extend_selection(pointer.x, pointer.y);
         }
-        self.tail_visible = self.current_tail_is_visible(current_cells);
+        self.tail_visible = match content {
+            RenderContent::Transcript => self.current_tail_is_visible(current_cells),
+            // Documents have immutable chunks and no hidden reasoning or live tail.
+            RenderContent::Document => !self.document_has_rows_below(cells),
+        };
         if self.tail_visible {
             self.unseen_activity = false;
         }

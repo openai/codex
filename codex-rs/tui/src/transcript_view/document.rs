@@ -1,4 +1,5 @@
 //! Render source locations in the file reader using the transcript's wrapped rows.
+//! Document chunks have no hidden entries, so scroll state needs only the visible rows.
 
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -11,10 +12,7 @@ use super::*;
 
 /// A document can be replaced on disk; retain the offset, not the old rendered cells.
 #[derive(Clone, Copy)]
-pub(crate) enum DocumentPosition {
-    Offset(usize),
-    Latest,
-}
+pub(crate) struct DocumentPosition(Position);
 
 /// Resolved logical lines and the grapheme-aligned byte offset used for scrolling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,9 +55,23 @@ impl TranscriptView {
     }
 
     pub(crate) fn document_position(&self) -> DocumentPosition {
-        match self.position {
-            Position::Reading(anchor) => DocumentPosition::Offset(anchor.offset),
-            Position::Latest => DocumentPosition::Latest,
+        DocumentPosition(self.position)
+    }
+
+    pub(crate) fn restore_document_position(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        position: DocumentPosition,
+    ) {
+        if let Position::Reading(anchor) = position.0
+            && let Some(cell) = cells.get(anchor.index)
+        {
+            self.position = Position::Reading(Anchor {
+                key: EntryKey::cell(cell),
+                ..anchor
+            });
+        } else {
+            self.jump_to_latest();
         }
     }
 
@@ -81,7 +93,8 @@ impl TranscriptView {
             0
         };
         let text = Rect::new(area.x + gutter, area.y, area.width - gutter, area.height);
-        self.render(text, buf, cells);
+        self.paint_rows(text, buf, cells, RenderContent::Document);
+        self.finish_collapse_layout(cells);
         if line_starts.is_empty() {
             return;
         }
@@ -129,7 +142,7 @@ impl TranscriptView {
     }
 
     pub(crate) fn paint_document_scroll_indicators(
-        &mut self,
+        &self,
         area: Rect,
         buf: &mut Buffer,
         cells: &[Arc<dyn HistoryCell>],
@@ -137,16 +150,26 @@ impl TranscriptView {
         if area.height < 2 || area.width < 3 {
             return;
         }
-        let start = self.start(cells);
-        for (visible, row, arrow) in [
-            (start > (0, 0), area.top(), "↑"),
-            (start < self.bottom_start(cells), area.bottom() - 1, "↓"),
-        ] {
+        // The rendered rows already tell us whether more document content follows.
+        // Measuring the final chunk here can evict the visible chunk on every redraw.
+        let above = self
+            .visible
+            .first()
+            .is_some_and(|row| (row.index, row.row) > (0, 0));
+        let below = self.document_has_rows_below(cells);
+        for (visible, row, arrow) in [(above, area.top(), "↑"), (below, area.bottom() - 1, "↓")]
+        {
             if visible {
                 buf[(area.right() - 1, row)]
                     .set_symbol(arrow)
                     .set_style(crate::style::secondary_text_style());
             }
         }
+    }
+
+    pub(super) fn document_has_rows_below(&self, cells: &[Arc<dyn HistoryCell>]) -> bool {
+        self.visible
+            .last()
+            .is_some_and(|row| row.row + 1 < row.layout.row_count() || row.index + 1 < cells.len())
     }
 }

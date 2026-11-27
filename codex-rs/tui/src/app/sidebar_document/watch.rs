@@ -21,9 +21,15 @@ impl Document {
         }
         let reader = server.request_view();
         let backend_id = self.backend;
-        let source = self.source;
+        let super::DocumentSource::File {
+            thread: source,
+            ref original_path,
+        } = self.source
+        else {
+            return;
+        };
         let path = self.path.clone();
-        let original_path = self.original_path.clone();
+        let original_path = original_path.clone();
         let location = self.location;
         let request = uuid::Uuid::new_v4();
         let (refresh, mut changes) = watch::channel(());

@@ -401,16 +401,25 @@ impl SidebarPane {
         self.documents.get_mut(&id)
     }
 
+    pub(super) fn diff_tab(&self) -> Option<uuid::Uuid> {
+        self.documents
+            .iter()
+            .find_map(|(&id, doc)| doc.is_diff().then_some(id))
+    }
+
     pub(super) fn document_title(&self, id: uuid::Uuid, width: usize) -> String {
         let Some(document) = self.documents.get(&id) else {
             return String::new();
         };
+        if document.is_diff() {
+            return "Diff".to_owned();
+        }
         let path = document.path.inferred_native_path_string();
         let parts: Vec<_> = path.rsplit(['/', '\\']).collect();
         let depth = self
             .documents
             .values()
-            .filter(|other| other.path != document.path)
+            .filter(|other| !other.is_diff() && other.path != document.path)
             .map(|other| {
                 parts
                     .iter()
@@ -427,7 +436,7 @@ impl SidebarPane {
         let mut index = 1;
         let mut collision = false;
         for (&other_id, other) in &self.documents {
-            if other_id == id {
+            if other_id == id || other.is_diff() {
                 continue;
             }
             let other_path = other.path.inferred_native_path_string();
@@ -459,11 +468,17 @@ impl SidebarPane {
     }
 
     pub(super) fn remove_document(&mut self, id: uuid::Uuid) {
-        self.documents.remove(&id);
+        let is_diff = self.documents.remove(&id).is_some_and(|doc| doc.is_diff());
         let tab = SidebarTab::Document(id);
         self.tabs.retain(|other| *other != tab);
         self.visits.retain(|other| *other != tab);
         self.tabs_revision += 1;
+        if is_diff && self.content == SidebarContent::Document(id) {
+            self.content = SidebarContent::Chooser;
+            self.focus = None;
+            self.hidden = false;
+            self.motion = PaneMotion::default();
+        }
     }
 
     pub(super) fn close_agents(&mut self) -> bool {

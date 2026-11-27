@@ -27,13 +27,18 @@ impl App {
         thread_id: Option<ThreadId>,
     ) -> Option<crate::backend_id::BackendId> {
         thread_id
-            .and_then(|thread_id| {
-                self.thread_event_channels
-                    .get(&thread_id)
-                    .and_then(|channel| channel.backend_id)
-                    .or_else(|| self.backend_registry.owner(thread_id))
-            })
+            .and_then(|thread_id| self.thread_backend_id(thread_id))
             .or(self.app_server_backend_id)
+    }
+
+    pub(super) fn thread_backend_id(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<crate::backend_id::BackendId> {
+        self.thread_event_channels
+            .get(&thread_id)
+            .and_then(|channel| channel.backend_id)
+            .or_else(|| self.backend_registry.owner(thread_id))
     }
 
     pub(super) async fn stop_realtime_conversation(&mut self, app_server: &mut AppServerSession) {

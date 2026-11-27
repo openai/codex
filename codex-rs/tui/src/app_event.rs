@@ -1097,7 +1097,19 @@ pub(crate) enum AppEvent {
         result: Result<ConnectorsSnapshot, String>,
     },
 
-    /// Result of computing a `/diff` command.
+    /// Start a working tree diff in the invoking conversation.
+    OpenDiff {
+        thread_id: Option<ThreadId>,
+        cwd: PathUri,
+    },
+
+    /// Result for a specific, possibly backgrounded Diff tab.
+    SidebarDiffLoaded {
+        request: Uuid,
+        text: String,
+    },
+
+    /// Result for the standalone `/diff` pager.
     DiffResult {
         thread_id: Option<ThreadId>,
         cwd: PathUri,

@@ -465,6 +465,9 @@ impl App {
         for (parent, pane) in &mut self.sidebars {
             pane.focus_document_request = None;
             pane.agents.pending_link = None;
+            if let Some(tab) = pane.diff_tab() {
+                pane.remove_document(tab);
+            }
             for (tab, doc) in &mut pane.documents {
                 if let Some(parent) = parent
                     && doc.backend == session.backend_id()

@@ -87,7 +87,7 @@ impl ChatWidget {
 
     /// Re-anchor the local daemon's sandbox at the session cwd. A profile ID
     /// cannot carry extra runtime roots or permissions from a remote executor.
-    pub(super) fn diff_permission_profile(&self) -> Option<String> {
+    pub(crate) fn diff_permission_profile(&self) -> Option<String> {
         if !self.remote_connection.as_ref()?.is_local_daemon {
             return None;
         }
@@ -543,40 +543,9 @@ impl ChatWidget {
             }
             SlashCommand::Tui => self.show_tui_mode_picker(),
             SlashCommand::Diff => {
-                self.add_diff_in_progress();
-                let tx = self.app_event_tx.clone();
-                let runner = self.workspace_command_runner.clone();
-                let thread_id = self.thread_id();
-                let cwd = self.session_cwd().clone();
-                let profile = self.diff_permission_profile();
-                tokio::spawn(async move {
-                    let text = match runner {
-                        Some(runner) => {
-                            match get_git_diff(
-                                runner.as_ref(),
-                                &cwd.to_path_buf(),
-                                profile.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok((is_git_repo, diff_text)) => {
-                                    if is_git_repo {
-                                        diff_text
-                                    } else {
-                                        "`/diff` — _not inside a git repository_".to_string()
-                                    }
-                                }
-                                Err(e) => format!("Failed to compute diff: {e}"),
-                            }
-                        }
-                        None => "Failed to compute diff: workspace command runner unavailable"
-                            .to_string(),
-                    };
-                    tx.send(AppEvent::DiffResult {
-                        thread_id,
-                        cwd,
-                        text,
-                    });
+                self.app_event_tx.send(AppEvent::OpenDiff {
+                    thread_id: self.thread_id(),
+                    cwd: self.session_cwd().clone(),
                 });
             }
             SlashCommand::Mention => {

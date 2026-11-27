@@ -228,7 +228,6 @@ use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
@@ -1540,14 +1539,6 @@ impl ChatWidget {
 
     pub(crate) fn set_interrupted_turn_notice_mode(&mut self, mode: InterruptedTurnNoticeMode) {
         self.interrupted_turn_notice_mode = mode;
-    }
-
-    pub(crate) fn add_diff_in_progress(&mut self) {
-        self.request_redraw();
-    }
-
-    pub(crate) fn on_diff_complete(&mut self) {
-        self.request_redraw();
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {

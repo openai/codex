@@ -213,6 +213,10 @@ impl App {
                         self.sidebar_mut()
                             .show(SidebarContent::Chooser, PaneFocus::Sidebar);
                         self.activate_sidebar_tab(tui, server, previous).await?;
+                    } else if pane.visible_content().is_none() {
+                        // Closing the last Diff tab dismisses the pane.
+                        self.zoomed_thread = None;
+                        self.focus_current_parent_view(tui);
                     } else {
                         self.open_sidebar_tabs(tui, server).await?;
                     }
@@ -278,14 +282,14 @@ impl App {
         } else {
             None
         };
-        let document_shortcut = document.is_some_and(|id| {
-            self.sidebar()
-                .and_then(|pane| pane.documents.get(&id))
-                .is_some_and(|doc| doc.allows_tab_shortcut(key, &self.keymap))
-        });
+        let doc = document.and_then(|id| self.sidebar()?.documents.get(&id));
+        let document_shortcut = doc.is_some_and(|doc| doc.allows_tab_shortcut(key, &self.keymap));
         let close = if let Some(id) = document {
             (bindings.close_sidebar_tab.is_pressed(key)
-                || (document_shortcut && crate::key_hint::plain(KeyCode::Esc).is_press(key)))
+                || (document_shortcut
+                    && (crate::key_hint::plain(KeyCode::Esc).is_press(key)
+                        || (doc.is_some_and(sidebar_document::Document::is_diff)
+                            && self.keymap.pager.close.is_pressed(key)))))
             .then_some(SidebarTab::Document(id))
         } else if bindings.close_sidebar_tab.is_pressed(key) {
             self.current_displayed_thread_id().and_then(|id| {
