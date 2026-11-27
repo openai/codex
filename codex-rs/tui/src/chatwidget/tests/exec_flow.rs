@@ -776,16 +776,27 @@ async fn exec_history_shows_unified_exec_tool_calls() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
 
-    let begin = begin_exec_with_source(
-        &mut chat,
-        "call-startup",
-        "ls",
-        ExecCommandSource::UnifiedExecStartup,
-    );
-    end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
+    for (id, command) in [
+        ("call-startup", "ls"),
+        (
+            "call-search",
+            "fd --max-depth 1 --type f -e py . repro/scripts",
+        ),
+    ] {
+        let begin = begin_exec_with_source(
+            &mut chat,
+            id,
+            command,
+            ExecCommandSource::UnifiedExecStartup,
+        );
+        end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
+    }
 
-    let blob = active_blob(&chat);
-    assert_eq!(blob, "• Explored\n  └ List ls\n");
+    insta::assert_snapshot!(active_blob(&chat), @r"
+• Explored
+  └ List ls
+    Search . in scripts
+");
 }
 
 #[tokio::test]

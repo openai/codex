@@ -1230,15 +1230,33 @@ mod tests {
             }],
         );
 
-        // fd with query and path should capture both
-        assert_parsed(
-            &shlex_split_safe("fd main src"),
-            vec![ParsedCommand::Search {
-                cmd: "fd main src".to_string(),
-                query: Some("main".to_string()),
-                path: Some("src".to_string()),
-            }],
-        );
+        for (cmd, query, path) in [
+            ("fd main src", "main", "src"),
+            ("fd -Hd 1 . repro/scripts", ".", "scripts"),
+            ("fd -d 1 -- -foo repro/scripts", "-foo", "scripts"),
+            ("fd -Hemd 1 repro/scripts", "1", "scripts"),
+            (
+                "fd --max-depth 1 --type f -e py . repro/scripts",
+                ".",
+                "scripts",
+            ),
+            ("fd --min-depth 1 -d 2 . repro/scripts", ".", "scripts"),
+            (
+                "fd --maxdepth 1 --mindepth 1 . repro/scripts",
+                ".",
+                "scripts",
+            ),
+            ("fd 1 --exact-depth 2 repro/scripts", "1", "scripts"),
+        ] {
+            assert_parsed(
+                &shlex_split_safe(cmd),
+                vec![ParsedCommand::Search {
+                    cmd: cmd.to_string(),
+                    query: Some(query.to_string()),
+                    path: Some(path.to_string()),
+                }],
+            );
+        }
     }
 
     #[test]
@@ -1735,14 +1753,14 @@ fn skip_flag_values<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a
 }
 
 fn first_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
-    positional_operands(args, flags_with_vals)
+    positional_operands(args, |arg| flags_with_vals.contains(&arg))
         .into_iter()
         .next()
         .cloned()
 }
 
 fn single_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
-    let mut operands = positional_operands(args, flags_with_vals).into_iter();
+    let mut operands = positional_operands(args, |arg| flags_with_vals.contains(&arg)).into_iter();
     let first = operands.next()?;
     if operands.next().is_some() {
         return None;
@@ -1750,7 +1768,7 @@ fn single_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<
     Some(first.clone())
 }
 
-fn positional_operands<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a String> {
+fn positional_operands(args: &[String], takes_value: impl Fn(&str) -> bool) -> Vec<&String> {
     let mut out = Vec::new();
     let mut after_double_dash = false;
     let mut skip_next = false;
@@ -1770,7 +1788,7 @@ fn positional_operands<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<
         if arg.starts_with("--") && arg.contains('=') {
             continue;
         }
-        if flags_with_vals.contains(&arg.as_str()) {
+        if takes_value(arg) {
             if i + 1 < args.len() {
                 skip_next = true;
             }
@@ -1929,26 +1947,29 @@ pub fn is_pathish(s: &str) -> bool {
 }
 
 fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) {
-    let args_no_connector = trim_at_connector(tail);
-    // fd has several flags that take values (e.g., -t/--type, -e/--extension).
-    // Skip those values when extracting positional operands.
-    let candidates = skip_flag_values(
-        &args_no_connector,
-        &[
-            "-t",
-            "--type",
-            "-e",
-            "--extension",
-            "-E",
-            "--exclude",
-            "--search-path",
-        ],
-    );
-    let non_flags: Vec<&String> = candidates
-        .into_iter()
-        .filter(|p| !p.starts_with('-'))
-        .collect();
-    match non_flags.as_slice() {
+    let args = trim_at_connector(tail);
+    let operands = positional_operands(&args, |arg| {
+        if let Some(long) = arg.strip_prefix("--") {
+            return matches!(
+                long,
+                "type"
+                    | "extension"
+                    | "exclude"
+                    | "max-depth"
+                    | "maxdepth"
+                    | "min-depth"
+                    | "mindepth"
+                    | "exact-depth"
+                    | "search-path"
+            );
+        }
+        // Skip grouped switches. In -Hd the depth follows, but in -Hemd the extension is md.
+        arg.strip_prefix('-').is_some_and(|short| {
+            let option = short.trim_start_matches(|c: char| "HIusigFalLp01q".contains(c));
+            matches!(option, "d" | "t" | "e" | "E")
+        })
+    });
+    match operands.as_slice() {
         [one] => {
             if is_pathish(one) {
                 (None, Some(short_display_path(one)))
