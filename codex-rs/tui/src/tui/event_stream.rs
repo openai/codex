@@ -219,6 +219,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
+    pub(crate) dialog_status: crate::terminal_program_status::DialogStatus,
     pub(crate) coalesce_divider_drags: bool,
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
@@ -241,6 +242,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             resume_stream,
             terminal_focused,
             poll_draw_first: false,
+            dialog_status: Default::default(),
             coalesce_divider_drags: false,
             #[cfg(unix)]
             suspend_context,
@@ -358,7 +360,9 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
                     self.broker.pause_events();
-                    let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
+                    let suspend_result = self
+                        .suspend_context
+                        .suspend(&self.alt_screen_active, &mut self.dialog_status);
                     self.broker.resume_events();
                     if let Err(err) = suspend_result {
                         tracing::warn!(

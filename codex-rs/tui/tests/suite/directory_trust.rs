@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::net::UnixListener;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -166,6 +167,11 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         } else {
             "Trust and continue"
         };
+        let trust_pair = [
+            "state=blocked:app=codex:kind=permission:id=startup/trust",
+            "state=clear:id=startup/trust",
+        ];
+        let mut consent_count = 0;
         for (expected, input) in [
             (prompt, b"\x1b".as_slice()),
             ("Launch-folder task", b"\x1b"),
@@ -200,7 +206,18 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                 );
             }
             if is_consent {
+                consent_count += 1;
                 terminal.wait_for_screen("Back to Agent Command Center")?;
+            }
+            if is_consent && consent_count == 1 {
+                // The host must see the first pending decision before we answer it.
+                let deadline = Instant::now() + Duration::from_secs(/*secs*/ 5);
+                while !String::from_utf8_lossy(&terminal.output).contains(trust_pair[0]) {
+                    anyhow::ensure!(Instant::now() < deadline, "missing trust status");
+                    terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+                }
+                // This PTY is not the controlling terminal. Ctrl-Z must leave the record intact.
+                terminal.write_input(b"\x1a")?;
             }
             // Confirmations must be fresh input after the protected-screen transition.
             tokio::time::sleep(Duration::from_millis(/*millis*/ 200)).await;
@@ -220,6 +237,27 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
             terminal.write_input(b"3")?;
         }
         terminal.wait_for_screen("Consent accepted")?;
+        let output = String::from_utf8_lossy(&terminal.output);
+        let records: Vec<_> = output
+            .split("\x1b]7501;")
+            .skip(1)
+            .filter_map(|s| s.split_once("\x1b\\"))
+            .map(|(record, _)| record)
+            .filter(|record| record.contains(":id=startup/"))
+            .collect();
+        // Each consent step contributes one blocked/clear pair, followed by optional hook review.
+        let (trust, hooks) = records
+            .split_at_checked(2 * consent_count)
+            .expect("missing folder consent reports");
+        assert_eq!(trust, trust_pair.repeat(consent_count));
+        if trust_level.is_none() {
+            insta::assert_snapshot!(hooks.join("\n"), @r"
+            state=blocked:app=codex:kind=permission:id=startup/hooks
+            state=clear:id=startup/hooks
+            ");
+        } else {
+            assert!(hooks.is_empty());
+        }
         drop(terminal);
         server.abort();
         let methods = methods.lock().unwrap();

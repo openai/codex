@@ -17,6 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
 use crate::key_hint;
+use crate::terminal_program_status::DialogStatus;
 
 use super::Tui;
 
@@ -59,7 +60,11 @@ impl SuspendContext {
     ///   otherwise record `RealignInline`.
     /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
-    pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
+    pub(crate) fn suspend(
+        &self,
+        alt_screen_active: &Arc<AtomicBool>,
+        dialog_status: &mut DialogStatus,
+    ) -> Result<()> {
         // A launcher can supply a PTY without making it our controlling terminal.
         // Leave the TUI intact if we couldn't verify ownership on resume.
         if unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) } == -1 {
@@ -74,6 +79,8 @@ impl SuspendContext {
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
+        // The dialog loop reports again when it resumes waiting for input.
+        dialog_status.clear();
         if let Err(err) = crate::terminal_program_status::clear_terminal_program_status() {
             tracing::debug!(error = %err, "failed to clear terminal program status before suspend");
         }

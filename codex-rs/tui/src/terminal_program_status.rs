@@ -3,7 +3,8 @@
 //! OSC 7501 reports lifecycle state and blocking reasons to terminal sessions.
 //! Direct iTerm2 sessions also receive OSC 21337 status, including bounded
 //! activity text. The process-wide cache is used for exit, panic, and terminal
-//! handoff cleanup.
+//! handoff cleanup of the root record. Each dialog owns its child record through
+//! the input stream that waits for the decision.
 
 use crate::terminal_capabilities::TerminalProgramStatusSupport;
 use crate::terminal_capabilities::detect_terminal_program_status_support;
@@ -96,6 +97,78 @@ pub(crate) enum ProgramStatusKind {
     Auth,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StartupDialog {
+    Trust,
+    Hooks,
+    #[cfg(not(debug_assertions))]
+    Update,
+}
+
+impl StartupDialog {
+    fn record(self) -> (&'static str, ProgramStatusKind) {
+        match self {
+            Self::Trust => ("startup/trust", ProgramStatusKind::Permission),
+            Self::Hooks => ("startup/hooks", ProgramStatusKind::Permission),
+            #[cfg(not(debug_assertions))]
+            Self::Update => ("startup/update", ProgramStatusKind::Question),
+        }
+    }
+}
+
+/// A dialog can coexist with the chat root. Never clear the root or emit iTerm
+/// status here, since neither operation is scoped to the dialog.
+#[derive(Default)]
+pub(crate) struct DialogStatus(Option<StartupDialog>);
+
+impl DialogStatus {
+    pub(crate) fn clear(&mut self) {
+        self.set(/*dialog*/ None);
+    }
+
+    pub(crate) fn set(&mut self, dialog: Option<StartupDialog>) {
+        if self.0 == dialog || cfg!(test) || !current_terminal_program_status_support().osc_7501 {
+            return;
+        }
+        if let Some(previous) = self.0 {
+            let (id, _) = previous.record();
+            if let Err(err) = execute!(
+                stdout(),
+                ClearTerminalProgramStatus {
+                    id: Some(id),
+                    emit_iterm_status: false,
+                }
+            ) {
+                tracing::debug!("failed to clear dialog status: {err}");
+                return;
+            }
+            self.0 = None;
+        }
+        if let Some(dialog) = dialog {
+            let (id, kind) = dialog.record();
+            if let Err(err) = execute!(
+                stdout(),
+                SetTerminalProgramStatus {
+                    id: Some(id),
+                    status: ProgramStatus::Blocked(kind),
+                    iterm_detail: "",
+                    emit_iterm_status: false,
+                }
+            ) {
+                tracing::debug!("failed to report dialog status: {err}");
+                return;
+            }
+            self.0 = Some(dialog);
+        }
+    }
+}
+
+impl Drop for DialogStatus {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 impl ProgramStatus {
     fn iterm_label(self) -> &'static str {
         match self {
@@ -146,6 +219,7 @@ pub(crate) fn set_terminal_program_status(
         execute!(
             stdout(),
             SetTerminalProgramStatus {
+                id: None,
                 status,
                 iterm_detail: &detail,
                 emit_iterm_status: support.osc_21337,
@@ -168,6 +242,7 @@ pub(crate) fn clear_terminal_program_status() -> io::Result<()> {
         execute!(
             stdout(),
             ClearTerminalProgramStatus {
+                id: None,
                 emit_iterm_status: support.osc_21337,
             }
         )
@@ -199,6 +274,7 @@ fn sanitize_iterm_session_detail(detail: &str) -> String {
 
 #[derive(Clone, Copy, Debug)]
 struct SetTerminalProgramStatus<'a> {
+    id: Option<&'static str>,
     status: ProgramStatus,
     iterm_detail: &'a str,
     emit_iterm_status: bool,
@@ -228,6 +304,9 @@ impl Command for SetTerminalProgramStatus<'_> {
             };
             write!(f, ":kind={kind}")?;
         }
+        if let Some(id) = self.id {
+            write!(f, ":id={id}")?;
+        }
         write!(f, "\x1b\\")
     }
 
@@ -246,6 +325,7 @@ impl Command for SetTerminalProgramStatus<'_> {
 
 #[derive(Clone, Copy, Debug)]
 struct ClearTerminalProgramStatus {
+    id: Option<&'static str>,
     emit_iterm_status: bool,
 }
 
@@ -254,7 +334,11 @@ impl Command for ClearTerminalProgramStatus {
         if self.emit_iterm_status {
             write!(f, "\x1b]21337;status=;indicator=;status-color=;detail=\x07")?;
         }
-        write!(f, "\x1b]7501;state=clear\x1b\\")
+        write!(f, "\x1b]7501;state=clear")?;
+        if let Some(id) = self.id {
+            write!(f, ":id={id}")?;
+        }
+        write!(f, "\x1b\\")
     }
 
     #[cfg(windows)]

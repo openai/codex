@@ -31,6 +31,7 @@ fn encodes_iterm_session_status_fields() {
     ] {
         let mut value = String::new();
         SetTerminalProgramStatus {
+            id: None,
             status,
             iterm_detail: detail,
             emit_iterm_status: true,
@@ -52,6 +53,7 @@ fn encodes_iterm_session_status_fields() {
 fn encodes_generic_program_status() {
     let mut encoded = String::new();
     SetTerminalProgramStatus {
+        id: None,
         status: ProgramStatus::Working,
         iterm_detail: "ignored",
         emit_iterm_status: false,
@@ -78,12 +80,14 @@ fn detail_is_safe_bounded_osc_text() {
 fn clear_empties_every_owned_field() {
     let mut combined = String::new();
     ClearTerminalProgramStatus {
+        id: None,
         emit_iterm_status: true,
     }
     .write_ansi(&mut combined)
     .expect("encode combined terminal program status clear");
     let mut generic = String::new();
     ClearTerminalProgramStatus {
+        id: None,
         emit_iterm_status: false,
     }
     .write_ansi(&mut generic)

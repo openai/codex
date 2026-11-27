@@ -31,6 +31,7 @@ use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::terminal_program_status::StartupDialog;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_app_server_client::AppServerRequestHandle;
@@ -104,10 +105,10 @@ async fn run_startup_hooks_review_app(
     draw_view(tui, &view, &chord_matcher, &keymap)?;
 
     tui.discard_pending_input_before_interactive_screen()?;
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
+    let mut tui_events = tui.input_stream();
 
     loop {
+        tui_events.dialog_status.set(Some(StartupDialog::Hooks));
         let Some(event) = tui_events.next().await else {
             return Ok(StartupHooksReviewOutcome::Continue);
         };
@@ -138,6 +139,7 @@ async fn run_startup_hooks_review_app(
                     draw_view(tui, &view, &chord_matcher, &keymap)?;
                     continue;
                 };
+                tui_events.dialog_status.clear();
                 match selection {
                     StartupHooksReviewSelection::ReviewHooks => {
                         return Ok(StartupHooksReviewOutcome::OpenHooksBrowser(entry));

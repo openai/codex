@@ -340,7 +340,7 @@ pub(super) struct PtyCodex {
     slave: File,
     child: Child,
     parser: vt100::Parser,
-    output: Vec<u8>,
+    pub(super) output: Vec<u8>,
     cursor_answered: bool,
     palette_answered: bool,
     keyboard_answered: bool,
@@ -424,6 +424,7 @@ impl PtyCodex {
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
             .env_remove("STY")
+            .env_remove("VTE_VERSION")
             .env("TERM_PROGRAM", "kitty")
             .env_remove("TERM_PROGRAM_VERSION")
             // Exercise the fixture's login state even on hosts configured with workload identity.

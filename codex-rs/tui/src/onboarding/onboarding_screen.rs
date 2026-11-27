@@ -52,6 +52,7 @@ use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use crate::startup_draft::StartupCancelled;
+use crate::terminal_program_status::StartupDialog;
 use crate::tui::FrameRequester;
 use crate::tui::MouseCapture;
 use crate::tui::Tui;
@@ -728,8 +729,7 @@ async fn run_onboarding_screen_inner(
     })?;
 
     tui.discard_pending_input_before_interactive_screen()?;
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
+    let mut tui_events = tui.input_stream();
     let mut trust_step_was_active = onboarding_screen.is_trust_step_active();
 
     let folder_connection = match (
@@ -741,6 +741,9 @@ async fn run_onboarding_screen_inner(
     };
 
     while !onboarding_screen.is_done() {
+        tui_events
+            .dialog_status
+            .set(trust_step_was_active.then_some(StartupDialog::Trust));
         tokio::select! {
             () = async {
                 match onboarding_screen.auth_widget_mut() {
@@ -795,6 +798,9 @@ async fn run_onboarding_screen_inner(
                                 tui.frame_requester().schedule_frame();
                             } else {
                                 onboarding_screen.handle_key_event(key_event);
+                            }
+                            if trust_step_was_active && !onboarding_screen.is_trust_step_active() {
+                                tui_events.dialog_status.clear();
                             }
                             if !directory_trust_persisted {
                                 directory_trust_persisted = persist_selected_trust(

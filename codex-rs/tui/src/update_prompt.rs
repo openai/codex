@@ -13,6 +13,8 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
 use crate::render::renderable::RenderableItem;
+#[cfg(not(debug_assertions))]
+use crate::terminal_program_status::StartupDialog;
 use crate::tui::FrameRequester;
 #[cfg(not(debug_assertions))]
 use crate::tui::Tui;
@@ -66,10 +68,10 @@ pub(crate) async fn run_update_prompt_if_needed(
     })?;
 
     tui.discard_pending_input_before_interactive_screen()?;
-    let events = tui.event_stream();
-    tokio::pin!(events);
+    let mut events = tui.input_stream();
 
     while !screen.is_done() {
+        events.dialog_status.set(Some(StartupDialog::Update));
         if let Some(event) = events.next().await {
             tui.screen_size_for_event(&event)?;
             match event {
@@ -86,6 +88,7 @@ pub(crate) async fn run_update_prompt_if_needed(
         }
     }
 
+    drop(events);
     match screen.selection() {
         Some(UpdateSelection::UpdateNow) => {
             tui.terminal.clear()?;
