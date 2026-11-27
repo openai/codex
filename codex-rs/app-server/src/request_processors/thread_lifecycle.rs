@@ -1,10 +1,8 @@
 use super::thread_processor::THREAD_ITEMS_MAX_LIMIT;
 use super::thread_processor::thread_turns_page_size;
 use super::*;
-use crate::bespoke_event_handling::complete_command_execution_item;
 use crate::extensions::send_thread_warning;
 use crate::thread_state::ListenerStateCandidate;
-use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
@@ -1068,31 +1066,6 @@ async fn handle_thread_listener_command(
         }
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
-        }
-        ThreadListenerCommand::CompleteLateCommandApproval {
-            turn_id,
-            item_id,
-            completion_item,
-        } => {
-            let subscribers = thread_state_manager
-                .subscribed_connection_ids(conversation_id)
-                .await;
-            let outgoing = ThreadScopedOutgoingMessageSender::new(
-                Arc::clone(outgoing),
-                subscribers,
-                conversation_id,
-            );
-            complete_command_execution_item(
-                &conversation_id,
-                turn_id,
-                item_id,
-                *completion_item,
-                CommandExecutionStatus::Declined,
-                /*completed_at_ms*/ None,
-                &outgoing,
-                thread_state,
-            )
-            .await;
         }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,

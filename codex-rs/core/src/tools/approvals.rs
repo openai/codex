@@ -13,6 +13,7 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::NetworkApprovalTurn;
+use crate::session::command_approval::CommandApproval;
 use crate::session::session::Session;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
@@ -551,11 +552,12 @@ impl Session {
         self: &Arc<Self>,
         action: ApprovalAction,
         ctx: ApprovalContext,
+        command_approval: Option<&mut CommandApproval>,
     ) -> ApprovalResult {
         self.request_approval_with_user_prompt(
             &action,
             &ctx,
-            self.request_user_approval(&action, &ctx),
+            self.request_user_approval(&action, &ctx, command_approval),
         )
         .await
     }
@@ -785,9 +787,10 @@ impl Session {
     }
 
     pub(super) async fn request_user_approval(
-        &self,
+        self: &Arc<Self>,
         action: &ApprovalAction,
         ctx: &ApprovalContext,
+        command_approval: Option<&mut CommandApproval>,
     ) -> ApprovalResolution {
         let decision = match action {
             ApprovalAction::ExecCommand {
@@ -805,6 +808,11 @@ impl Session {
                     .or_else(|| ctx.approval_reason.clone())
                     .or_else(|| justification.clone());
                 let human_once = ctx.requires_human_approval();
+                let environment = ctx
+                    .review_context
+                    .environments()
+                    .turn_environments()
+                    .find(|environment| environment.selection.environment_id == *environment_id);
                 let request = || async {
                     self.request_command_approval(
                         ctx.review_context.turn(),
@@ -841,7 +849,10 @@ impl Session {
                                 ReviewDecision::Abort,
                             ]
                         }),
-                        /*plugin_attribution_override*/ None,
+                        environment
+                            .filter(|_| !human_once && ctx.network_approval_context.is_none())
+                            .map(|env| env.environment().as_ref()),
+                        command_approval,
                     )
                     .await
                 };
@@ -849,11 +860,7 @@ impl Session {
                     request().await
                 } else {
                     let tool_name = "unified_exec";
-                    let policy_fingerprint = ctx
-                        .review_context
-                        .environments()
-                        .turn_environments()
-                        .find(|environment| environment.selection.environment_id == *environment_id)
+                    let policy_fingerprint = environment
                         .and_then(|environment| environment.config().exec_policy.as_ref())
                         .map(codex_execpolicy::RequirementsExecPolicy::fingerprint);
                     let cache_keys = action
@@ -894,7 +901,8 @@ impl Session {
                     /*proposed_execpolicy_amendment*/ None,
                     additional_permissions.clone(),
                     Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    /*plugin_attribution_override*/ None,
+                    /*command_environment*/ None,
+                    command_approval,
                 )
                 .await
             }
@@ -970,7 +978,8 @@ impl Session {
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
                     /*available_decisions*/ None,
-                    /*plugin_attribution_override*/ None,
+                    /*command_environment*/ None,
+                    command_approval,
                 )
                 .await
             }

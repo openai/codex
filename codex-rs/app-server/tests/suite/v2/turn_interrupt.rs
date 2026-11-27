@@ -16,12 +16,16 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -291,6 +295,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            history_mode: Some(ThreadHistoryMode::Paginated),
             ..Default::default()
         })
         .await?;
@@ -362,6 +367,38 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         codex_rollout_trace::ExecutionStatus::Aborted
     );
     assert!(call.execution.ended_at_unix_ms >= Some(call.execution.started_at_unix_ms));
+
+    let mut restarted = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .build_initialized()
+        .await?;
+    let page_id = restarted
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id,
+            cursor: None,
+            limit: None,
+            sort_direction: None,
+            items_view: Some(TurnItemsView::Full),
+        })
+        .await?;
+    let page: ThreadTurnsListResponse = restarted.read_response(page_id).await?;
+    let [saved] = page.data.as_slice() else {
+        anyhow::bail!("expected the interrupted turn in history");
+    };
+    assert_eq!(saved.id, turn.id);
+    assert_eq!(saved.status, TurnStatus::Interrupted);
+    let commands = saved
+        .items
+        .iter()
+        .filter_map(|item| match &item.payload {
+            ThreadItemPayload::CommandExecution { id, status, .. } => Some((id, status)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        vec![(&params.item_id, &CommandExecutionStatus::Declined)]
+    );
 
     Ok(())
 }

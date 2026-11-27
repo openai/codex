@@ -77,6 +77,7 @@ pub(crate) struct Session {
     pub(crate) context_ids: ThreadContextIds,
     pub(crate) agent_runtime: AgentRuntimeServices,
     pub(crate) outcome_reporting: Option<AgentOutcomeReporting>,
+    pub(super) command_approval_publications: TaskTracker,
     /// Finish saving review evidence even if the turn that recorded it is interrupted.
     pub(super) preserve_review_writes: bool,
     pub(crate) installation_id: String,
@@ -2048,6 +2049,7 @@ impl Session {
                 context_ids,
                 agent_runtime,
                 outcome_reporting,
+                command_approval_publications: TaskTracker::new(),
                 preserve_review_writes: services
                     .thread_extension_data
                     .get::<PreserveReviewWrites>()

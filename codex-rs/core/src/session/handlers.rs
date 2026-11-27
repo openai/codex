@@ -195,7 +195,7 @@ impl Session {
             return;
         };
         let decision = pending.validate(decision);
-        pending.resolve_command(self, &decision).await;
+        pending.resolve_command(&decision).await;
         if decision == ReviewDecision::Abort {
             let turn_id = if pending.kind == ExecApprovalKind::HumanCommand {
                 Some(&pending.turn_id)
@@ -225,7 +225,7 @@ impl Session {
             })
             .await;
         }
-        let _ = pending.sender.send(decision);
+        pending.reply(decision);
     }
 }
 
@@ -239,7 +239,7 @@ async fn cancel_patch_approval(sess: &Arc<Session>, id: &str, expected_turn_id: 
         /*error*/ None,
     )
     .await;
-    let _ = pending.sender.send(ReviewDecision::Abort);
+    pending.reply(ReviewDecision::Abort);
 }
 
 pub async fn request_user_input_response(
@@ -364,6 +364,7 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    sess.command_approval_publications.close();
     if let Some(reporting) = &sess.outcome_reporting {
         reporting.handoffs.close();
     }
@@ -465,6 +466,8 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.services.mcp_runtime.shutdown().await;
 
     sess.drain_code_mode_messages().await;
+    // Cancelled prompts can still be appending their terminal items.
+    sess.command_approval_publications.wait().await;
 
     let writes = &sess.services.unified_exec_manager.launch_failure_writes;
     writes.close();

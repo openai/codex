@@ -6,6 +6,7 @@
 
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::command_approval::CommandApproval;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
@@ -397,6 +398,10 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    fn command_approval(&mut self) -> Option<&mut CommandApproval> {
+        None
+    }
+
     fn turn_environment<'a>(&self, req: &'a Req) -> &'a TurnEnvironment;
 
     fn uses_executor_managed_process_sandbox(&self, _req: &Req) -> bool {

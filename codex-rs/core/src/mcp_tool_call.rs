@@ -1791,7 +1791,9 @@ async fn maybe_request_mcp_tool_approval(
         retry_reason: None,
         network_approval_context: None,
     };
-    let approval = sess.request_approval(action, approval_context).await;
+    let approval = sess
+        .request_approval(action, approval_context, /*command_approval*/ None)
+        .await;
     Some(McpToolApproval {
         decision: match approval.result {
             Ok(decision) => decision,

@@ -42,6 +42,7 @@ pub(super) fn truncate_rejection_message(message: &str) -> String {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEventCtx<'a> {
+    pub proposal_started_at_ms: Option<i64>,
     pub sandbox_type: Option<codex_protocol::sandbox::SandboxType>,
     pub model_context: Option<&'a ModelInvocationContext>,
     pub session: &'a Session,
@@ -61,6 +62,7 @@ impl<'a> ToolEventCtx<'a> {
         turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
     ) -> Self {
         Self {
+            proposal_started_at_ms: None,
             model_context: None,
             sandbox_type: None,
             session,
@@ -167,28 +169,35 @@ async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommand
             );
     }
     let (plugin_id, script_path) = plugin_attribution_fields(exec_input.plugin_attribution);
-    ctx.session
-        .emit_turn_item_started(
-            ctx.turn,
-            &TurnItem::CommandExecution(CommandExecutionItem {
-                id: ctx.call_id.to_string(),
-                model_context: ctx.model_context.cloned(),
-                sandbox_type: ctx.sandbox_type,
-                plugin_id,
-                script_path,
-                process_id: exec_input.process_id.map(str::to_owned),
-                command: exec_input.command.to_vec(),
-                cwd: exec_input.cwd.clone(),
-                parsed_cmd: exec_input.parsed_cmd.to_vec(),
-                source: exec_input.source,
-                interaction_input: exec_input.interaction_input.map(str::to_owned),
-                status: CommandExecutionStatus::InProgress,
-                aggregated_output: None,
-                exit_code: None,
-                duration: None,
-            }),
-        )
-        .await;
+    let item = CommandExecutionItem {
+        id: ctx.call_id.to_string(),
+        model_context: ctx.model_context.cloned(),
+        sandbox_type: ctx.sandbox_type,
+        plugin_id,
+        script_path,
+        process_id: exec_input.process_id.map(str::to_owned),
+        command: exec_input.command.to_vec(),
+        cwd: exec_input.cwd.clone(),
+        parsed_cmd: exec_input.parsed_cmd.to_vec(),
+        source: exec_input.source,
+        interaction_input: exec_input.interaction_input.map(str::to_owned),
+        status: CommandExecutionStatus::InProgress,
+        aggregated_output: None,
+        exit_code: None,
+        duration: None,
+    };
+    if let Some(started_at_ms) = ctx.proposal_started_at_ms {
+        ctx.session
+            .send_event(
+                ctx.turn,
+                item.as_legacy_begin_event(ctx.turn.sub_id.clone(), started_at_ms),
+            )
+            .await;
+    } else {
+        ctx.session
+            .emit_turn_item_started(ctx.turn, &TurnItem::CommandExecution(item))
+            .await;
+    }
 }
 // Concrete, allocation-free emitter: avoid trait objects and boxed futures.
 pub(crate) enum ToolEmitter {

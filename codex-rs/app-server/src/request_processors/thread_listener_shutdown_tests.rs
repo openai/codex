@@ -93,9 +93,35 @@ pub(super) async fn test_processor(
 }
 
 #[tokio::test]
-async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()> {
-    let server = wiremock::MockServer::start().await;
-    let test = test_codex().build_with_auto_env(&server).await?;
+async fn cancelled_command_approval_reaches_the_current_subscriber() -> Result<()> {
+    use codex_app_server_protocol::ServerRequest;
+    use codex_config::Constrained;
+    use codex_core::TurnInputRequest;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::protocol::AskForApproval;
+
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("approval"),
+            responses::ev_function_call(
+                "pending-command",
+                "exec_command",
+                r#"{"cmd":"git status"}"#,
+            ),
+            responses::ev_completed("approval"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        })
+        .build_with_auto_env(&server)
+        .await?;
     let thread_id = test.session_configured.thread_id;
     let (processor, mut messages) = test_processor(&test).await?;
     let thread_state_manager = &processor.thread_state_manager;
@@ -109,32 +135,27 @@ async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()
     processor
         .try_attach_thread_listener(thread_id, test.codex.clone(), vec![original])
         .await;
-    let outgoing = ThreadScopedOutgoingMessageSender::new(
-        processor.outgoing.clone(),
-        vec![original],
-        thread_id,
-    );
-    let approval = serde_json::from_value(serde_json::json!({
-        "turn_id": "finished-turn",
-        "call_id": "late-command",
-        "started_at_ms": 42,
-        "command": ["echo", "late"],
-        "parsed_cmd": [],
-        "cwd": test.config.cwd,
-    }))?;
-    apply_bespoke_event_handling(
-        codex_protocol::protocol::Event {
-            id: "finished-turn".into(),
-            msg: EventMsg::ExecApprovalRequest(approval),
-        },
-        thread_id,
-        test.codex.clone(),
-        test.thread_manager.clone(),
-        outgoing.clone(),
-        thread_state_manager.thread_state(thread_id).await,
-        processor.thread_watch_manager.clone(),
-    )
-    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check git status".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    loop {
+        if let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message:
+                OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    params, ..
+                }),
+            ..
+        } = messages.recv().await.context("outgoing channel closed")?
+        {
+            assert_eq!(connection_id, original);
+            assert_eq!(params.item_id, "pending-command");
+            break;
+        }
+    }
 
     assert!(
         thread_state_manager
@@ -146,7 +167,7 @@ async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()
             .unsubscribe_connection_from_thread(thread_id, original)
             .await
     );
-    outgoing.abort_pending_server_requests().await;
+    test.codex.submit(Op::Interrupt).await?;
 
     let recipient = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
         while let Some(message) = messages.recv().await {
@@ -156,12 +177,12 @@ async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()
                 ..
             } = message
                 && let ServerNotification::ItemCompleted(event) = notification.notification
-                && event.item.id() == "late-command"
+                && event.item.id() == "pending-command"
             {
                 return Ok(connection_id);
             }
         }
-        anyhow::bail!("missing late command completion")
+        anyhow::bail!("missing cancelled command completion")
     })
     .await??;
     assert_eq!(recipient, resumed);

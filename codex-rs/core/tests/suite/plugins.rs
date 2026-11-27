@@ -24,16 +24,24 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_plugin::PluginId;
 use codex_protocol::auth::AuthMode;
+#[cfg(unix)]
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::TrustLevel;
+#[cfg(unix)]
+use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 #[cfg(unix)]
 use codex_protocol::protocol::GranularApprovalConfig;
+#[cfg(unix)]
+use codex_protocol::protocol::Op;
+#[cfg(unix)]
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::HostSkillsLoadInput;
@@ -825,7 +833,8 @@ fi
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                approval_policy: Some(AskForApproval::Never),
+                approval_policy: Some(AskForApproval::UnlessTrusted),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 ..Default::default()
@@ -834,6 +843,41 @@ fi
         .await?;
     for call_id in ["wrong-version", "matching-version"] {
         let expected = (Some(REMOTE_PLUGIN_CONFIG_NAME), Some("scripts/run.sh"));
+        let proposal = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::ItemStarted(event)
+                if let TurnItem::CommandExecution(item) = &event.item
+                    && item.id == call_id =>
+            {
+                Some(item.clone())
+            }
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            (
+                proposal.plugin_id.as_deref(),
+                proposal.script_path.as_deref()
+            ),
+            expected
+        );
+        let prompt = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::ExecApprovalRequest(prompt) if prompt.call_id == call_id => {
+                Some(prompt.clone())
+            }
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            (prompt.plugin_id.as_deref(), prompt.script_path.as_deref()),
+            expected
+        );
+        test.codex
+            .submit(Op::ExecApproval {
+                id: prompt.effective_approval_id(),
+                turn_id: Some(prompt.turn_id),
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
         let begin = wait_for_event_match(&test.codex, |event| match event {
             EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
             _ => None,

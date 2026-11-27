@@ -536,6 +536,7 @@ impl UnifiedExecProcessManager {
             }
         };
         let UnifiedExecAttempt {
+            mut command_approval,
             process,
             metrics_sidecar,
             permissions,
@@ -580,6 +581,7 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.to_string()),
             plugin_attribution.clone(),
         );
+        event_ctx.proposal_started_at_ms = command_approval.handoff();
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         // Serialize remote collection with later polls and final transcript publication.
@@ -945,7 +947,7 @@ impl UnifiedExecProcessManager {
             };
             context
                 .session
-                .request_approval(approval, approval_context)
+                .request_approval(approval, approval_context, /*command_approval*/ None)
                 .await
                 .result
                 .map_err(UnifiedExecError::StdinApproval)?;
@@ -1489,6 +1491,9 @@ impl UnifiedExecProcessManager {
                 },
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             });
+        if result.is_err() {
+            runtime.command_approval.fail().await;
+        }
         let outcome = match &result {
             Ok(_) => "completed",
             Err(_) if context.cancellation_token.is_cancelled() => "cancelled",

@@ -934,7 +934,11 @@ impl NetworkApprovalService {
                 .as_ref()
                 .map(|call| call.trigger.call_id.as_str()),
             &policy_denial_message,
-            session.request_user_approval(&action, &approval_context),
+            session.request_user_approval(
+                &action,
+                &approval_context,
+                /*command_approval*/ None,
+            ),
         );
         let approval =
             session.request_approval_with_user_prompt(&action, &approval_context, user_prompt);

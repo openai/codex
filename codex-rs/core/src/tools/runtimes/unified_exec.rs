@@ -13,6 +13,7 @@ use crate::plugins::metrics::sidecar_for_command;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::command_approval::CommandApproval;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshotSandbox;
@@ -100,10 +101,12 @@ pub struct UnifiedExecApprovalKey {
 /// Runtime adapter that keeps policy and sandbox orchestration on the
 /// unified-exec side while delegating process startup to the manager.
 pub struct UnifiedExecRuntime<'a> {
+    pub(crate) command_approval: CommandApproval,
     manager: &'a UnifiedExecProcessManager,
 }
 
 pub(crate) struct UnifiedExecAttempt {
+    pub(crate) command_approval: CommandApproval,
     pub(crate) process: UnifiedExecProcess,
     pub(crate) metrics_sidecar: Option<PluginMetricsSidecar>,
     pub(crate) permissions: TerminalPermissions,
@@ -125,7 +128,10 @@ fn unified_exec_options(
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
     pub fn new(manager: &'a UnifiedExecProcessManager) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            command_approval: CommandApproval::default(),
+        }
     }
 }
 
@@ -163,6 +169,10 @@ impl Approvable<UnifiedExecRequest<'_>> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExecRuntime<'a> {
+    fn command_approval(&mut self) -> Option<&mut CommandApproval> {
+        Some(&mut self.command_approval)
+    }
+
     fn turn_environment<'b>(&self, req: &'b UnifiedExecRequest<'_>) -> &'b TurnEnvironment {
         &req.prepared.turn_environment
     }
@@ -651,9 +661,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                 prepared.turn_environment.environment().as_ref(),
             )
             .await;
-        let mut process = with_launch_failure_events(process, prepared, ctx).await?;
+        let mut process =
+            with_launch_failure_events(process, prepared, ctx, &mut self.command_approval).await?;
         process._shell_snapshot = shell_snapshot;
         Ok(UnifiedExecAttempt {
+            command_approval: std::mem::take(&mut self.command_approval),
             process,
             metrics_sidecar,
             permissions,

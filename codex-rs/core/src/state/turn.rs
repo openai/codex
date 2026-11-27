@@ -24,7 +24,7 @@ use crate::agent::types::AgentExecutionGuard;
 use crate::session::PendingUserInput;
 use crate::session::SamplingInterrupt;
 use crate::session::TurnInputQueue;
-use crate::session::command_approval::ProposedCommand;
+use crate::session::command_approval::CommandApproval;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
@@ -125,14 +125,18 @@ pub(crate) struct TurnState {
 }
 
 pub(crate) struct PendingApproval {
-    pub(crate) command: Option<Box<ProposedCommand>>,
-    pub(crate) sender: oneshot::Sender<ReviewDecision>,
+    pub(crate) command: CommandApproval,
+    pub(crate) sender: oneshot::Sender<(ReviewDecision, CommandApproval)>,
     pub(crate) kind: codex_protocol::approvals::ExecApprovalKind,
     // A yielded cell can emit a prompt for its original turn while a later turn services it.
     pub(crate) turn_id: String,
 }
 
 impl PendingApproval {
+    pub(crate) fn reply(self, decision: ReviewDecision) {
+        let _ = self.sender.send((decision, self.command));
+    }
+
     pub(crate) fn validate(&self, decision: ReviewDecision) -> ReviewDecision {
         if self.kind == codex_protocol::approvals::ExecApprovalKind::HumanCommand
             && !matches!(
@@ -157,24 +161,33 @@ pub(crate) struct PendingRequestPermissions {
 
 type PendingApprovals = SyncMutex<HashMap<String, PendingApproval>>;
 
-/// The originating turn and its unique prompt ID stay valid even if the active turn changes.
-pub(crate) struct NetworkApprovalPrompt<'a> {
+/// Remove the pending approval from its original registry if the caller goes away.
+pub(crate) struct ApprovalPrompt<'a> {
     approvals: Weak<PendingApprovals>,
-    events: &'a async_channel::Sender<Event>,
+    network_events: Option<&'a async_channel::Sender<Event>>,
+    pub(crate) reply: oneshot::Receiver<(ReviewDecision, CommandApproval)>,
     turn_id: &'a str,
     approval_id: &'a str,
 }
 
-impl Drop for NetworkApprovalPrompt<'_> {
+impl Drop for ApprovalPrompt<'_> {
     fn drop(&mut self) {
+        self.reply.close();
         if let Some(approvals) = self.approvals.upgrade() {
-            approvals
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(self.approval_id);
+            let mut approvals = approvals.lock().unwrap_or_else(PoisonError::into_inner);
+            // A retry can already have a live waiter under the same command ID.
+            if approvals
+                .get(self.approval_id)
+                .is_some_and(|pending| pending.sender.is_closed())
+            {
+                approvals.remove(self.approval_id);
+            }
         }
         // The session channel is unbounded. Enqueue resolution before a same-host waiter can prompt.
-        let _ = self.events.try_send(Event {
+        let Some(events) = self.network_events else {
+            return;
+        };
+        let _ = events.try_send(Event {
             id: self.turn_id.to_owned(),
             msg: EventMsg::NetworkApprovalResolved {
                 approval_id: self.approval_id.to_owned(),
@@ -184,15 +197,17 @@ impl Drop for NetworkApprovalPrompt<'_> {
 }
 
 impl TurnState {
-    pub(crate) fn track_network_prompt<'a>(
+    pub(crate) fn track_prompt<'a>(
         &self,
-        events: &'a async_channel::Sender<Event>,
+        network_events: Option<&'a async_channel::Sender<Event>>,
+        reply: oneshot::Receiver<(ReviewDecision, CommandApproval)>,
         turn_id: &'a str,
         approval_id: &'a str,
-    ) -> NetworkApprovalPrompt<'a> {
-        NetworkApprovalPrompt {
+    ) -> ApprovalPrompt<'a> {
+        ApprovalPrompt {
             approvals: Arc::downgrade(&self.pending_approvals),
-            events,
+            network_events,
+            reply,
             turn_id,
             approval_id,
         }

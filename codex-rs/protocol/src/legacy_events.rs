@@ -200,7 +200,7 @@ impl ReasoningItem {
 }
 
 impl CommandExecutionItem {
-    pub(crate) fn as_legacy_begin_event(&self, turn_id: String, started_at_ms: i64) -> EventMsg {
+    pub fn as_legacy_begin_event(&self, turn_id: String, started_at_ms: i64) -> EventMsg {
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: self.id.clone(),
             plugin_id: self.plugin_id.clone(),

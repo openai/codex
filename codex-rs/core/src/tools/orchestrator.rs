@@ -183,7 +183,7 @@ impl ToolOrchestrator {
                     };
                     let approval = tool_ctx
                         .session
-                        .request_approval(action, approval_ctx)
+                        .request_approval(action, approval_ctx, tool.command_approval())
                         .await;
                     approval.result?;
                     initial_approval_source = approval.source;
@@ -219,7 +219,7 @@ impl ToolOrchestrator {
                 };
                 let approval = tool_ctx
                     .session
-                    .request_approval(action, approval_ctx)
+                    .request_approval(action, approval_ctx, tool.command_approval())
                     .await;
                 approval.result?;
                 initial_approval_source = approval.source;
@@ -541,13 +541,13 @@ impl ToolOrchestrator {
                         network_ctx.exec_requirement = None;
                         tool_ctx
                             .session
-                            .request_approval(action.clone(), network_ctx)
+                            .request_approval(action.clone(), network_ctx, tool.command_approval())
                             .await
                             .result?;
                     }
                     tool_ctx
                         .session
-                        .request_approval(action, approval_ctx)
+                        .request_approval(action, approval_ctx, tool.command_approval())
                         .await
                         .result?;
                 }

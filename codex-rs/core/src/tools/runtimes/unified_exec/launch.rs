@@ -2,6 +2,7 @@
 //! Approval rejections retain their own lifecycle, and sandbox denials remain retryable.
 //! Session shutdown drains failure publications that outlive the caller.
 
+use crate::session::command_approval::CommandApproval;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
@@ -18,6 +19,7 @@ pub(super) async fn with_launch_failure_events(
     result: Result<UnifiedExecProcess, ToolError>,
     req: &PreparedExecCommand,
     ctx: &ToolCtx,
+    command_approval: &mut CommandApproval,
 ) -> Result<UnifiedExecProcess, ToolError> {
     let Err(ToolError::Rejected(message)) = &result else {
         return result;
@@ -63,6 +65,8 @@ pub(super) async fn with_launch_failure_events(
     let step_context = Arc::clone(&ctx.step_context);
     let call_id = ctx.call_id.clone();
     let message = message.clone();
+    // The failure write is registered, so the proposal can release its shutdown token.
+    let proposal_started_at_ms = command_approval.handoff();
     // Dropping the join handle on cancellation leaves both lifecycle events running.
     let publish = async move {
         let model_context = step_context.model_context();
@@ -73,6 +77,7 @@ pub(super) async fn with_launch_failure_events(
             &call_id,
             /*turn_diff_tracker*/ None,
         );
+        event_ctx.proposal_started_at_ms = proposal_started_at_ms;
         event_ctx.model_context = Some(&model_context);
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
         emitter

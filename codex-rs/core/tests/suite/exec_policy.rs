@@ -109,8 +109,14 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
     );
 }
 
+#[test_case::test_case(ReviewDecision::denied("git status was not approved"), None; "decline")]
+#[test_case::test_case(ReviewDecision::Approved, None; "approve")]
+#[test_case::test_case(ReviewDecision::Approved, Some("missing-working-directory"); "approve_then_launch_fails")]
 #[tokio::test]
-async fn git_status_requires_approval_under_unless_trusted() -> Result<()> {
+async fn git_status_requires_approval_under_unless_trusted(
+    decision: ReviewDecision,
+    workdir: Option<&str>,
+) -> Result<()> {
     skip_if_wine_exec!(Ok(()), "command approval requires host-native paths");
 
     let server = start_mock_server().await;
@@ -128,7 +134,7 @@ async fn git_status_requires_approval_under_unless_trusted() -> Result<()> {
     });
     let test = builder.build_with_auto_env(&server).await?;
     let call_id = "git-status-approval";
-    let args = json!({"cmd": "git status", "yield_time_ms": 1_000});
+    let args = json!({"cmd": "git status", "yield_time_ms": 1_000, "workdir": workdir});
     let initial_mock = mount_sse_once(
         &server,
         sse(vec![
@@ -153,31 +159,53 @@ async fn git_status_requires_approval_under_unless_trusted() -> Result<()> {
             text_elements: Vec::new(),
         }]))
         .await?;
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    let EventMsg::ExecApprovalRequest(approval) = event else {
-        let output = results_mock.function_call_output_text(call_id);
-        panic!(
-            "expected git status to request approval before turn completion; output: {output:?}"
-        );
-    };
-    assert_eq!(approval.call_id, call_id);
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::denied("git status was not approved"),
-        })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let mut events = Vec::new();
+    let mut process_id = None;
+    let mut turn_complete = false;
+    let mut awaiting_exit = decision == ReviewDecision::Approved;
+    // A yielded process can publish its exit after the model finishes the turn.
+    while !turn_complete || awaiting_exit {
+        match test.codex.next_event().await?.msg {
+            EventMsg::ItemStarted(event) if event.item.id() == call_id => {
+                events.push("start");
+            }
+            EventMsg::ExecApprovalRequest(approval) => {
+                events.push("prompt");
+                assert_eq!(approval.call_id, call_id);
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: Some(approval.turn_id),
+                        decision: decision.clone(),
+                    })
+                    .await?;
+            }
+            EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+                events.push("launch");
+                process_id = event.process_id;
+                assert_eq!(process_id.is_some(), workdir.is_none());
+            }
+            EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+                events.push("exit");
+                awaiting_exit = false;
+            }
+            EventMsg::ItemCompleted(event) => {
+                if let codex_protocol::items::TurnItem::CommandExecution(item) = event.item {
+                    if workdir.is_some() {
+                        assert_eq!(
+                            item.status,
+                            codex_protocol::items::CommandExecutionStatus::Failed
+                        );
+                    }
+                    assert_eq!(item.id, call_id);
+                    assert_eq!(item.process_id, process_id);
+                    events.push("finish");
+                }
+            }
+            EventMsg::TurnComplete(_) => turn_complete = true,
+            _ => {}
+        }
+    }
     assert!(
         initial_mock
             .single_request()
@@ -189,7 +217,12 @@ async fn git_status_requires_approval_under_unless_trusted() -> Result<()> {
         .single_request()
         .function_call_output_text(call_id)
         .expect("shell command output");
-    assert!(output.contains("git status was not approved"), "{output}");
+    if decision == ReviewDecision::Approved {
+        assert_eq!(events, ["start", "prompt", "launch", "finish", "exit"]);
+    } else {
+        assert_eq!(events, ["start", "prompt", "finish"]);
+        assert!(output.contains("git status was not approved"), "{output}");
+    }
 
     Ok(())
 }

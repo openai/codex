@@ -1776,13 +1776,9 @@ pub enum EventMsg {
 }
 
 impl EventMsg {
-    /// Returns the ID and start time of the command this approval opens.
-    /// Stdin and network reviews have their own prompts for an existing operation.
-    pub fn command_approval_start(&self) -> Option<(&str, i64)> {
+    /// Returns the command item first exposed by a Guardian assessment.
+    pub fn guardian_command_start(&self) -> Option<(&str, i64)> {
         match self {
-            Self::ExecApprovalRequest(request) if request.starts_command() => {
-                Some((&request.call_id, request.started_at_ms))
-            }
             Self::GuardianAssessment(assessment)
                 if assessment.status == GuardianAssessmentStatus::InProgress
                     && matches!(

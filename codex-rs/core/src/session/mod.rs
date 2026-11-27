@@ -2808,7 +2808,7 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         crate::agent::turn_metrics::record_terminal_event(turn_context, &msg);
-        if let Some((item_id, started_at_ms)) = msg.command_approval_start() {
+        if let Some((item_id, started_at_ms)) = msg.guardian_command_start() {
             // The client can see the command before execution. Keep its first start
             // for the canonical lifecycle events that will be saved in history.
             turn_context
@@ -3164,20 +3164,29 @@ impl Session {
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        let event = self
+            .prepare_item_started(turn_context, item.clone(), now_unix_timestamp_ms())
+            .await;
+        self.send_event(turn_context, EventMsg::ItemStarted(event))
+            .await;
+    }
+
+    async fn prepare_item_started(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        started_at_ms: i64,
+    ) -> ItemStartedEvent {
         let started_at_ms = turn_context
             .turn_timing_state
-            .record_item_started(item.id(), now_unix_timestamp_ms())
+            .record_item_started(item.id(), started_at_ms)
             .await;
-        self.send_event(
-            turn_context,
-            EventMsg::ItemStarted(ItemStartedEvent {
-                thread_id: self.thread_id,
-                turn_id: turn_context.sub_id.clone(),
-                item: item.clone(),
-                started_at_ms,
-            }),
-        )
-        .await;
+        ItemStartedEvent {
+            thread_id: self.thread_id,
+            turn_id: turn_context.sub_id.clone(),
+            item,
+            started_at_ms,
+        }
     }
 
     pub(crate) async fn emit_turn_item_completed(
@@ -3432,7 +3441,7 @@ impl Session {
         reason = "active turn checks and turn state updates must remain atomic"
     )]
     pub(crate) async fn request_command_approval(
-        &self,
+        self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         kind: ExecApprovalKind,
         model_context: ModelInvocationContext,
@@ -3447,7 +3456,8 @@ impl Session {
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
-        plugin_attribution_override: Option<PluginCommandAttribution>,
+        command_environment: Option<&Environment>,
+        mut command_approval: Option<&mut command_approval::CommandApproval>,
     ) -> ReviewDecision {
         let (network_approval_context, turn_binding) = network_approval.unzip();
         let user_wait_owner = self.user_wait_timing_owner(turn_context, timing_call_id);
@@ -3476,11 +3486,23 @@ impl Session {
                 additional_permissions.as_ref(),
             )
         });
-        let plugin_attribution = plugin_attribution_override.or_else(|| {
+        let plugin_attribution = if let Some(environment) =
+            command_environment.filter(|env| env.is_remote())
+        {
+            // A slow attribution lookup should not prevent the approval prompt.
+            let fs = environment.get_filesystem_without_reconnect();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                turn_context.plugin_attribution_for_executor_command(&command, &cwd, fs.as_ref()),
+            )
+            .await
+            .ok()
+            .flatten()
+        } else {
             cwd.to_abs_path()
                 .ok()
                 .and_then(|cwd| turn_context.plugin_attribution_for_command(&command, &cwd))
-        });
+        };
         let (plugin_id, script_path) = plugin_attribution
             .as_ref()
             .map(PluginCommandAttribution::serialized_fields)
@@ -3505,10 +3527,36 @@ impl Session {
             available_decisions: Some(available_decisions),
             parsed_cmd,
         };
-        let command = command_approval::ProposedCommand::from_request(turn_context, &request, cwd);
+        // The pending approval owns the proposal during review. An accepted
+        // reply transfers it back to the invocation for setup and sandbox retries.
+        let mut command = command_approval
+            .as_deref_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
+        let serving_turn = if command_approval.is_some() && request.starts_command() {
+            let Some(state) = self
+                .active_turn
+                .lock()
+                .await
+                .as_ref()
+                .map(|turn| Arc::clone(&turn.turn_state))
+            else {
+                return ReviewDecision::Abort;
+            };
+            if command
+                .start(self, turn_context, &request, cwd)
+                .await
+                .is_err()
+            {
+                return ReviewDecision::Abort;
+            }
+            Some(state)
+        } else {
+            None
+        };
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let (prev_entry, _network_prompt) = {
+        let (prev_entry, mut prompt) = {
             let mut active = self.active_turn.lock().await;
             // The proxy reviews with the active turn's settings. A sandbox retry
             // keeps its originating step's settings even after a background cell yields.
@@ -3525,6 +3573,10 @@ impl Session {
             }
             match active.as_mut() {
                 Some(at) => {
+                    // Publishing item/started can outlive the turn servicing this prompt.
+                    if serving_turn.is_some_and(|state| !Arc::ptr_eq(&state, &at.turn_state)) {
+                        return ReviewDecision::Abort;
+                    }
                     let mut ts = at.turn_state.lock().await;
                     let prev = ts.insert_pending_approval(
                         effective_approval_id.clone(),
@@ -3535,13 +3587,15 @@ impl Session {
                             command,
                         },
                     );
-                    let prompt = request.network_approval_context.as_ref().map(|_| {
-                        ts.track_network_prompt(
-                            &self.tx_event,
-                            &turn_context.sub_id,
-                            &effective_approval_id,
-                        )
-                    });
+                    let prompt = ts.track_prompt(
+                        request
+                            .network_approval_context
+                            .as_ref()
+                            .map(|_| &self.tx_event),
+                        rx_approve,
+                        &turn_context.sub_id,
+                        &effective_approval_id,
+                    );
                     (prev, prompt)
                 }
                 // Without an active turn there is no owner to receive a reply.
@@ -3555,7 +3609,13 @@ impl Session {
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, EventMsg::ExecApprovalRequest(request))
             .await;
-        rx_approve.await.unwrap_or(ReviewDecision::Abort)
+        let Ok((decision, command)) = (&mut prompt.reply).await else {
+            return ReviewDecision::Abort;
+        };
+        if let Some(owner) = command_approval {
+            *owner = command;
+        }
+        decision
     }
 
     #[expect(
@@ -3586,7 +3646,7 @@ impl Session {
                             sender: tx_approve,
                             kind: ExecApprovalKind::Command,
                             turn_id: turn_context.sub_id.clone(),
-                            command: None,
+                            command: Default::default(),
                         },
                     )
                 }
@@ -3607,7 +3667,10 @@ impl Session {
         });
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
-        rx_approve.await.unwrap_or(ReviewDecision::Abort)
+        rx_approve
+            .await
+            .map(|(decision, _)| decision)
+            .unwrap_or(ReviewDecision::Abort)
     }
 
     #[expect(
@@ -4068,12 +4131,13 @@ impl Session {
     }
 
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
-        if let Some((pending, _)) = self
+        if let Some((mut pending, _)) = self
             .take_pending_approval(approval_id, /*expected_turn_id*/ None)
             .await
         {
             let decision = pending.validate(decision);
-            let _ = pending.sender.send(decision);
+            pending.resolve_command(&decision).await;
+            pending.reply(decision);
         } else {
             warn!("No pending approval found for call_id: {approval_id}");
         }
