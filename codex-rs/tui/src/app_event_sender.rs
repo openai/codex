@@ -25,6 +25,7 @@ use crate::session_log;
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
+    pub(crate) pasted_images: Arc<crate::clipboard_paste::PastedImages>,
     pub(crate) voice_only: Arc<AtomicBool>,
 }
 
@@ -33,6 +34,16 @@ impl AppEventSender {
         Self {
             app_event_tx,
             voice_only: Arc::default(),
+            pasted_images: Arc::default(),
+        }
+    }
+
+    /// Reset callback routing without invalidating drafts from the same TUI session.
+    pub(crate) fn new_scope(&self, app_event_tx: UnboundedSender<AppEvent>) -> Self {
+        Self {
+            app_event_tx,
+            voice_only: Arc::default(),
+            pasted_images: self.pasted_images.clone(),
         }
     }
 

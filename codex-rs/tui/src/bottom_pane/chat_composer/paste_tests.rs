@@ -222,9 +222,16 @@ fn pasting_filepath_attaches_image() {
         panic!("expected one image attachment");
     };
     let expected = std::fs::read(&tmp_path).unwrap();
-    std::fs::remove_file(&tmp_path).unwrap();
+    std::fs::write(&tmp_path, b"changed").unwrap();
     assert_eq!(std::fs::read(attachment).unwrap(), expected);
-    std::fs::remove_file(attachment).unwrap();
+    let next = composer
+        .app_event_tx
+        .new_scope(composer.app_event_tx.app_event_tx.clone());
+    drop(composer);
+    assert_eq!(std::fs::read(attachment).unwrap(), expected);
+    next.pasted_images.clear();
+    assert!(!attachment.exists());
+    assert_eq!(std::fs::read(tmp_path).unwrap(), b"changed");
 }
 
 #[cfg(unix)]

@@ -6,27 +6,62 @@ pub(crate) mod text;
 #[cfg(windows)]
 mod windows;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tempfile::Builder;
 
 pub(crate) const MAX_PASTED_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) fn persist_pasted_image(
-    source: impl std::io::Read,
-    suffix: &str,
-) -> std::io::Result<PathBuf> {
-    let mut tmp = Builder::new()
-        .prefix("codex-clipboard-")
-        .suffix(suffix)
-        .tempfile()?;
-    if std::io::copy(&mut source.take(MAX_PASTED_IMAGE_BYTES + 1), &mut tmp)?
-        > MAX_PASTED_IMAGE_BYTES
-    {
-        return Err(std::io::Error::other("image exceeds the 1 GiB input limit"));
+/// Hold unsent copies for the TUI session, including drafts restored by path.
+#[derive(Debug, Default)]
+pub(crate) struct PastedImages(Mutex<HashMap<PathBuf, tempfile::TempPath>>);
+
+impl PastedImages {
+    pub(crate) fn copy(
+        &self,
+        source: impl std::io::Read,
+        suffix: &str,
+    ) -> std::io::Result<PathBuf> {
+        let mut tmp = Builder::new()
+            .prefix("codex-clipboard-")
+            .suffix(suffix)
+            .tempfile()?;
+        if std::io::copy(&mut source.take(MAX_PASTED_IMAGE_BYTES + 1), &mut tmp)?
+            > MAX_PASTED_IMAGE_BYTES
+        {
+            return Err(std::io::Error::other("image exceeds the 1 GiB input limit"));
+        }
+        let path = tmp.path().to_path_buf();
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(path.clone(), tmp.into_temp_path());
+        Ok(path)
     }
-    let (_, path) = tmp.keep().map_err(|error| error.error)?;
-    Ok(path)
+
+    pub(crate) fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    // The app server and saved turns can still reference a submitted path after exit.
+    pub(crate) fn keep(&self, path: &Path) {
+        let copy = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(path);
+        if let Some(copy) = copy
+            && let Err(mut err) = copy.keep()
+        {
+            err.path.disable_cleanup(/*disable_cleanup*/ true);
+            tracing::warn!("Failed to persist submitted image: {}", err.error);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -167,39 +202,11 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     ))
 }
 
-/// Convenience: write to a temp file and return its path + info.
-#[cfg(not(target_os = "android"))]
-pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
-    // First attempt: read image from system clipboard via arboard (native paths or image data).
-    match paste_image_as_png() {
-        Ok((png, info)) => {
-            let path = persist_pasted_image(png.as_slice(), ".png")
-                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-            Ok((path, info))
-        }
-        Err(e) => {
-            #[cfg(target_os = "linux")]
-            {
-                try_wsl_clipboard_fallback(&e).or(Err(e))
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                Err(e)
-            }
-        }
-    }
-}
-
-/// Attempt WSL fallback for clipboard image paste.
-///
-/// If clipboard is unavailable (common under WSL because arboard cannot access
-/// the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
-/// Windows side to write the clipboard image to a temporary file, then return
-/// the corresponding WSL path.
+/// WSL can read the Windows clipboard even when arboard cannot.
 #[cfg(target_os = "linux")]
-fn try_wsl_clipboard_fallback(
-    error: &PasteImageError,
-) -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
+pub(crate) fn try_wsl_clipboard_fallback(
+    error: PasteImageError,
+) -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     use PasteImageError::ClipboardUnavailable;
     use PasteImageError::NoImage;
 
@@ -209,77 +216,38 @@ fn try_wsl_clipboard_fallback(
             ClipboardUnavailable(_) | NoImage(_) | PasteImageError::ImageReadFailed(_)
         )
     {
-        return Err(error.clone());
+        return Err(error);
     }
 
     tracing::debug!("attempting Windows PowerShell clipboard fallback");
-    let Some(win_path) = try_dump_windows_clipboard_image() else {
-        return Err(error.clone());
-    };
-
-    tracing::debug!("powershell produced path: {}", win_path);
-    let Some(mapped_path) = convert_windows_path_to_wsl(&win_path) else {
-        return Err(error.clone());
-    };
-
-    let Ok((w, h)) = image::image_dimensions(&mapped_path) else {
-        return Err(error.clone());
-    };
-
-    // Return the mapped path directly without copying.
-    // The file will be read and base64-encoded during serialization.
-    Ok((
-        mapped_path,
-        PastedImageInfo {
-            width: w,
-            height: h,
-            encoded_format: EncodedImageFormat::Png,
-        },
-    ))
-}
-
-/// Try to call a Windows PowerShell command (several common names) to save the
-/// clipboard image to a temporary PNG and return the Windows path to that file.
-/// Returns None if no command succeeded or no image was present.
-#[cfg(target_os = "linux")]
-fn try_dump_windows_clipboard_image() -> Option<String> {
-    // Powershell script: save image from clipboard to a temp png and print the path.
-    // Force UTF-8 output to avoid encoding issues between powershell.exe (UTF-16LE default)
-    // and pwsh (UTF-8 default).
-    let script = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $img = Get-Clipboard -Format Image; if ($img -ne $null) { $p=[System.IO.Path]::GetTempFileName(); $p = [System.IO.Path]::ChangeExtension($p,'png'); $img.Save($p,[System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p } else { exit 1 }"#;
-
+    // Return bytes so no Windows temp files are needed, even for a rejected paste.
+    let script = r#"$img = Get-Clipboard -Format Image; if ($null -eq $img) { exit 1 }; $png = New-Object System.IO.MemoryStream; $img.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); if ($png.Length -gt 1GB) { exit 1 }; $png.WriteTo([Console]::OpenStandardOutput())"#;
     for cmd in ["powershell.exe", "pwsh", "powershell"] {
-        match std::process::Command::new(cmd)
+        let Ok(output) = std::process::Command::new(cmd)
             .args(["-NoProfile", "-Command", script])
             .output()
-        {
-            // Executing PowerShell command
-            Ok(output) => {
-                if output.status.success() {
-                    // Decode as UTF-8 (forced by the script above).
-                    let win_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !win_path.is_empty() {
-                        tracing::debug!("{} saved clipboard image to {}", cmd, win_path);
-                        return Some(win_path);
-                    }
-                } else {
-                    tracing::debug!("{} returned non-zero status", cmd);
-                }
-            }
-            Err(err) => {
-                tracing::debug!("{} not executable: {}", cmd, err);
-            }
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let reader = image::ImageReader::with_format(
+            std::io::Cursor::new(&output.stdout),
+            image::ImageFormat::Png,
+        );
+        if let Ok((width, height)) = reader.into_dimensions() {
+            return Ok((
+                output.stdout,
+                PastedImageInfo {
+                    width,
+                    height,
+                    encoded_format: EncodedImageFormat::Png,
+                },
+            ));
         }
     }
-    None
-}
-
-#[cfg(target_os = "android")]
-pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
-    // Keep error consistent with paste_image_as_png.
-    Err(PasteImageError::ClipboardUnavailable(
-        "clipboard image paste is unsupported on Android".into(),
-    ))
+    Err(error)
 }
 
 /// Normalize pasted text for a single-line search query.

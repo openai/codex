@@ -15,7 +15,7 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 
 impl ChatComposer {
-    fn copy_pasted_image_path(pasted: &str) -> std::io::Result<Option<PathBuf>> {
+    fn copy_pasted_image_path(&self, pasted: &str) -> std::io::Result<Option<PathBuf>> {
         use std::io::Seek;
         #[cfg(unix)]
         use std::os::unix::fs::OpenOptionsExt;
@@ -60,7 +60,10 @@ impl ChatComposer {
                     return Err(std::io::Error::other("image exceeds the 1 GiB input limit"));
                 }
                 file.rewind()?;
-                crate::clipboard_paste::persist_pasted_image(file, &suffix).map(Some)
+                self.app_event_tx
+                    .pasted_images
+                    .copy(file, &suffix)
+                    .map(Some)
             }
             Err(err) => {
                 tracing::trace!("ERR: {err}");
@@ -300,7 +303,7 @@ impl ChatComposer {
         let image = if (2..=LARGE_PASTE_CHAR_THRESHOLD).contains(&char_count)
             && self.image_paste_enabled()
         {
-            match Self::copy_pasted_image_path(&pasted) {
+            match self.copy_pasted_image_path(&pasted) {
                 Ok(image) => image,
                 Err(error) => {
                     self.draft.paste_burst.clear_after_explicit_paste();

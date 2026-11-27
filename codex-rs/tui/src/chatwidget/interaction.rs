@@ -6,6 +6,7 @@ use crate::activation_key_guard::ActivationKeySuppression;
 use crate::bottom_pane::BottomPaneView;
 use crate::clipboard_copy::CopyStatus;
 use crate::clipboard_copy::worker::CopyResult;
+use crate::clipboard_paste::PasteImageError;
 
 /// An input action the app must finish before processing the next key.
 #[derive(Debug)]
@@ -440,14 +441,28 @@ impl ChatWidget {
     ///
     /// Ordinary paste still checks the active model. Handoff only retains the attachment locally;
     /// submission validates the destination model and backend before admission.
-    pub(crate) fn attach_image(&mut self, path: PathBuf, context: ClipboardPasteContext) {
+    pub(super) fn attach_clipboard_image(
+        &mut self,
+        png: &[u8],
+        context: ClipboardPasteContext,
+    ) -> Result<(), PasteImageError> {
         if context == ClipboardPasteContext::Composer && !self.current_model_supports_images() {
             self.add_to_history(history_cell::new_warning_event(
                 self.image_inputs_not_supported_message(),
             ));
             self.request_redraw();
-            return;
+            return Ok(());
         }
+        let path = self
+            .app_event_tx
+            .pasted_images
+            .copy(png, ".png")
+            .map_err(|err| PasteImageError::IoError(err.to_string()))?;
+        self.attach_image(path, context);
+        Ok(())
+    }
+
+    pub(crate) fn attach_image(&mut self, path: PathBuf, context: ClipboardPasteContext) {
         tracing::info!("attach_image path={path:?}");
         if context == ClipboardPasteContext::DraftHandoff && !self.has_active_view() {
             self.bottom_pane.settle_before_handoff_image();

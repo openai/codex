@@ -520,7 +520,9 @@ impl App {
         self.agents_overview.pending_usage = None;
         self.reset_agents_overview_usage_for_backend_switch();
         self.agents_overview.usage_disabled = false;
-        self.app_event_tx = AppEventSender::new(self.app_event_tx.app_event_tx.clone());
+        self.app_event_tx = self
+            .app_event_tx
+            .new_scope(self.app_event_tx.app_event_tx.clone());
         self.app_server_backend_id = Some(destination.backend_id());
         self.app_server_target = target;
         self.refresh_transcript_document_links();

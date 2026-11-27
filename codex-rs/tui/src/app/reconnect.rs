@@ -457,7 +457,7 @@ impl App {
         // Old request handles stay attached to the dead connection. Rotating the event channel
         // prevents their late completions from submitting follow-up operations on the new one.
         let (tx, rx) = mpsc::unbounded_channel();
-        self.app_event_tx = AppEventSender::new(tx);
+        self.app_event_tx = self.app_event_tx.new_scope(tx);
         self.app_server_backend_id = Some(session.backend_id());
         *app_event_rx = rx;
         self.pending_thread_switch_resets = 0;

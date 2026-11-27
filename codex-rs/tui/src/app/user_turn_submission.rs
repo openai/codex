@@ -82,6 +82,19 @@ pub(super) async fn try_submit_user_turn(
             start_settings,
         )
         .await;
+    // A lost response can still mean the server accepted the paths. Only leave
+    // copies registered for cleanup when we know the turn was not admitted.
+    if !matches!(
+        &result,
+        Err(UserMessageSubmissionFailure::Preflight(_) | UserMessageSubmissionFailure::Rejected(_))
+            | Ok((UserMessageAdmission::Queued(_), _))
+    ) {
+        for item in items {
+            if let codex_app_server_protocol::UserInput::LocalImage { path, .. } = item {
+                app.app_event_tx.pasted_images.keep(path);
+            }
+        }
+    }
     if active != original_active
         && let Some(channel) = app.thread_event_channels.get(&thread_id)
     {

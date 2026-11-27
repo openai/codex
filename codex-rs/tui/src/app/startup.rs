@@ -2056,6 +2056,8 @@ See the Codex keymap documentation for supported actions and examples."
         {
             tracing::warn!(error = %err, "failed to finish background server restart during exit");
         }
+        // Background callbacks can retain event senders after the input loop exits.
+        app.app_event_tx.pasted_images.clear();
         // Keep the alternate screen active until the outer guard restores both keyboard stacks.
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {

@@ -64,7 +64,9 @@ impl ChatWidget {
         context: ClipboardPasteContext,
         text_fallback: Option<KeyCode>,
     ) -> Result<(), PasteImageError> {
-        let result = paste_image_to_temp_png();
+        let result = crate::clipboard_paste::paste_image_as_png();
+        #[cfg(target_os = "linux")]
+        let result = result.or_else(crate::clipboard_paste::try_wsl_clipboard_fallback);
         self.suppress_image_paste_until = Instant::now() + IMAGE_PASTE_REPEAT_WINDOW;
         if context == ClipboardPasteContext::DraftHandoff
             && text_fallback.is_some()
@@ -75,15 +77,14 @@ impl ChatWidget {
             // Settle typing before capturing the asynchronous text target.
             self.bottom_pane.prepare_composer_clipboard_paste();
         }
-        let (path, info) = result?;
+        let (png, info) = result?;
         tracing::debug!(
             "pasted image size={}x{} format={}",
             info.width,
             info.height,
             info.encoded_format.label()
         );
-        self.attach_image(path, context);
-        Ok(())
+        self.attach_clipboard_image(&png, context)
     }
 
     pub(crate) fn show_paste_pending(&mut self) {
