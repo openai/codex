@@ -128,8 +128,15 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
             serde_json::from_str(permission_profile_json).expect("permission profile JSON");
         assert_eq!(
             permission_profile,
-            PermissionProfile::workspace_write()
-                .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd))
+            PermissionProfile::workspace_write_with(
+                &[],
+                codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+                // This Linux launch has no TMPDIR to grant to the command.
+                /*exclude_tmpdir_env_var*/
+                true,
+                /*exclude_slash_tmp*/ false,
+            )
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd))
         );
 
         let policy_directory = tempdir().expect("policy directory");

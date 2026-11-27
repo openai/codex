@@ -4,6 +4,7 @@ use crate::LinuxSandboxPidNamespace;
 use crate::SandboxExecRequest;
 use crate::SandboxTransformError;
 use crate::manager::SandboxBackend;
+use crate::manager::launch::LinuxBinding;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -23,7 +24,7 @@ impl<'a> LinuxSandboxMode<'a> {
         use_legacy_landlock: bool,
         managed_network: Option<&'a ManagedNetworkSandboxContext>,
     ) -> Self {
-        if use_legacy_landlock && managed_network.is_none() {
+        if uses_legacy_landlock(use_legacy_landlock, managed_network.is_some()) {
             Self::LegacyLandlock
         } else {
             Self::Bubblewrap { managed_network }
@@ -51,12 +52,18 @@ impl<'a> LinuxSandboxMode<'a> {
     }
 }
 
+// Proxy routing needs bubblewrap's isolated network namespace.
+pub(super) fn uses_legacy_landlock(requested: bool, enforce_managed_network: bool) -> bool {
+    requested && !enforce_managed_network
+}
+
 pub(super) struct Linux<'a> {
     pub(super) pid_namespace: LinuxSandboxPidNamespace,
     pub(super) transparent_tcp: bool,
     pub(super) sandbox_exe: Option<&'a Path>,
     pub(super) use_legacy_landlock: bool,
     pub(super) route: Option<ManagedNetworkSandboxContext>,
+    pub(super) binding: Option<LinuxBinding>,
 }
 
 impl SandboxBackend for Linux<'_> {
@@ -69,19 +76,45 @@ impl SandboxBackend for Linux<'_> {
         let exe = self
             .sandbox_exe
             .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+        #[cfg(unix)]
+        let bound_cwd = self
+            .binding
+            .as_mut()
+            .and_then(|binding| binding.command_cwd.take());
+        #[cfg(unix)]
+        let cwd = if let Some(bound) = &bound_cwd {
+            exec.cwd = codex_utils_path_uri::PathUri::from_abs_path(&bound.path);
+            &bound.path
+        } else {
+            cwd
+        };
+        #[cfg(unix)]
+        let encoded = crate::linux_policy::linux_helper_permissions(exec, self.binding.take())
+            .map_err(SandboxTransformError::InvalidPolicy)?;
+        #[cfg(unix)]
+        let helper_permissions = encoded.as_ref().unwrap_or(&exec.permission_profile);
+        #[cfg(not(unix))]
+        let helper_permissions = {
+            let _ = &self.binding;
+            &exec.permission_profile
+        };
         let mode = LinuxSandboxMode::resolve(self.use_legacy_landlock, self.route.as_ref());
         #[cfg(target_os = "linux")]
         if crate::bwrap::is_wsl1() {
-            mode.ensure_supported_on_wsl1(&exec.permission_profile)?;
+            mode.ensure_supported_on_wsl1(helper_permissions)?;
         }
         let program = exe.to_string_lossy().into_owned();
         let mut args = create_linux_sandbox_command_args_for_permission_profile(
             std::mem::take(&mut exec.command),
             cwd,
-            &exec.permission_profile,
+            helper_permissions,
             policy_cwd,
             mode,
         );
+        #[cfg(unix)]
+        if let Some(bound) = bound_cwd {
+            args.insert(0, format!("--expected-cwd-identity={}", bound.identity));
+        }
         // Only the startup opt-in requires a helper that understands PID inheritance.
         if self.pid_namespace == LinuxSandboxPidNamespace::Inherit {
             args.insert(0, "--inherit-pid-namespace".to_owned());

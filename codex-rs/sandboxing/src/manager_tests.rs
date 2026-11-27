@@ -633,6 +633,43 @@ async fn native_launch_preserves_borrowed_proxy_credentials() -> anyhow::Result<
         assert_eq!(request.network_environment_id.as_deref(), environment_id);
         assert_eq!(&request.env, expected);
     }
+    #[cfg(unix)]
+    {
+        // The proxy masks the credential embedded in TMPDIR before Linux binds its write grant.
+        let raw_tmp = std::path::Path::new("/codex-snapshot-proxy-test").join(&token);
+        let permissions = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                FileSystemAccessMode::Write,
+            )]),
+            NetworkSandboxPolicy::Restricted,
+        );
+        let mut request = test_request(&cwd, &permissions);
+        request.command.env = raw;
+        request.selection = SandboxSelection::Explicit(SandboxType::LinuxSeccomp);
+        request.network = SandboxNetwork::new(
+            /*enforce_managed_network*/ false,
+            Some(&proxy),
+            environment_id,
+        );
+        request.executables =
+            SandboxExecutables::Launcher(Some(std::path::Path::new("codex-linux-sandbox")));
+        request
+            .command
+            .env
+            .insert("TMPDIR".into(), raw_tmp.display().to_string());
+        let launch = SandboxManager::new()
+            .transform(request)?
+            .into_command_request()?;
+        let masked_tmp = std::path::Path::new(&launch.env["TMPDIR"]);
+        assert_ne!(masked_tmp, raw_tmp);
+        let fs = launch.permission_profile.file_system_sandbox_policy();
+        let cwd = cwd.to_abs_path()?;
+        assert!(fs.can_write_local_path_with_cwd(masked_tmp, &cwd));
+        assert!(!fs.can_write_local_path_with_cwd(&raw_tmp, &cwd));
+    }
     handle.shutdown().await
 }
 
@@ -1092,12 +1129,15 @@ fn windows_file_system_wrapper_materializes_inner_helper() {
         ]),
         NetworkSandboxPolicy::Restricted,
     );
+    let request = SandboxTransformRequest {
+        workspace_roots: Some(std::slice::from_ref(&cwd_uri)),
+        ..test_request(&cwd_uri, &permissions)
+    };
     let policy = super::PreparedLaunchPolicy::resolve(
-        permissions,
-        &cwd_uri,
-        Some(std::slice::from_ref(&cwd_uri)),
-        &[],
+        permissions.clone(),
+        &request,
         &super::SandboxOperation::FileSystemHelper,
+        &[],
     )
     .expect("resolve helper policy");
     let mut exec_request = super::SandboxExecRequest {
@@ -1204,5 +1244,170 @@ fn restricted_token_preserves_read_only_carveouts_at_a_volume_root() -> anyhow::
     .expect("prepare volume-root workspace")
     .expect("read-only child");
     assert_eq!(overrides.additional_deny_write_paths, [read_only]);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn linux_snapshot_environment_cannot_move_a_tmpdir_grant_or_a_home_denial() -> anyhow::Result<()> {
+    use FileSystemAccessMode::Read;
+    use FileSystemAccessMode::Write;
+    use codex_protocol::permissions::FileSystemSandboxPolicyContext;
+    use codex_protocol::permissions::ReadDenyMatcher;
+
+    let dir = tempfile::tempdir()?;
+    let home = PathUri::from_host_native_path(dir.path().canonicalize()?)?;
+    let physical = home.join("real/[project]")?;
+    let cwd = home.join("[alias]")?;
+    let original = physical.join("C:/tmp[1]")?;
+    let backslash = physical.join(r"C:\scratch")?;
+    std::fs::create_dir_all(original.to_abs_path()?)?;
+    std::os::unix::fs::symlink(physical.to_abs_path()?, cwd.to_abs_path()?)?;
+    let redirected = home.join("[project]/C:/tmp[1]")?;
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                Write,
+            ),
+            FileSystemSandboxEntry::new(cwd.join(".git")?.into(), Read),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::GlobPattern {
+                    pattern: "~/private/*.env".into(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let prepare = |permissions: &PermissionProfile,
+                   launch_home: &str,
+                   tmpdir: Option<&str>,
+                   use_legacy_landlock: bool| {
+        let mut env = HashMap::from([("HOME".into(), launch_home.into())]);
+        if let Some(tmpdir) = tmpdir {
+            env.insert("TMPDIR".into(), tmpdir.into());
+        }
+        let mut request = test_request(&cwd, permissions);
+        request.command.program = "sh".into();
+        request.command.args = vec!["-lc".into(), "pwd".into()];
+        request.command.env = env;
+        request.selection = SandboxSelection::Explicit(SandboxType::LinuxSeccomp);
+        request.executables =
+            SandboxExecutables::Launcher(Some(std::path::Path::new("codex-linux-sandbox")));
+        request.use_legacy_landlock = use_legacy_landlock;
+        SandboxManager::new().transform(request)
+    };
+    assert!(matches!(
+        prepare(
+            &permissions,
+            &physical.inferred_native_path_string(),
+            None,
+            /*use_legacy_landlock*/ false
+        ),
+        Err(super::SandboxTransformError::InvalidPolicy(_))
+    ));
+    let absolute = original.inferred_native_path_string();
+    let absolute_home: &str = &home.inferred_native_path_string();
+    // A symbolic tmpdir grant cannot authorize legacy workspace-write access to the cwd.
+    let cwd_tmpdir = cwd.inferred_native_path_string();
+    assert!(matches!(
+        prepare(&permissions, absolute_home, Some(&cwd_tmpdir), /*use_legacy_landlock*/ true),
+        Err(super::SandboxTransformError::InvalidPolicy(err)) if err.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    let from_parent = "../[project]/C:/tmp[1]";
+    let from_home = "~//real/[project]/C:/tmp[1]/.";
+    for (launch_home, tmpdir, target, original_access) in [
+        (absolute_home, Some(from_parent), &original, Write),
+        (absolute_home, Some("C:/tmp[1]"), &original, Write),
+        (absolute_home, Some(r"C:\scratch"), &backslash, Write),
+        (absolute_home, Some(from_home), &original, Write),
+        (absolute_home, Some(absolute.as_str()), &original, Write),
+        (absolute_home, Some(""), &original, Read),
+        (absolute_home, None, &original, Read),
+        ("..", Some("~/[project]/C:/tmp[1]"), &original, Write),
+    ] {
+        let mut wrapped = prepare(
+            &permissions,
+            launch_home,
+            tmpdir,
+            /*use_legacy_landlock*/ false,
+        )?;
+        let shell = ["sh".into(), "-lc".into(), "pwd".into()];
+        let (_, _, env) = wrapped
+            .shell_snapshot_replay_mut(&shell)
+            .expect("snapshot invocation");
+        for name in ["TMPDIR", "HOME"] {
+            env.insert(name.into(), redirected.inferred_native_path_string());
+        }
+
+        // Interpret the policy sent to the Linux helper with the *replay* environment.
+        let request = wrapped.into_command_request()?;
+        let json = request
+            .command
+            .windows(2)
+            .find(|pair| pair[0] == "--permission-profile")
+            .expect("Linux permission profile");
+        let profile: PermissionProfile = serde_json::from_str(&json[1])?;
+        let policy = profile.file_system_sandbox_policy();
+        let replay = |name: &str| PathUri::from_host_native_path(&request.env[name]);
+        let context = FileSystemSandboxPolicyContext {
+            cwd: &cwd,
+            workspace_roots: &[],
+            user_home_dir: Some(&replay("HOME")?),
+            temporary_directories: Some(&[replay("TMPDIR")?]),
+        };
+        assert_eq!(policy.resolve_access(&redirected, &context), Read);
+        assert_eq!(
+            policy.resolve_access(&target.join("capture-output")?, &context),
+            original_access
+        );
+        let deny = ReadDenyMatcher::from_context(&policy, &context).expect("home denial");
+        assert!(deny.is_read_denied_uri(&home.join("private/token.env")?, &context));
+        assert!(!deny.is_read_denied_uri(&redirected.join("private/token.env")?, &context));
+    }
+    let special =
+        |value, access| FileSystemSandboxEntry::new(FileSystemPath::Special { value }, access);
+    for (tmpdir, access) in [
+        ("", FileSystemAccessMode::Deny),
+        ("/", Read),
+        ("C:/tmp[1]", FileSystemAccessMode::Deny),
+    ] {
+        let permissions = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![
+                special(FileSystemSpecialPath::Root, Write),
+                special(FileSystemSpecialPath::Tmpdir, access),
+            ]),
+            NetworkSandboxPolicy::Enabled,
+        );
+        let prepared = prepare(
+            &permissions,
+            absolute_home,
+            Some(tmpdir),
+            /*use_legacy_landlock*/ false,
+        )?;
+        let argv = prepared.request.command;
+        let profile = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--permission-profile")
+            .unwrap();
+        let profile: PermissionProfile = serde_json::from_str(&profile[1])?;
+        let file_system = profile.file_system_sandbox_policy();
+        assert_eq!(
+            (
+                file_system.has_full_disk_read_access(),
+                file_system.has_full_disk_write_access()
+            ),
+            (access.can_read(), false)
+        );
+    }
     Ok(())
 }

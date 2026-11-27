@@ -65,6 +65,8 @@ pub(crate) const WSLG_DISTRO_ROOT: &str = "/mnt/wslg/distro";
 pub(crate) struct BwrapOptions {
     /// Whether to mount a fresh `/proc`; disabled by `--no-proc` or mount fallback.
     pub mount_proc: bool,
+    /// Enter the cwd used to resolve relative TMPDIR even if PWD names a hidden alias.
+    pub require_command_cwd: bool,
     /// Explicitly reuse the caller's PID namespace instead of creating one.
     pub inherit_pid_namespace: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
@@ -85,6 +87,7 @@ impl Default for BwrapOptions {
     fn default() -> Self {
         Self {
             mount_proc: true,
+            require_command_cwd: false,
             inherit_pid_namespace: false,
             network_mode: BwrapNetworkMode::FullAccess,
             mask_wsl_interop: false,
@@ -331,7 +334,6 @@ fn create_bwrap_flags(
         preserved_files,
         synthetic_mount_targets,
     } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd, options)?;
-    let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
@@ -366,7 +368,12 @@ fn create_bwrap_flags(
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
-    if normalized_command_cwd.as_path() != command_cwd {
+    let normalized_command_cwd = if options.require_command_cwd {
+        command_cwd.to_path_buf()
+    } else {
+        normalize_command_cwd_for_bwrap(command_cwd)
+    };
+    if options.require_command_cwd || normalized_command_cwd.as_path() != command_cwd {
         // Bubblewrap otherwise inherits the helper's logical cwd, which can be
         // a symlink alias that disappears once the sandbox only mounts
         // canonical roots. Enter the canonical command cwd explicitly so

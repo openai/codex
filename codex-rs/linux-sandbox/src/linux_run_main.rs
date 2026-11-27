@@ -8,6 +8,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -73,6 +74,10 @@ pub struct LinuxSandboxCommand {
     /// alias would otherwise disappear inside the sandbox namespace.
     #[arg(long = "command-cwd", hide = true)]
     pub command_cwd: Option<PathBuf>,
+
+    /// Device and inode of the cwd used to bind a relative TMPDIR.
+    #[arg(long, hide = true, requires = "command_cwd")]
+    pub expected_cwd_identity: Option<String>,
 
     /// Canonical runtime permissions for the command.
     #[arg(
@@ -147,6 +152,7 @@ pub fn run_main() -> ! {
     let LinuxSandboxCommand {
         sandbox_policy_cwd,
         command_cwd,
+        expected_cwd_identity,
         permission_profile,
         use_legacy_landlock,
         apply_seccomp_then_exec,
@@ -159,6 +165,21 @@ pub fn run_main() -> ! {
         inherit_pid_namespace,
         command,
     } = LinuxSandboxCommand::parse();
+    // Check the directory we actually entered, both on helper startup and
+    // after bubblewrap switches mounts. A rename can keep the inode but
+    // change where ".." leads, while a replacement can keep the same name.
+    if let Some(expected) = &expected_cwd_identity {
+        let actual =
+            fs::metadata(".").unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
+        let path =
+            std::env::current_dir().unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
+        if Some(path.as_path()) != command_cwd.as_deref()
+            || *expected != format!("{}:{}", actual.dev(), actual.ino())
+        {
+            eprintln!("working directory changed after resolving relative TMPDIR");
+            std::process::exit(1);
+        }
+    }
     let allow_network_for_proxy = managed_network.is_some();
     let routing = if transparent_tcp {
         ProxyRouting::TransparentTcp
@@ -350,6 +371,7 @@ pub fn run_main() -> ! {
             (None, Vec::new())
         };
         let options = BwrapOptions {
+            require_command_cwd: expected_cwd_identity.is_some(),
             mount_proc: !no_proc && !inherit_pid_namespace,
             inherit_pid_namespace,
             network_mode: if transparent_tcp {
@@ -387,6 +409,9 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        if let Some(expected) = expected_cwd_identity {
+            inner.insert(1, format!("--expected-cwd-identity={expected}"));
+        }
         if transparent_tcp && inherit_pid_namespace {
             inner.insert(1, "--inherit-pid-namespace".to_string());
         }
@@ -651,6 +676,7 @@ fn build_preflight_bwrap_argv(options: BwrapOptions) -> CodexResult<crate::bwrap
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
+            require_command_cwd: false,
             // The alias check must see the same WSL masks as the main sandbox.
             ..options
         },

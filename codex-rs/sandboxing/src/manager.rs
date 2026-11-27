@@ -445,7 +445,7 @@ impl SandboxManager {
     /// Prepare filesystem and network enforcement for a command on the execution host.
     pub fn transform(
         &self,
-        request: SandboxTransformRequest<'_>,
+        mut request: SandboxTransformRequest<'_>,
     ) -> Result<WrappedSandboxCommand, SandboxTransformError> {
         let mut runtime_readable_paths = Vec::new();
         if let SandboxExecutables::Executor {
@@ -469,12 +469,10 @@ impl SandboxManager {
                 }
             }
         }
-        let mut command = request.command;
-        let SandboxNetwork {
-            enforce_managed_network,
-            proxy: network,
-            environment_id,
-        } = request.network;
+        let command = &mut request.command;
+        let network = request.network.proxy;
+        let environment_id = request.network.environment_id;
+        let enforce_managed_network = request.network.enforce_managed_network;
         let is_file_system_helper = matches!(self.operation, SandboxOperation::FileSystemHelper);
         if is_file_system_helper
             && (network.is_some() || enforce_managed_network || command.managed_network.is_some())
@@ -508,12 +506,24 @@ impl SandboxManager {
         );
         let policy = PreparedLaunchPolicy::resolve(
             permissions,
-            request.sandbox_policy_cwd,
-            request.workspace_roots,
-            &runtime_readable_paths,
+            &request,
             &self.operation,
+            &runtime_readable_paths,
         )
         .map_err(SandboxTransformError::InvalidPolicy)?;
+        let linux_binding = policy.linux_binding;
+        #[cfg(unix)]
+        let linux_binding = linux_binding.map(|binding| binding.for_policy(&policy.permissions));
+        #[cfg(unix)]
+        if let SandboxSelection::Platform { preference, .. } = &mut request.selection
+            && *preference == SandboxablePreference::Auto
+            && linux_binding
+                .as_ref()
+                .is_some_and(launch::LinuxBinding::needs_encoding)
+        {
+            *preference = SandboxablePreference::Require;
+        }
+        let command = request.command;
         let backend = match request.selection {
             SandboxSelection::Explicit(sandbox) => sandbox,
             SandboxSelection::Platform {
@@ -609,6 +619,7 @@ impl SandboxManager {
                 sandbox_exe,
                 use_legacy_landlock: request.use_legacy_landlock,
                 route: enforce_managed_network.then(|| managed_network.unwrap_or_default()),
+                binding: linux_binding,
             },
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => &mut crate::seatbelt::Seatbelt {

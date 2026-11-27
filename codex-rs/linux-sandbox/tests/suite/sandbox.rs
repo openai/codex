@@ -726,13 +726,126 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 }
 
 #[tokio::test]
+async fn relative_tmpdir_stays_bound_to_the_prepared_working_directory() -> std::io::Result<()> {
+    use codex_sandboxing::SandboxCommand;
+    use codex_sandboxing::SandboxExecutables;
+    use codex_sandboxing::SandboxManager;
+    use codex_sandboxing::SandboxSelection;
+    use codex_sandboxing::SandboxTransformRequest;
+    use codex_sandboxing::SandboxType;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let cwd = root.join("a/current");
+    let moved = root.join("b/current");
+    let alias = root.join("alias");
+    fs::create_dir_all(&cwd)?;
+    fs::create_dir_all(root.join("b"))?;
+    for parent in ["a", "b"] {
+        let private = root.join(parent).join("private");
+        fs::create_dir(&private)?;
+        fs::write(private.join("key"), "denied")?;
+    }
+    fs::write(cwd.join("allowed"), "allowed")?;
+    symlink(&cwd, &alias)?;
+    let helper = codex_linux_sandbox_exe();
+    let special =
+        |value, access| FileSystemSandboxEntry::new(FileSystemPath::Special { value }, access);
+    let mut policy = FileSystemSandboxPolicy::restricted(vec![
+        special(FileSystemSpecialPath::Minimal, FileSystemAccessMode::Read),
+        special(FileSystemSpecialPath::Tmpdir, FileSystemAccessMode::Deny),
+    ]);
+    let mut env = create_env_from_core_vars();
+    env.insert("TMPDIR".into(), "../private".into());
+    env.insert("PWD".into(), alias.display().to_string());
+    let prepare = |policy: &FileSystemSandboxPolicy| {
+        SandboxManager::new()
+            .transform(SandboxTransformRequest {
+                command: SandboxCommand {
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), r#"cat allowed; ! cat "$TMPDIR/key""#.into()],
+                    cwd: AbsolutePathBuf::try_from(alias.as_path())?.into(),
+                    env: env.clone(),
+                    managed_network: None,
+                    additional_permissions: None,
+                },
+                permissions: &PermissionProfile::from_runtime_permissions(
+                    policy,
+                    NetworkSandboxPolicy::Enabled,
+                ),
+                workspace_roots: None,
+                selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
+                network: Default::default(),
+                sandbox_policy_cwd: &AbsolutePathBuf::try_from(root.as_path())?.into(),
+                executables: SandboxExecutables::Launcher(Some(&helper)),
+                use_legacy_landlock: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            })
+            .expect("prepare sandbox")
+            .into_direct_command()
+    };
+    let read = |path: &std::path::Path| {
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::try_from(path).unwrap().into(),
+            FileSystemAccessMode::Read,
+        )
+    };
+    policy.entries.push(read(&helper));
+    let rejected = |command: &mut std::process::Command| {
+        let output = command.output().unwrap();
+        assert!(
+            !output.status.success() && output.stdout.is_empty(),
+            "{output:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("working directory changed"),
+            "{output:?}"
+        );
+    };
+    let can_mount = !should_skip_bwrap_tests().await;
+    if can_mount {
+        // A mount for one file synthesizes its parent at the right path but with a different inode.
+        let mut file_only = policy.clone();
+        file_only.entries.push(read(&cwd.join("allowed")));
+        rejected(&mut prepare(&file_only)?);
+    }
+    policy
+        .entries
+        .extend([read(&root.join("a")), read(&root.join("b"))]);
+    let mut command = prepare(&policy)?;
+    if can_mount {
+        // The physical cwd is mounted even though its PWD alias is outside the readable roots.
+        let output = command.output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"allowed");
+        fs::remove_file(&alias)?;
+        symlink(root.join("b"), &alias)?;
+        assert_eq!(command.output()?.stdout, b"allowed");
+    }
+
+    // Moving the same directory changes where ".." leads.
+    fs::rename(&cwd, &moved)?;
+    symlink(&moved, &cwd)?;
+    rejected(&mut command);
+
+    // A different directory under the original name must also be rejected.
+    fs::remove_file(&cwd)?;
+    fs::create_dir(&cwd)?;
+    rejected(&mut command);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_no_new_privs_is_enabled() {
+    let probe = [
+        "python3",
+        "-c",
+        "import ctypes; print(ctypes.CDLL(None).prctl(39, 0, 0, 0, 0))",
+    ];
     let output = run_cmd_output(
-        &[
-            "python3",
-            "-c",
-            "import ctypes; print(ctypes.CDLL(None).prctl(39, 0, 0, 0, 0))",
-        ],
+        &probe,
         &[],
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
@@ -741,6 +854,61 @@ async fn test_no_new_privs_is_enabled() {
     .await;
     assert_eq!(output.exit_code, 0);
     assert_eq!(output.stdout.text, "1\n");
+
+    use FileSystemAccessMode::Deny;
+    use FileSystemAccessMode::Read;
+    use FileSystemAccessMode::Write;
+    let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+    let temp = tempfile::tempdir().expect("writable tmpdir");
+    for (access, literal_access) in [(Deny, None), (Read, Some(Write)), (Write, Some(Read))] {
+        let mut entries = vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access,
+            ),
+        ];
+        // A non-root test process cannot create missing metadata mount points directly under /.
+        for name in codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES {
+            let path = AbsolutePathBuf::from_absolute_path(std::path::Path::new("/").join(name))
+                .expect("absolute metadata path");
+            entries.push(FileSystemSandboxEntry::new(path.into(), Write));
+        }
+        let mut env = create_env_from_core_vars();
+        env.remove("TMPDIR");
+        if let Some(literal_access) = literal_access {
+            let tmpdir = temp.path().to_str().expect("UTF-8 tmpdir");
+            env.insert("TMPDIR".into(), tmpdir.into());
+            entries.push(FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(tmpdir)
+                    .expect("absolute tmpdir")
+                    .into(),
+                literal_access,
+            ));
+        }
+        let permissions = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(entries),
+            NetworkSandboxPolicy::Enabled,
+        );
+        let output = run_cmd_result_with_permission_profile_for_cwd(
+            &probe,
+            cwd.clone(),
+            permissions,
+            env,
+            LONG_TIMEOUT_MS,
+            /*use_legacy_landlock*/ false,
+        )
+        .await
+        .expect("restricted launch");
+        assert_eq!((output.exit_code, output.stdout.text.as_str()), (0, "1\n"));
+    }
 }
 
 #[tokio::test]

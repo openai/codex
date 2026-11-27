@@ -233,9 +233,15 @@ pub(crate) enum SandboxOperation {
     FileSystemHelper,
 }
 
+#[cfg(unix)]
+pub(crate) use crate::linux_policy::LinuxBinding;
+#[cfg(not(unix))]
+pub(crate) type LinuxBinding = ();
+
 /// The authorized profile, resolved on the host that will enforce it.
 #[derive(Debug)]
 pub(super) struct PreparedLaunchPolicy {
+    pub(super) linux_binding: Option<LinuxBinding>,
     pub(super) permissions: PermissionProfile,
     #[cfg(windows)]
     pub(super) workspace_roots: Vec<AbsolutePathBuf>,
@@ -244,13 +250,36 @@ pub(super) struct PreparedLaunchPolicy {
 impl PreparedLaunchPolicy {
     /// An empty workspace list stays empty, even when the policy contains `:workspace_roots`.
     pub(super) fn resolve(
-        permissions: PermissionProfile,
-        policy_cwd: &PathUri,
-        roots: Option<&[PathUri]>,
-        runtime_readable_paths: &[AbsolutePathBuf],
+        mut permissions: PermissionProfile,
+        request: &crate::SandboxTransformRequest<'_>,
         operation: &SandboxOperation,
+        runtime_readable_paths: &[AbsolutePathBuf],
     ) -> io::Result<Self> {
         let is_file_system_helper = matches!(operation, SandboxOperation::FileSystemHelper);
+        let policy_cwd = request.sandbox_policy_cwd;
+        let roots = request.workspace_roots;
+        #[cfg(unix)]
+        let linux = match request.selection {
+            crate::SandboxSelection::Explicit(backend) => backend == SandboxType::LinuxSeccomp,
+            crate::SandboxSelection::Platform { .. } => cfg!(target_os = "linux"),
+        };
+        let bind =
+            |_entries: &mut Vec<FileSystemSandboxEntry>| -> io::Result<Option<LinuxBinding>> {
+                #[cfg(unix)]
+                if linux {
+                    return crate::linux_policy::bind_linux_policy_environment(
+                        _entries,
+                        &request.command.cwd,
+                        &request.command.env,
+                        policy_cwd,
+                        crate::linux::uses_legacy_landlock(
+                            request.use_legacy_landlock,
+                            request.network.enforce_managed_network,
+                        ),
+                    );
+                }
+                Ok(None)
+            };
         let Some(roots) = roots else {
             if is_file_system_helper || !runtime_readable_paths.is_empty() {
                 return Err(io::Error::new(
@@ -258,7 +287,18 @@ impl PreparedLaunchPolicy {
                     "runtime read access requires explicit workspace roots",
                 ));
             }
+            let linux_binding = match &mut permissions {
+                PermissionProfile::Managed {
+                    file_system:
+                        codex_protocol::models::ManagedFileSystemPermissions::Restricted {
+                            entries, ..
+                        },
+                    ..
+                } => bind(entries)?,
+                _ => None,
+            };
             return Ok(Self {
+                linux_binding,
                 permissions,
                 #[cfg(windows)]
                 workspace_roots: Vec::new(),
@@ -277,6 +317,8 @@ impl PreparedLaunchPolicy {
         }
         let mut file_system =
             file_system.materialize_project_roots_with_workspace_roots(&workspace_roots);
+        // Freeze the materialized rules before testing whether trusted helper paths need a read grant.
+        let linux_binding = bind(&mut file_system.entries)?;
         let permissions = if is_file_system_helper {
             tracing::Span::current().record("permission_entries", file_system.entries.len());
             if !file_system.has_full_disk_read_access() {
@@ -319,6 +361,7 @@ impl PreparedLaunchPolicy {
             )
         };
         Ok(Self {
+            linux_binding,
             permissions,
             #[cfg(windows)]
             workspace_roots,

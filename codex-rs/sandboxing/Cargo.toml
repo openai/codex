@@ -30,6 +30,9 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true, features = ["log"] }
 which = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+codex-shell-command = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 codex-otel = { workspace = true }
 codex-utils-home-dir = { workspace = true }

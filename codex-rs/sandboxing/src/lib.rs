@@ -3,6 +3,8 @@ mod bwrap;
 mod denial;
 pub mod linux;
 mod linux_pid_namespace;
+#[cfg(unix)]
+mod linux_policy;
 mod manager;
 pub mod policy_transforms;
 mod sandbox_integrity;
