@@ -217,6 +217,7 @@ async fn resolves_relocated_script_through_executor_filesystem() {
                 &command(&["python", "scripts/run.py"]),
                 &cwd,
                 LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
             )
             .await,
         Some(PluginCommandAttribution {
@@ -232,6 +233,7 @@ async fn resolves_relocated_script_through_executor_filesystem() {
                 &command(&["python", "scripts/run.py"]),
                 &cwd,
                 LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
             )
             .await,
         None
@@ -796,7 +798,7 @@ async fn assert_executor_resolution(
 ) {
     assert_eq!(
         roots
-            .resolve_executor_attribution(command, cwd, LOCAL_FS.as_ref())
+            .resolve_executor_attribution(command, cwd, LOCAL_FS.as_ref(), /*sandbox*/ None)
             .await,
         Some(PluginCommandAttribution {
             plugin_id: plugin_id.clone(),
@@ -1168,7 +1170,7 @@ async fn unrelated_scripts_skip_executor_lookup() -> anyhow::Result<()> {
     // An executor lookup waits for provisioning; unrelated scripts must finish immediately.
     assert_eq!(
         futures::future::join3(
-            roots.resolve_executor_attribution(&command, &cwd, fs.as_ref()),
+            roots.resolve_executor_attribution(&command, &cwd, fs.as_ref(), /*sandbox*/ None),
             roots.resolve_metrics_operation_in_filesystem(&command, &cwd, fs.as_ref()),
             PluginMeasurementTarget::from_command(&command, &cwd, fs.as_ref()),
         )

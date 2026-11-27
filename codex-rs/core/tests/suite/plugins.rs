@@ -34,6 +34,12 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemAccessMode;
+#[cfg(unix)]
+use codex_protocol::permissions::FileSystemSandboxEntry;
+#[cfg(unix)]
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 #[cfg(unix)]
@@ -43,6 +49,10 @@ use codex_protocol::protocol::Op;
 #[cfg(unix)]
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+#[cfg(unix)]
+use codex_protocol::request_permissions::PermissionGrantScope;
+#[cfg(unix)]
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::HostSkillsLoadInput;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -732,6 +742,131 @@ printf 'STDIN_OK\n'
             "number_value": 7.0,
         }),
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test_case(None; "environment_policy")]
+#[test_case(Some(PermissionGrantScope::Turn); "stored_turn_grant")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_command_approval_skips_attribution_for_a_read_denied_script(
+    grant_scope: Option<PermissionGrantScope>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    write_remote_plugin_script_and_config(home.as_ref());
+    // The executor copy would match the trusted plugin byte for byte if read.
+    let executor_home = TempDir::new()?;
+    let script = write_remote_plugin_script_and_config(&executor_home).canonicalize()?;
+    let command = shlex::try_join(["/bin/sh", script.to_string_lossy().as_ref()])?;
+    if grant_scope.is_some() {
+        let args = serde_json::json!({
+            "permissions": {"file_system": {"write": [script.parent().unwrap()]}}
+        });
+        mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("grant"),
+                ev_function_call("grant", "request_permissions", &args.to_string()),
+                ev_completed("grant"),
+            ]),
+        )
+        .await;
+    }
+    let request = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("plugin"),
+            core_test_support::responses::ev_exec_command_call_with_args(
+                "plugin",
+                &serde_json::json!({
+                    "cmd": command,
+                    "login": false,
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Run the plugin?",
+                }),
+            ),
+            ev_completed("plugin"),
+        ]),
+    )
+    .await;
+    let base_url = server.uri();
+    let test = test_codex()
+        .with_home(home)
+        .with_model("gpt-5.2")
+        .with_exec_server_url(executor.websocket_url.clone())
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = base_url;
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .unwrap();
+        })
+        .build(&server)
+        .await?;
+    let manager = test.thread_manager.environment_manager();
+    manager
+        .default_environment()
+        .unwrap()
+        .wait_until_ready()
+        .await?;
+    let mut policy = PermissionProfile::workspace_write().file_system_sandbox_policy();
+    let deny_script = FileSystemSandboxEntry::new(
+        codex_utils_absolute_path::AbsolutePathBuf::try_from(script)?.into(),
+        FileSystemAccessMode::Deny,
+    );
+    if grant_scope.is_none() {
+        policy.entries.push(deny_script.clone());
+    }
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run the plugin".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::OnRequest),
+                permission_profile: Some(PermissionProfile::from_runtime_permissions(
+                    &policy,
+                    NetworkSandboxPolicy::Restricted,
+                )),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    if let Some(scope) = grant_scope {
+        let request = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::RequestPermissions(request) => Some(request.clone()),
+            _ => None,
+        })
+        .await;
+        // Grant the directory with a read denial on the script itself.
+        let mut permissions = request.permissions;
+        let file_system = permissions.file_system.as_mut().unwrap();
+        file_system.entries.push(deny_script);
+        test.codex
+            .submit(Op::RequestPermissionsResponse {
+                id: request.call_id,
+                response: RequestPermissionsResponse {
+                    permissions,
+                    scope,
+                    strict_auto_review: false,
+                },
+            })
+            .await?;
+    }
+    let prompt = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecApprovalRequest(prompt) => Some(prompt.clone()),
+        _ => None,
+    })
+    .await;
+    test.codex.shutdown_and_wait().await?;
+    assert_eq!((prompt.plugin_id, prompt.script_path), (None, None));
+    request.single_request();
     Ok(())
 }
 

@@ -850,8 +850,7 @@ impl Session {
                             ]
                         }),
                         environment
-                            .filter(|_| !human_once && ctx.network_approval_context.is_none())
-                            .map(|env| env.environment().as_ref()),
+                            .filter(|_| !human_once && ctx.network_approval_context.is_none()),
                         command_approval,
                     )
                     .await

@@ -18,6 +18,7 @@ use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use crate::store::validate_plugin_version_segment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_plugin::PluginId;
@@ -337,8 +338,9 @@ impl TrustedPluginRoots {
         command: &[String],
         cwd: &PathUri,
         file_system: &dyn ExecutorFileSystem,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> Option<PluginCommandAttribution> {
-        self.executor_candidate(command, cwd, file_system, PluginVersionMatch::Any)
+        self.executor_candidate(command, cwd, file_system, sandbox, PluginVersionMatch::Any)
             .await
             .map(|candidate| candidate.matched.attribution())
     }
@@ -351,10 +353,16 @@ impl TrustedPluginRoots {
         cwd: &PathUri,
         file_system: &dyn ExecutorFileSystem,
     ) -> Option<ResolvedPluginMetricsOperation> {
-        self.executor_candidate(command, cwd, file_system, PluginVersionMatch::Exact)
-            .await?
-            .matched
-            .metrics_operation()
+        self.executor_candidate(
+            command,
+            cwd,
+            file_system,
+            /*sandbox*/ None,
+            PluginVersionMatch::Exact,
+        )
+        .await?
+        .matched
+        .metrics_operation()
     }
 
     async fn executor_candidate(
@@ -362,6 +370,7 @@ impl TrustedPluginRoots {
         command: &[String],
         cwd: &PathUri,
         file_system: &dyn ExecutorFileSystem,
+        sandbox: Option<&FileSystemSandboxContext>,
         version_match: PluginVersionMatch,
     ) -> Option<ExecutorAttributionCandidate<'_>> {
         if self.roots.is_empty() {
@@ -381,20 +390,13 @@ impl TrustedPluginRoots {
         }) {
             return None;
         }
-        let script = file_system
-            .canonicalize(&script, /*sandbox*/ None)
-            .await
-            .ok()?;
+        let script = file_system.canonicalize(&script, sandbox).await.ok()?;
         let candidates = self.local_candidates_for_executor_script(&script, version_match);
         if candidates.is_empty() {
             return None;
         }
         let metadata = file_system
-            .get_metadata(
-                &script,
-                GetMetadataOptions::default(),
-                /*sandbox*/ None,
-            )
+            .get_metadata(&script, GetMetadataOptions::default(), sandbox)
             .await
             .ok()?;
         if !metadata.is_file
@@ -405,7 +407,7 @@ impl TrustedPluginRoots {
             return None;
         }
         let contents = file_system
-            .read_file(&script, ReadFileOptions::default(), /*sandbox*/ None)
+            .read_file(&script, ReadFileOptions::default(), sandbox)
             .await
             .ok()?;
         let mut matches = candidates

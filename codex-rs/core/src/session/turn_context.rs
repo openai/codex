@@ -23,6 +23,7 @@ use arc_swap::ArcSwap;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_file_system::EnvironmentAccess;
@@ -767,8 +768,27 @@ impl TurnContext {
     ) -> Option<PluginCommandAttribution> {
         self.extension_data
             .get::<TrustedPluginRoots>()?
-            .resolve_executor_attribution(command, cwd, file_system)
+            .resolve_executor_attribution(command, cwd, file_system, /*sandbox*/ None)
             .await
+    }
+
+    pub(crate) async fn plugin_attribution_for_remote_approval(
+        &self,
+        command: &[String],
+        cwd: &PathUri,
+        environment: &TurnEnvironment,
+    ) -> Option<PluginCommandAttribution> {
+        let roots = self.extension_data.get::<TrustedPluginRoots>()?;
+        let fs = environment.environment().get_filesystem_without_reconnect();
+        let grants = self.granted_permissions(&environment.selection.environment_id);
+        let sandbox = environment.sandbox_context(grants);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            roots.resolve_executor_attribution(command, cwd, fs.as_ref(), Some(&sandbox)),
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Legacy: returns the frozen initial-turn approval policy.

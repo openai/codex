@@ -76,7 +76,6 @@ use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::InlineAttachmentStore;
 use codex_connectors::connector_runtime_context_key;
 use codex_context_fragments::RenderedFragment;
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::prefix_rule_migration;
 use codex_extension_api::ConversationHistorySnapshot;
@@ -3456,7 +3455,7 @@ impl Session {
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
-        command_environment: Option<&Environment>,
+        command_environment: Option<&TurnEnvironment>,
         mut command_approval: Option<&mut command_approval::CommandApproval>,
     ) -> ReviewDecision {
         let (network_approval_context, turn_binding) = network_approval.unzip();
@@ -3487,17 +3486,11 @@ impl Session {
             )
         });
         let plugin_attribution = if let Some(environment) =
-            command_environment.filter(|env| env.is_remote())
+            command_environment.filter(|env| env.environment().is_remote())
         {
-            // A slow attribution lookup should not prevent the approval prompt.
-            let fs = environment.get_filesystem_without_reconnect();
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                turn_context.plugin_attribution_for_executor_command(&command, &cwd, fs.as_ref()),
-            )
-            .await
-            .ok()
-            .flatten()
+            turn_context
+                .plugin_attribution_for_remote_approval(&command, &cwd, environment)
+                .await
         } else {
             cwd.to_abs_path()
                 .ok()
