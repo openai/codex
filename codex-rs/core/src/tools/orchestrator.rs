@@ -127,7 +127,6 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = turn_ctx.strict_auto_review_enabled();
         // 1) Approval
-        let mut initial_approval_source = None;
 
         let environment = tool.turn_environment(req);
         // Keep :slash_tmp restrictions when the executor path convention is unknown.
@@ -162,69 +161,53 @@ impl ToolOrchestrator {
             requirement,
             ExecApprovalRequirement::NeedsHumanApproval { .. }
         );
-        match &requirement {
-            ExecApprovalRequirement::Skip { .. } => {
-                if strict_auto_review {
-                    let action = tool
-                        .approval_action(req, &tool_ctx.call_id)
-                        .map_err(|err| {
-                            ToolError::Rejected(format!("could not prepare approval action: {err}"))
-                        })?;
-                    let approval_ctx = ApprovalContext {
-                        exec_requirement: Some(requirement.clone()),
-                        review_context: GuardianReviewContext::from(&tool_ctx.step_context),
-                        cancellation_token: Some(tool_ctx.cancellation_token.clone()),
-                        call_id: tool_ctx.call_id.clone(),
-                        tool_name: tool_ctx.tool_name.clone(),
-                        strict_auto_review,
-                        approval_reason: None,
-                        retry_reason: None,
-                        network_approval_context: None,
-                    };
-                    let approval = tool_ctx
-                        .session
-                        .request_approval(action, approval_ctx, tool.command_approval())
-                        .await;
-                    approval.result?;
-                    initial_approval_source = approval.source;
-                } else {
-                    otel.tool_decision(
-                        &tool_ctx.tool_name,
-                        otel_ci,
-                        &ReviewDecision::Approved,
-                        Some(ToolDecisionSource::Config),
-                    );
-                }
+        let approval_context = || ApprovalContext {
+            exec_requirement: Some(requirement.clone()),
+            review_context: GuardianReviewContext::from(&tool_ctx.step_context),
+            cancellation_token: Some(tool_ctx.cancellation_token.clone()),
+            call_id: tool_ctx.call_id.clone(),
+            tool_name: tool_ctx.tool_name.clone(),
+            strict_auto_review,
+            approval_reason: match &requirement {
+                ExecApprovalRequirement::NeedsApproval { reason, .. }
+                | ExecApprovalRequirement::NeedsHumanApproval { reason } => reason.clone(),
+                ExecApprovalRequirement::Skip { .. }
+                | ExecApprovalRequirement::Forbidden { .. } => None,
+            },
+            retry_reason: None,
+            network_approval_context: None,
+        };
+        let request_approval = async |tool: &mut T, action, context| {
+            let approval = tool_ctx
+                .session
+                .request_approval(action, context, tool.command_approval())
+                .await;
+            approval.result.map(|_| approval.source)
+        };
+        let initial_approval_source = match &requirement {
+            ExecApprovalRequirement::Skip { .. } if !strict_auto_review => {
+                otel.tool_decision(
+                    &tool_ctx.tool_name,
+                    otel_ci,
+                    &ReviewDecision::Approved,
+                    Some(ToolDecisionSource::Config),
+                );
+                None
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason.clone()));
             }
-            ExecApprovalRequirement::NeedsApproval { reason, .. }
-            | ExecApprovalRequirement::NeedsHumanApproval { reason } => {
+            ExecApprovalRequirement::Skip { .. }
+            | ExecApprovalRequirement::NeedsApproval { .. }
+            | ExecApprovalRequirement::NeedsHumanApproval { .. } => {
                 let action = tool
                     .approval_action(req, &tool_ctx.call_id)
                     .map_err(|err| {
                         ToolError::Rejected(format!("could not prepare approval action: {err}"))
                     })?;
-                let approval_ctx = ApprovalContext {
-                    exec_requirement: Some(requirement.clone()),
-                    review_context: GuardianReviewContext::from(&tool_ctx.step_context),
-                    cancellation_token: Some(tool_ctx.cancellation_token.clone()),
-                    call_id: tool_ctx.call_id.clone(),
-                    tool_name: tool_ctx.tool_name.clone(),
-                    strict_auto_review,
-                    approval_reason: reason.clone(),
-                    retry_reason: None,
-                    network_approval_context: None,
-                };
-                let approval = tool_ctx
-                    .session
-                    .request_approval(action, approval_ctx, tool.command_approval())
-                    .await;
-                approval.result?;
-                initial_approval_source = approval.source;
+                request_approval(tool, action, approval_context()).await?
             }
-        }
+        };
 
         // 2) First attempt under the selected sandbox.
         let has_denied_reads = file_system_sandbox_policy
@@ -518,38 +501,18 @@ impl ToolOrchestrator {
                 };
 
                 if let Some(action) = retry_action {
-                    let approval_reason = match &requirement {
-                        ExecApprovalRequirement::NeedsApproval { reason, .. }
-                        | ExecApprovalRequirement::NeedsHumanApproval { reason } => reason.clone(),
-                        ExecApprovalRequirement::Skip { .. }
-                        | ExecApprovalRequirement::Forbidden { .. } => None,
-                    };
                     let approval_ctx = ApprovalContext {
-                        exec_requirement: Some(requirement.clone()),
-                        review_context: GuardianReviewContext::from(&tool_ctx.step_context),
-                        cancellation_token: Some(tool_ctx.cancellation_token.clone()),
-                        call_id: tool_ctx.call_id.clone(),
-                        tool_name: tool_ctx.tool_name.clone(),
-                        strict_auto_review,
-                        approval_reason,
                         retry_reason: Some(retry_reason),
-                        network_approval_context: network_approval_context.clone(),
+                        network_approval_context,
+                        ..approval_context()
                     };
 
-                    if human_once && network_approval_context.is_some() {
+                    if human_once && approval_ctx.network_approval_context.is_some() {
                         let mut network_ctx = approval_ctx.clone();
                         network_ctx.exec_requirement = None;
-                        tool_ctx
-                            .session
-                            .request_approval(action.clone(), network_ctx, tool.command_approval())
-                            .await
-                            .result?;
+                        request_approval(tool, action.clone(), network_ctx).await?;
                     }
-                    tool_ctx
-                        .session
-                        .request_approval(action, approval_ctx, tool.command_approval())
-                        .await
-                        .result?;
+                    request_approval(tool, action, approval_ctx).await?;
                 }
 
                 // Second attempt.
