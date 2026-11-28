@@ -1,5 +1,6 @@
 use crate::policy_transforms::should_require_platform_sandbox;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::ffi::CString;
@@ -238,9 +239,15 @@ pub fn find_executable_in_search_paths(
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let cwd_is_root = cwd.parent().is_none();
     // Full-disk policies intentionally have no enumerated writable roots.
-    let full_disk_write = file_system_policy.has_full_disk_write_access();
-    let writable_roots = file_system_policy
-        .get_writable_roots_with_cwd_inheriting_root_metadata(sandbox_policy_cwd)
+    let resolved = file_system_policy
+        .resolve_for_enforcement(
+            sandbox_policy_cwd,
+            FileSystemPolicyProjection::PreSandboxExecutable,
+        )
+        .ok()?;
+    let full_disk_write = resolved.has_full_disk_write_access;
+    let writable_roots = resolved
+        .writable_roots
         .into_iter()
         .map(|mut root| {
             if let Ok(canonical) = std::fs::canonicalize(&root.root)

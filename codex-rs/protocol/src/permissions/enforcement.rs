@@ -1,5 +1,7 @@
 //! Projects filesystem permissions for each sandbox, preserving mutable paths where the backend binds them.
 
+use super::FileSystemAccessMode;
+use super::FileSystemSandboxEntry;
 use super::FileSystemSandboxPolicy;
 use super::LocalPolicyContext;
 use super::normalize_effective_absolute_path;
@@ -17,12 +19,16 @@ pub enum FileSystemPolicyProjection {
     PreserveMutableRoots,
     /// Inherit root metadata writes from the root mount and retain literal paths for read denials.
     LinuxMounts,
+    /// Only configured restrictions can make a host executable eligible to run before confinement.
+    PreSandboxExecutable,
 }
 
 impl FileSystemPolicyProjection {
     pub(super) fn resolve_writable_path(self, path: AbsolutePathBuf) -> AbsolutePathBuf {
         match self {
-            Self::Native | Self::LinuxMounts => normalize_effective_absolute_path(path),
+            Self::Native | Self::LinuxMounts | Self::PreSandboxExecutable => {
+                normalize_effective_absolute_path(path)
+            }
             Self::PreserveMutableRoots => path.normalize_system_aliases().unwrap_or(path),
         }
     }
@@ -47,6 +53,28 @@ pub struct ResolvedFileSystemPermissions {
 impl FileSystemSandboxPolicy {
     /// Resolve the roots for one enforcement operation after binding executor-owned paths.
     pub fn resolve_for_enforcement(
+        &self,
+        cwd: &Path,
+        projection: FileSystemPolicyProjection,
+    ) -> io::Result<ResolvedFileSystemPermissions> {
+        // Legacy workspace policies encode discovered gitdirs as optional read entries. A
+        // repository cannot use one of those carveouts to authorize its own host-side helper.
+        let mut policy = std::borrow::Cow::Borrowed(self);
+        let optional_read = |entry: &FileSystemSandboxEntry| {
+            entry.access == FileSystemAccessMode::Read && entry.skips_missing_path()
+        };
+        if projection == FileSystemPolicyProjection::PreSandboxExecutable
+            && self.entries.iter().any(optional_read)
+        {
+            policy
+                .to_mut()
+                .entries
+                .retain(|entry| !optional_read(entry));
+        }
+        policy.resolve_for_enforcement_impl(cwd, projection)
+    }
+
+    fn resolve_for_enforcement_impl(
         &self,
         cwd: &Path,
         projection: FileSystemPolicyProjection,

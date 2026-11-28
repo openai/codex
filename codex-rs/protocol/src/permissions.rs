@@ -1474,18 +1474,6 @@ impl FileSystemSandboxPolicy {
         self.get_writable_roots_with_cwd_impl(cwd, FileSystemPolicyProjection::Native)
     }
 
-    /// Omits redundant root-metadata mounts when the filesystem root is writable.
-    ///
-    /// Explicit root metadata writes still disable their default protection. Linux
-    /// inherits those writes from its root bind so a metadata symlink cannot cause
-    /// a second bind to reopen its target under an explicitly denied directory.
-    pub fn get_writable_roots_with_cwd_inheriting_root_metadata(
-        &self,
-        cwd: &Path,
-    ) -> Vec<WritableRoot> {
-        self.get_writable_roots_with_cwd_impl(cwd, FileSystemPolicyProjection::LinuxMounts)
-    }
-
     /// Reports full-disk writes when every explicit writable path can be projected locally.
     /// Preserves the legacy fallback used by startup checks and diagnostic labels,
     /// using this host's path convention.
@@ -1615,6 +1603,7 @@ impl FileSystemSandboxPolicy {
                 cfg!(target_os = "linux")
             }
             FileSystemPolicyProjection::PreserveMutableRoots => cfg!(target_os = "macos"),
+            FileSystemPolicyProjection::PreSandboxExecutable => false,
         };
         let resolved_gitdir_entries: Vec<ResolvedFileSystemEntry> = if include_resolved_gitdirs {
             effective_entries
@@ -1676,7 +1665,7 @@ impl FileSystemSandboxPolicy {
             .ok()
             .map(|cwd| projection.resolve_writable_path(cwd));
 
-        dedup_absolute_paths(
+        let mut roots: Vec<WritableRoot> = dedup_absolute_paths(
             writable_entries
                 .iter()
                 .map(|entry| entry.effective_path.clone())
@@ -1701,11 +1690,15 @@ impl FileSystemSandboxPolicy {
             let protected_metadata_names =
                 protected_metadata_names_for_writable_root(matching, &root, &raw_writable_roots);
             let protect_missing_dot_codex = effective_cwd.as_ref() == Some(&root);
-            let mut read_only_subpaths: Vec<AbsolutePathBuf> =
-                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
-                    .into_iter()
-                    .filter(|path| !has_explicit_resolved_path_entry(resolved_entries, path))
-                    .collect();
+            let mut read_only_subpaths =
+                if projection == FileSystemPolicyProjection::PreSandboxExecutable {
+                    Vec::new()
+                } else {
+                    default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
+                        .into_iter()
+                        .filter(|path| !has_explicit_resolved_path_entry(resolved_entries, path))
+                        .collect()
+                };
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
@@ -1776,7 +1769,13 @@ impl FileSystemSandboxPolicy {
                 ),
             }
         })
-        .collect()
+        .collect();
+        if projection == FileSystemPolicyProjection::PreSandboxExecutable {
+            for root in &mut roots {
+                root.protected_metadata_names.clear();
+            }
+        }
+        roots
     }
 
     /// Returns explicit unreadable roots resolved against the provided cwd.

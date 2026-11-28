@@ -94,7 +94,7 @@ fn child_workdir_does_not_probe_or_launch_writable_parent_bwrap() {
 }
 
 #[test]
-fn full_disk_write_with_managed_network_does_not_probe_writable_bwrap() {
+fn managed_network_does_not_probe_writable_bwrap() {
     let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let bin = temp.path().join("bin");
     let cwd = temp.path().join("cwd");
@@ -123,7 +123,7 @@ fn full_disk_write_with_managed_network_does_not_probe_writable_bwrap() {
             .unwrap()
     };
     // Confirm this host reaches the capability probe without needing working
-    // namespaces or bundled bubblewrap. Both invocations use managed networking.
+    // namespaces or bundled bubblewrap.
     let control_marker = temp.path().join("control");
     let control = run(&PermissionProfile::read_only(), &control_marker);
     assert!(
@@ -136,5 +136,42 @@ fn full_disk_write_with_managed_network_does_not_probe_writable_bwrap() {
     assert!(
         !marker.exists(),
         "writable bwrap ran before network confinement: {output:?}"
+    );
+
+    std::fs::write(temp.path().join(".git"), "gitdir: bin\n").unwrap();
+    let legacy = PermissionProfile::workspace_write_with(
+        &[AbsolutePathBuf::try_from(temp.path()).unwrap()],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
+    .materialize_project_roots_with_workspace_roots(&[
+        AbsolutePathBuf::try_from(cwd.as_path()).unwrap()
+    ]);
+    let output = run(&legacy, &marker);
+    assert!(
+        !marker.exists(),
+        "legacy gitfile carveout authorized its own bwrap: {output:?}"
+    );
+    std::fs::remove_file(temp.path().join(".git")).unwrap();
+
+    // A failed metadata walk must not make a writable PATH look read-only.
+    let mut link = temp.path().join(".codex");
+    for i in 0..48 {
+        let next = temp.path().join(format!("hop-{i}"));
+        std::os::unix::fs::symlink(&next, &link).unwrap();
+        link = next;
+    }
+    std::fs::create_dir(&link).unwrap();
+    let policy = PermissionProfile::read_only()
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(&cwd, &[AbsolutePathBuf::try_from(temp.path()).unwrap()]);
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let marker = temp.path().join("unresolved");
+    let output = run(&profile, &marker);
+    assert!(
+        !marker.exists(),
+        "unresolved writable bwrap was probed: {output:?}"
     );
 }

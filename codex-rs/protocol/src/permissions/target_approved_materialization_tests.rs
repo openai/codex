@@ -159,7 +159,16 @@ fn linux_root_metadata_writes_inherit_the_root_without_reopening_other_paths() {
             Deny,
         ),
     ]);
-    let roots = policy.get_writable_roots_with_cwd_inheriting_root_metadata(&cwd);
+    let linux_roots = |policy: &FileSystemSandboxPolicy| {
+        policy
+            .resolve_for_enforcement(
+                &cwd,
+                crate::permissions::FileSystemPolicyProjection::LinuxMounts,
+            )
+            .unwrap()
+            .writable_roots
+    };
+    let roots = linux_roots(&policy);
     assert_eq!(
         roots[0].protected_metadata_names,
         PROTECTED_METADATA_PATH_NAMES
@@ -173,7 +182,7 @@ fn linux_root_metadata_writes_inherit_the_root_without_reopening_other_paths() {
         .map(|name| entry(root.join_descendant(name).unwrap(), Write))
         .collect::<Vec<_>>();
     policy.entries.extend(metadata.clone());
-    let roots = policy.get_writable_roots_with_cwd_inheriting_root_metadata(&cwd);
+    let roots = linux_roots(&policy);
     assert_eq!(
         roots
             .iter()
@@ -185,7 +194,7 @@ fn linux_root_metadata_writes_inherit_the_root_without_reopening_other_paths() {
 
     let standalone = FileSystemSandboxPolicy::restricted(metadata);
     assert_eq!(
-        standalone.get_writable_roots_with_cwd_inheriting_root_metadata(&cwd),
+        linux_roots(&standalone),
         standalone.get_writable_roots_with_cwd(&cwd),
     );
 }
