@@ -31,6 +31,7 @@ thiserror = { workspace = true }
 tracelogging = "=1.2.3"
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_SystemInformation",

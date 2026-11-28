@@ -1,7 +1,7 @@
 //! Translate canonical permissions into MXC path grants.
 //! Denies and read-only carveouts remain separate kernel policy lists.
 //! Missing deny parents are created and marked before deny globs and volume grants are expanded.
-//! Alias limitations are documented in the crate README.
+//! Writable volume roots expand only when no restrictive alias names the same directory.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -21,6 +21,8 @@ use codex_windows_sandbox::resolve_windows_deny_read_paths;
 use mxc_sdk::mxc_common::cmdline::CommandLineContext;
 use mxc_sdk::mxc_common::cmdline::CommandLineError;
 use mxc_sdk::mxc_common::cmdline::cmdline_from_argv_for_context;
+use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
+use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
 use mxc_sdk::v1::ContainerRequest;
 use mxc_sdk::v1::Containment;
 use mxc_sdk::v1::FilesystemPolicy;
@@ -65,6 +67,15 @@ pub enum PolicyError {
         #[source]
         source: std::io::Error,
     },
+    #[error(
+        "cannot determine whether writable MXC volume {volume} aliases restricted directory {restriction}"
+    )]
+    IndeterminateVolumeAlias {
+        volume: PathBuf,
+        restriction: PathBuf,
+    },
+    #[error("writable MXC volume {volume} is also denied through {denial}")]
+    ConflictingVolumeDenial { volume: PathBuf, denial: PathBuf },
     #[error(transparent)]
     Path(#[from] std::io::Error),
     #[error(transparent)]
@@ -200,13 +211,13 @@ pub(super) fn build_request(
     let fs = materialize_volume_roots(policy.clone(), &volumes, &read_volumes)?;
     let absolute_cwd = AbsolutePathBuf::from_absolute_path(cwd)
         .map_err(|error| PolicyError::PolicyResolution(error.to_string()))?;
-    let (roots, readable_roots, denied_paths) = if fs == policy {
+    let (roots, denied_paths) = if fs == policy {
         let resolved =
             fs.resolve_for_enforcement(cwd, FileSystemPolicyProjection::PreserveMutableRoots)?;
         #[cfg(windows)]
         crate::windows::log_launch("phase=resolve_deny_paths");
         let denies = expand_windows_deny_read_paths(&resolved, &absolute_cwd);
-        (resolved.writable_roots, resolved.readable_roots, denies)
+        (resolved.writable_roots, denies)
     } else {
         // A symbolic root deny sets the default on every volume. Expanding it into ACL
         // targets would mask narrower grants and probe disconnected drives.
@@ -215,12 +226,10 @@ pub(super) fn build_request(
         } else {
             fs.get_writable_roots_with_cwd_preserving_mutable_paths(cwd)
         };
-        let readable_roots = fs.get_readable_roots_with_cwd(cwd);
         #[cfg(windows)]
         crate::windows::log_launch("phase=resolve_deny_paths");
         (
             roots,
-            readable_roots,
             resolve_windows_deny_read_paths(&policy, &absolute_cwd),
         )
     };
@@ -236,18 +245,38 @@ pub(super) fn build_request(
             }
         }
     }
-    let mut read = collect_paths(
-        readable_roots
-            .into_iter()
-            .filter(|path| !fs.can_write_local_path_with_cwd(path.as_path(), cwd))
-            .map(|path| path.to_path_buf()),
-    )?;
-    let deny = collect_paths(
+    // All symbolic read roots have been bound above. Keep the declared spelling:
+    // canonicalizing a top-level read-only junction can collapse it into an
+    // explicit writable drive before BaseContainer sees the restriction.
+    let mut read = NativePaths::new();
+    for entry in &fs.entries {
+        if let FileSystemPath::Path { path } = &entry.path
+            && entry.access == FileSystemAccessMode::Read
+            && let Ok(local) = path.to_abs_path()
+            && fs.can_read_local_path_with_cwd(&local, cwd)
+            && !fs.can_write_local_path_with_cwd(&local, cwd)
+        {
+            read.insert(path.clone(), local.into_path_buf());
+        }
+    }
+    let mut deny = collect_paths(
         denied_paths
             .map_err(PolicyError::PolicyResolution)?
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf),
     )?;
+    // The shared resolver omits the cwd drive root for a default root denial.
+    // An absolute drive-root denial also constrains aliases of that drive.
+    for entry in &policy.entries {
+        if let FileSystemPath::Path { path } = &entry.path
+            && entry.access == FileSystemAccessMode::Deny
+            && let Ok(local) = path.to_abs_path()
+            && local.parent().is_none()
+            && !fs.can_read_local_path_with_cwd(&local, cwd)
+        {
+            deny.insert(path.clone(), local.into_path_buf());
+        }
+    }
     let carveouts = collect_paths(roots.into_iter().flat_map(|root| {
         let protected = root
             .protected_metadata_names
@@ -269,8 +298,9 @@ pub(super) fn build_request(
     if policy.include_platform_defaults() {
         read.extend(collect_paths(platform_read_roots.iter().cloned())?);
     }
-    write.retain(|key, _| !carveouts.contains_key(key) && !deny.contains_key(key));
-    read.retain(|key, _| !write.contains_key(key) && !deny.contains_key(key));
+    read.retain(|key, _| {
+        (!write.contains_key(key) || carveouts.contains_key(key)) && !deny.contains_key(key)
+    });
     let volume_roots = volume_roots
         .iter()
         .map(PathUri::from_host_native_path)
@@ -282,9 +312,7 @@ pub(super) fn build_request(
     // BaseContainer owns alias precedence for the emitted paths. Do not call
     // MXC's object normalizer: its metadata preflight rejects usable SMB grants
     // and inaccessible deny paths before the native API can evaluate them.
-    // The hard-link and volume-root alias tradeoffs are intentional; see README.
-    // Read-only roots already grant recursive access; only expand writable roots.
-    let mut write = expand_volume_roots(write, &volume_roots)?;
+    let mut write = expand_volume_roots(write, &volume_roots, &read, &deny)?;
     write.retain(|key, _| !carveouts.contains_key(key) && !deny.contains_key(key));
     // Resolve equal-path write overrides before reaching MXC so the native
     // API receives one effective access mode for each path identity.
@@ -394,7 +422,11 @@ fn prune_unavailable_volume_roots(paths: &mut NativePaths, volume_roots: &HashSe
         }
         match std::fs::read_dir(path) {
             Ok(_) => true,
-            Err(error) => !inaccessible_volume(&error),
+            // An unlistable root can still expose known children. Keep its
+            // restrictions and compare its aliases before generating grants.
+            Err(error) => {
+                error.kind() == std::io::ErrorKind::PermissionDenied || !inaccessible_volume(&error)
+            }
         }
     });
 }
@@ -445,13 +477,46 @@ pub(super) fn materialize_volume_roots(
 // root after policy construction is not granted. MXC/PSEC still enforces
 // restrictions on junction-resolved targets at access time.
 fn expand_volume_roots(
-    paths: NativePaths,
+    mut paths: NativePaths,
     volume_roots: &HashSet<PathUri>,
+    readonly: &NativePaths,
+    denied: &NativePaths,
 ) -> Result<NativePaths, PolicyError> {
-    let mut expanded = NativePaths::new();
-    for (key, path) in paths {
-        if volume_roots.contains(&key) || path.parent().is_none() {
-            match std::fs::read_dir(&path).and_then(Iterator::collect::<std::io::Result<Vec<_>>>) {
+    let is_volume =
+        |key: &PathUri, path: &Path| volume_roots.contains(key) || path.parent().is_none();
+    if !paths.iter().any(|(key, path)| is_volume(key, path)) {
+        return Ok(paths);
+    }
+    let denied_dirs: Vec<_> = directory_candidates(denied).collect();
+    let readonly_dirs: Vec<_> = directory_candidates(readonly).collect();
+    let restricted_dirs: Vec<_> = readonly_dirs
+        .iter()
+        .copied()
+        .chain(denied_dirs.iter().copied())
+        .collect();
+    let writable: Vec<_> = paths.values().map(PathBuf::as_path).collect();
+    let mut children = Vec::new();
+    let mut unavailable = Vec::new();
+    for (key, path) in &paths {
+        if is_volume(key, path) {
+            let indeterminate = |restriction: &Path| PolicyError::IndeterminateVolumeAlias {
+                volume: path.clone(),
+                restriction: restriction.to_owned(),
+            };
+            // Even an inferred read-only metadata grant could reopen this volume.
+            if let Some(denial) = matching_directory(path, &denied_dirs).map_err(indeterminate)? {
+                return Err(PolicyError::ConflictingVolumeDenial {
+                    volume: path.clone(),
+                    denial: denial.to_owned(),
+                });
+            }
+            if matching_directory(path, &readonly_dirs)
+                .map_err(indeterminate)?
+                .is_some()
+            {
+                continue;
+            }
+            match std::fs::read_dir(path).and_then(Iterator::collect::<std::io::Result<Vec<_>>>) {
                 Ok(entries) => {
                     for entry in entries {
                         let child = entry.path();
@@ -459,29 +524,99 @@ fn expand_volume_roots(
                             continue;
                         }
                         // Windows supplies the file type with directory entries.
-                        // Only resolve links: broken targets prevent PSEC startup.
-                        if entry.file_type().is_ok_and(|kind| kind.is_symlink())
-                            && std::fs::metadata(&child).is_err()
+                        let Ok(kind) = entry.file_type() else {
+                            continue;
+                        };
+                        if kind.is_symlink()
+                            && !can_generate_link_grant(&child, &restricted_dirs, &writable)
                         {
                             continue;
                         }
-                        expanded.insert(PathUri::from_host_native_path(&child)?, child);
+                        children.push((PathUri::from_host_native_path(&child)?, child));
                     }
                 }
                 // GetLogicalDrives includes disconnected and empty removable
                 // drives. They must not prevent commands on available volumes.
-                Err(error) if inaccessible_volume(&error) => continue,
+                Err(error) if inaccessible_volume(&error) => unavailable.push(key.clone()),
                 Err(error) => {
                     return Err(PolicyError::EnumerateVolume {
-                        path,
+                        path: path.clone(),
                         source: error,
                     });
                 }
             }
         }
-        expanded.insert(key, path);
     }
-    Ok(expanded)
+    for key in unavailable {
+        paths.remove(&key);
+    }
+    paths.extend(children);
+    Ok(paths)
+}
+
+fn directory_candidates(paths: &NativePaths) -> impl Iterator<Item = &Path> {
+    // Ordinary files and missing entries cannot be aliases of a directory. Keep
+    // their native restrictions without asking the filesystem for a file ID.
+    paths
+        .values()
+        .filter(|path| match std::fs::symlink_metadata(path) {
+            Ok(metadata) => !metadata.is_file(),
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        })
+        .map(PathBuf::as_path)
+}
+
+// BaseContainer applies the strictest grant to equivalent directories. A
+// synthesized child would override that restriction by being more specific.
+fn matching_directory<'a>(
+    path: &Path,
+    directories: &[&'a Path],
+) -> Result<Option<&'a Path>, &'a Path> {
+    let mut unknown = None;
+    for &directory in directories {
+        match compare_existing_filesystem_objects(path, directory) {
+            ExistingObjectComparison::Same => return Ok(Some(directory)),
+            ExistingObjectComparison::Different => {}
+            ExistingObjectComparison::Unknown => {
+                #[cfg(windows)]
+                if let Ok(same) = crate::windows::same_final_directory(path, directory) {
+                    if same {
+                        return Ok(Some(directory));
+                    }
+                    continue;
+                }
+                unknown.get_or_insert(directory);
+            }
+        }
+    }
+    unknown.map_or(Ok(None), Err)
+}
+
+fn can_generate_link_grant(link: &Path, restricted: &[&Path], writable: &[&Path]) -> bool {
+    let Ok(metadata) = std::fs::metadata(link) else {
+        return false;
+    };
+    if restricted.is_empty() {
+        return true;
+    }
+    let Ok(mut target) = std::fs::canonicalize(link) else {
+        return false;
+    };
+    // Hard-linked file names keep independent permissions. Compare directories only.
+    if metadata.is_file() {
+        target.pop();
+    }
+    // A junction on a second writable drive can land beneath a restricted
+    // root. Apply the nearest explicit directory grant to its resolved target.
+    for ancestor in target.ancestors() {
+        if matching_directory(ancestor, restricted) != Ok(None) {
+            return false;
+        }
+        if matches!(matching_directory(ancestor, writable), Ok(Some(_))) {
+            return true;
+        }
+    }
+    true
 }
 
 fn collect_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<NativePaths, PolicyError> {

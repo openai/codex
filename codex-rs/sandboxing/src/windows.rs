@@ -91,12 +91,11 @@ impl SandboxBackend for WindowsToken<'_> {
 ///
 /// The elevated Windows backend consumes extra deny-read paths plus explicit
 /// read and write roots during setup/refresh. The unelevated restricted-token
-/// backend only consumes extra deny-write carveouts on top of the legacy
-/// `WorkspaceWrite` allow set. Read-root overrides are layered on top of the
-/// baseline helper roots that the elevated setup path needs to launch the
-/// sandboxed command; split policies that opt into platform defaults carry
-/// that explicitly with the override.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// backend derives its writable roots from the permission profile and only
+/// consumes extra deny-write carveouts here. Read-root overrides are layered on
+/// top of the baseline helper roots that elevated setup needs to launch the
+/// command. Split policies that opt into platform defaults carry that explicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsSandboxFilesystemOverrides {
     pub read_roots_override: Option<Vec<PathBuf>>,
     pub read_roots_include_platform_defaults: bool,
@@ -233,7 +232,7 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     let legacy_writable_roots =
         compatibility_writable_roots_for_permission_profile(permission_profile, sandbox_policy_cwd);
     let split_writable_roots = resolved.writable_roots;
-    let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
+    let mut legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
         .map(|root| normalize_windows_override_path(root.root.as_path()))
         .collect::<std::result::Result<_, _>>()?;
@@ -242,6 +241,15 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         .map(|root| normalize_windows_override_path(root.root.as_path()))
         .collect::<std::result::Result<_, _>>()?;
 
+    // WorkspaceWrite always adds cwd. The restricted token gets its write capabilities and
+    // allow ACLs from the actual roots, so cwd can be read-only or below a writable root.
+    // For a write grant at the filesystem root, the projected roots must still match exactly.
+    let cwd = normalize_windows_override_path(sandbox_policy_cwd.as_path())?;
+    if !split_root_paths.contains(&cwd)
+        && split_root_paths.iter().all(|root| root.parent().is_some())
+    {
+        legacy_root_paths.remove(&cwd);
+    }
     if legacy_root_paths != split_root_paths {
         return Err(
             "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"

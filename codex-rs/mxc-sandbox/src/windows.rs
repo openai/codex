@@ -1,7 +1,10 @@
 //! Resolve executor-local state and launch the decoded MXC helper request.
 
 use std::collections::HashMap;
+use std::io;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -10,8 +13,13 @@ use anyhow::Result;
 use anyhow::ensure;
 use codex_utils_path_uri::PathUri;
 use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows_sys::Win32::Globalization::CSTR_EQUAL;
+use windows_sys::Win32::Globalization::CompareStringOrdinal;
+use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_NT;
 use windows_sys::Win32::System::Com::COINIT_MULTITHREADED;
 use windows_sys::Win32::System::Com::CoInitializeEx;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
@@ -135,6 +143,71 @@ pub(super) fn implicit_read_roots(
         })
         .map(PathUri::from_host_native_path)
         .collect()
+}
+
+// SMB need not support FileIdInfo. Query the resolved NT names through handles
+// opened with zero requested access, including on directories denying metadata reads.
+pub(super) fn same_final_directory(left: &Path, right: &Path) -> io::Result<bool> {
+    let left = final_nt_path(left)?;
+    let right = final_nt_path(right)?;
+    // Both buffers contain exactly the wide name returned by the kernel.
+    let comparison = unsafe {
+        CompareStringOrdinal(
+            left.as_ptr(),
+            left.len() as i32,
+            right.as_ptr(),
+            right.len() as i32,
+            /*bignorecase*/ 1,
+        )
+    };
+    if comparison == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if comparison == CSTR_EQUAL {
+        return Ok(true);
+    }
+    // A share can export a local volume or the same directory as another
+    // share. Different redirector names do not establish distinct objects.
+    let local_disk = |name: &[u16]| {
+        String::from_utf16_lossy(name)
+            .strip_prefix(r"\Device\HarddiskVolume")
+            .and_then(|suffix| suffix.split('\\').next())
+            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if local_disk(&left) && local_disk(&right) {
+        return Ok(false);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "directory identities are unavailable across these NT namespaces",
+    ))
+}
+
+fn final_nt_path(path: &Path) -> io::Result<Vec<u16>> {
+    let directory = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let mut name = vec![0; 260];
+    loop {
+        // The handle stays open and name is writable for the supplied length.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                directory.as_raw_handle(),
+                name.as_mut_ptr(),
+                name.len() as u32,
+                VOLUME_NAME_NT,
+            )
+        } as usize;
+        if length == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if length < name.len() {
+            name.truncate(length);
+            return Ok(name);
+        }
+        name.resize(length + 1, 0);
+    }
 }
 
 fn platform_read_roots() -> Result<Vec<PathBuf>> {

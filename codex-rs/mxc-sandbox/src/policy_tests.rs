@@ -354,6 +354,8 @@ fn volume_expansion_skips_broken_links_and_preserves_other_grants() -> Result<()
     std::os::unix::fs::symlink(&readable, &alias)?;
     let denied = root.join("secret");
     std::fs::write(&denied, "secret")?;
+    let hardlink = root.join("hardlink");
+    std::fs::hard_link(&denied, &hardlink)?;
     let fs = FileSystemSandboxPolicy::restricted(vec![
         entry(&root, FileSystemAccessMode::Write)?,
         entry(&denied, FileSystemAccessMode::Deny)?,
@@ -374,11 +376,114 @@ fn volume_expansion_skips_broken_links_and_preserves_other_grants() -> Result<()
             vec![
                 root.to_str().unwrap().to_owned(),
                 alias.to_str().unwrap().to_owned(),
+                hardlink.to_str().unwrap().to_owned(),
                 readable.to_str().unwrap().to_owned()
             ],
             vec![denied.to_str().unwrap().to_owned()],
         )
     );
+    Ok(())
+}
+
+#[test]
+fn volume_expansion_respects_a_restricted_root_alias() -> Result<()> {
+    use FileSystemAccessMode::Deny;
+    use FileSystemAccessMode::Read;
+    use FileSystemAccessMode::Write;
+
+    let temp = tempfile::tempdir()?;
+    let base = canonical_root(&temp)?;
+    let volume = base.join("volume");
+    let alias = base.join("alias");
+    let ordinary = volume.join("ordinary");
+    let writable = volume.join("explicit");
+    let other = base.join("other");
+    let unaffected = other.join("unaffected");
+    let bridge = other.join("bridge");
+    let allowed_link = other.join("allowed-link");
+    let private_file = base.join("private-file");
+    std::fs::write(&private_file, b"private")?;
+    std::fs::create_dir_all(volume.join(".aws"))?;
+    std::fs::write(volume.join(".aws").join("credentials"), b"private")?;
+    for directory in [&ordinary, &writable, &unaffected] {
+        std::fs::create_dir_all(directory)?;
+    }
+    for (link, target) in [
+        (&alias, &volume),
+        (&bridge, &ordinary),
+        (&allowed_link, &unaffected),
+    ] {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link)?;
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/j"])
+                .arg(link)
+                .arg(target)
+                .status()?
+                .success()
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert!(crate::windows::same_final_directory(&volume, &alias)?);
+        assert!(!crate::windows::same_final_directory(&other, &alias)?);
+    }
+
+    for restriction in [Read, Deny] {
+        let fs = FileSystemSandboxPolicy::restricted(vec![
+            entry(&volume, Write)?,
+            entry(&alias, restriction)?,
+            entry(&writable, Write)?,
+            entry(&other, Write)?,
+            entry(&private_file, Deny)?,
+        ]);
+        let profile =
+            PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
+        #[cfg(unix)]
+        let volume_metadata = std::fs::metadata(&volume)?;
+        #[cfg(unix)]
+        if restriction == Deny {
+            use std::os::unix::fs::MetadataExt;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&volume, std::fs::Permissions::from_mode(0o111))?;
+            // A privileged test process can enumerate its own mode-0111 directory.
+            if volume_metadata.uid() != 0 {
+                assert_eq!(
+                    std::fs::read_dir(&volume).unwrap_err().kind(),
+                    std::io::ErrorKind::PermissionDenied
+                );
+            }
+            assert_eq!(std::fs::read(volume.join(".aws/credentials"))?, b"private");
+        }
+        let result = build_request(
+            &command(&profile, &base),
+            &base,
+            Vec::new(),
+            &[volume.clone(), other.clone()],
+            &[],
+        );
+        if restriction == Deny {
+            #[cfg(unix)]
+            std::fs::set_permissions(&volume, volume_metadata.permissions())?;
+            assert!(matches!(
+                result,
+                Err(PolicyError::ConflictingVolumeDenial { volume: path, denial })
+                    if path == volume && denial == alias
+            ));
+            continue;
+        }
+        let request = result?.filesystem.unwrap();
+        let writes = &request.readwrite_paths;
+        assert!(!writes.contains(&ordinary.display().to_string()));
+        assert!(!writes.contains(&bridge.display().to_string()));
+        assert!(writes.contains(&allowed_link.display().to_string()));
+        assert!(writes.contains(&writable.display().to_string()));
+        assert!(writes.contains(&unaffected.display().to_string()));
+        let restrictions = &request.readonly_paths;
+        assert!(restrictions.contains(&alias.display().to_string()));
+    }
     Ok(())
 }
 
@@ -668,6 +773,22 @@ fn root_deny_keeps_only_narrow_explicit_grants() -> Result<()> {
         assert_eq!((request.readwrite_paths, request.readonly_paths), expected);
         assert_eq!(request.denied_paths, Vec::<String>::new());
     }
+    let drive = root.ancestors().last().unwrap();
+    let fs = FileSystemSandboxPolicy::restricted(vec![
+        entry(drive, FileSystemAccessMode::Deny)?,
+        entry(&child, FileSystemAccessMode::Write)?,
+    ]);
+    let profile =
+        PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
+    let request = build_request(&command(&profile, root), root, Vec::new(), &[], &[])?;
+    let request = request.filesystem.unwrap();
+    assert_eq!(
+        (request.denied_paths, request.readwrite_paths),
+        (
+            vec![drive.display().to_string()],
+            vec![child.display().to_string()]
+        )
+    );
     Ok(())
 }
 

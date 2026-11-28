@@ -1218,6 +1218,56 @@ fn windows_file_system_wrapper_materializes_inner_helper() {
     assert!(materialized_helper.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn restricted_token_uses_only_the_supplied_workspace_roots() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let base = AbsolutePathBuf::from_absolute_path(dunce::canonicalize(temp.path())?)?;
+    let writable = base.join("writable");
+    let roots: &[PathUri] = &[PathUri::from_abs_path(&writable)];
+    let read_only = base.join("read-only-cwd");
+    let permissions = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+
+    let manager = SandboxManager::new()
+        .with_windows_token_session(crate::WindowsSandboxProxySettingsMode::Preserve);
+    for (cwd, roots) in [
+        (writable.join("subdir"), roots),
+        (read_only.clone(), roots),
+        (read_only, &[]),
+    ] {
+        std::fs::create_dir_all(&cwd)?;
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        let wrapped = manager.transform(SandboxTransformRequest {
+            workspace_roots: Some(roots),
+            selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            ..test_request(&cwd_uri, &permissions)
+        })?;
+        let session = wrapped.windows_session.expect("restricted-token session");
+        let writable_roots = wrapped
+            .request
+            .permission_profile
+            .file_system_sandbox_policy()
+            .get_writable_roots_with_cwd(&cwd)
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<Vec<_>>();
+        let expected_roots = if roots.is_empty() {
+            &[]
+        } else {
+            std::slice::from_ref(&writable)
+        };
+        assert_eq!(writable_roots, expected_roots);
+        assert_eq!(session.workspace_roots, expected_roots);
+    }
+    Ok(())
+}
+
 #[test]
 fn restricted_token_preserves_read_only_carveouts_at_a_volume_root() -> anyhow::Result<()> {
     let cwd = AbsolutePathBuf::current_dir()?;

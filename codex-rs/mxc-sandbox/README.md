@@ -37,15 +37,25 @@ an otherwise usable Windows policy when a network share does not support
 explicit path grants without that object-identity lookup. The public SDK does
 perform metadata checks for missing paths: immediate failures produce warnings,
 while a check that exceeds five seconds rejects startup, including on a slow or
-unreachable network share. We intentionally accept two alias limitations:
+unreachable network share.
+Hard-link names retain independent path permissions. An allowed name can read
+or modify the same file as a denied or read-only name.
 
-- Hard-link names retain independent path permissions. An allowed name can read
-  or modify the same file as a denied or read-only name; we do not tighten all
-  names to an object-wide restriction.
-- Volume-root expansion uses each root's declared access without reconciling
-  aliases first. For example, a writable `V:\` plus a read-only junction to
-  `V:\` can produce a writable `V:\projects` grant. That generated, more-specific
-  grant permits writes through either name despite the read-only root alias.
+Before expanding a writable volume root, the adapter checks whether a restricted
+directory names that root. For example, a read-only junction to writable `V:\`
+suppresses the generated write grant for `V:\projects`. Explicit grants beneath
+the root still apply. A child junction on another writable drive gets no generated
+write grant if it points beneath that restriction. When a deny names the same
+writable volume through another path, the adapter rejects the request before
+launch. Otherwise generated read-only grants such as `V:\.aws` could expose
+files beneath the denied root. These checks use the links present during
+policy construction.
+
+If the filesystem cannot supply a directory ID, the adapter compares resolved
+NT names. Different share names can refer to the same directory. If the adapter
+cannot distinguish a writable volume from a restricted directory, it reports both
+paths and stops before launch. Explicit grants outside volume expansion require
+no directory-identity comparison.
 
 ## Selection and rollout
 
