@@ -1572,6 +1572,125 @@ test ! -e "$registry"
     }
 }
 
+enum WritableAliasLayout {
+    RootAndProject,
+    NestedProjects,
+}
+
+#[test_case::test_case(WritableAliasLayout::RootAndProject; "root_and_project")]
+#[test_case::test_case(WritableAliasLayout::NestedProjects; "nested_projects")]
+#[tokio::test]
+async fn writable_aliases_preserve_physical_denials_and_reopened_children(
+    layout: WritableAliasLayout,
+) {
+    use FileSystemAccessMode::Deny;
+    use FileSystemAccessMode::Read;
+    use FileSystemAccessMode::Write;
+
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("workspace");
+    let workspace = AbsolutePathBuf::try_from(temp.path()).expect("absolute workspace");
+    let data = workspace.join("data");
+    let denied = data.join("private");
+    let reopened = denied.join("reopened");
+    std::fs::create_dir_all(&reopened).expect("reopened directory");
+    std::fs::write(denied.join("secret"), "secret").expect("denied file");
+    std::fs::write(reopened.join("hidden"), "hidden").expect("denied file beneath reopen");
+    std::fs::write(data.join("sibling"), "public").expect("allowed sibling");
+    let readonly = data.join("nested/readonly");
+    let readonly_reopened = readonly.join("reopened");
+    std::fs::create_dir_all(&readonly_reopened).expect("writable child of read-only directory");
+    std::fs::write(readonly.join("keep"), "original").expect("read-only file");
+    // The outer grant is logically deeper than the grant it covers on disk.
+    let aliases = workspace.join("nested/deep/aliases");
+    std::fs::create_dir_all(&aliases).expect("alias directory");
+    let outer = aliases.join("outer");
+    let inner = workspace.join("inner");
+    let mut policy = FileSystemSandboxPolicy::read_only();
+    let mut rule = |path: AbsolutePathBuf, access| {
+        policy
+            .entries
+            .push(FileSystemSandboxEntry::new(path.into(), access));
+    };
+    rule(outer.clone(), Write);
+    rule(inner.clone(), Write);
+    rule(denied, Deny);
+    rule(reopened.clone(), Write);
+    rule(reopened.join("hidden"), Deny);
+    rule(readonly_reopened.clone(), Write);
+    let (probe, readonly_rule) = match layout {
+        WritableAliasLayout::RootAndProject => {
+            std::os::unix::fs::symlink("/", &outer).expect("root alias");
+            std::os::unix::fs::symlink(&data, &inner).expect("project alias");
+            // A non-root launcher cannot create missing metadata mountpoints under `/`.
+            for root in [AbsolutePathBuf::try_from("/").unwrap(), outer] {
+                for name in codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES {
+                    rule(root.join(name), Write);
+                }
+            }
+            ("private/secret", inner.join("nested/readonly"))
+        }
+        WritableAliasLayout::NestedProjects => {
+            let nested = data.join("nested");
+            std::os::unix::fs::symlink(&data, &outer).expect("outer alias");
+            std::os::unix::fs::symlink(&nested, &inner).expect("inner alias");
+            std::fs::write(nested.join("secret"), "secret").expect("nested secret");
+            rule(outer.join("nested/secret"), Deny);
+            ("nested/secret", outer.join("nested/readonly"))
+        }
+    };
+    rule(readonly_rule, Read);
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let output = run_cmd_result_with_permission_profile_for_cwd(
+        &[
+            "/bin/sh",
+            "-c",
+            r#"set -eu
+for hidden in "$1" private/secret private/reopened/hidden; do
+    if (: < "$hidden") 2>/dev/null; then exit 10; fi
+done
+test "$(/bin/cat nested/readonly/keep)" = original
+if (printf changed >> nested/readonly/keep) 2>/dev/null; then exit 11; fi
+printf reopened > nested/readonly/reopened/allowed
+printf allowed > private/reopened/written
+/bin/cat sibling private/reopened/written"#,
+            "sh",
+            probe,
+        ],
+        data,
+        profile,
+        create_env_from_core_vars(),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("root alias sandbox");
+    assert_eq!(
+        (
+            output.exit_code,
+            output.stdout.text.as_str(),
+            output.stderr.text.as_str()
+        ),
+        (0, "publicallowed", "")
+    );
+    for (path, expected) in [
+        (readonly.join("keep"), "original"),
+        (readonly_reopened.join("allowed"), "reopened"),
+        (reopened.join("written"), "allowed"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            expected,
+            "{}",
+            path.display()
+        );
+    }
+}
+
 #[tokio::test]
 async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
     if should_skip_bwrap_tests().await {
