@@ -129,6 +129,7 @@ async fn interrupt_aborts_server_initiated_mcp_guardian_review() -> Result<()> {
     let mcp_servers = serde_json::from_value(json!({
         "elicitation": {
             "command": if cfg!(windows) { "python" } else { "python3" },
+            "cwd": std::env::current_dir()?,
             "args": ["-u", "-c", ELICITATION_SERVER],
             "default_tools_approval_mode": "approve",
         }
@@ -141,7 +142,7 @@ async fn interrupt_aborts_server_initiated_mcp_guardian_review() -> Result<()> {
             .set(mcp_servers)
             .expect("set MCP fixture");
     });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test.codex, "elicitation").await?;
     responses::mount_sse_once(
         &server,
@@ -276,6 +277,7 @@ async fn server_initiated_mcp_elicitation_can_require_synchronous_auto_review(
     let mcp_servers = serde_json::from_value(json!({
         "elicitation": {
             "command": if cfg!(windows) { "python" } else { "python3" },
+            "cwd": std::env::current_dir()?,
             "args": ["-u", "-c", ELICITATION_SERVER, serde_json::to_string(&meta)?],
             "default_tools_approval_mode": "approve",
         }
@@ -307,7 +309,7 @@ async fn server_initiated_mcp_elicitation_can_require_synchronous_auto_review(
                 .set(mcp_servers)
                 .expect("set MCP fixture");
         });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test.codex, "elicitation").await?;
     responses::mount_sse_once(
         &server,
@@ -530,6 +532,7 @@ async fn assert_nested_elicitation_reviews(
     let server = responses::start_mock_server().await;
     let fixture_config = json!({
         "command": if cfg!(windows) { "python" } else { "python3" },
+        "cwd": std::env::current_dir()?,
         "args": ["-u", "-c", ELICITATION_SERVER, serde_json::to_string(&meta)?,
                  if browser { "browser" } else if call_id_source == CallIdSource::Host { "forward" } else { "omit" }],
         "default_tools_approval_mode": "approve",
@@ -573,7 +576,7 @@ async fn assert_nested_elicitation_reviews(
             .set(mcp_servers)
             .expect("set MCP fixture");
     });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test.codex, server_name).await?;
     let attributed = call_id_source == CallIdSource::Host && server_name != "elicitation";
     let capture_history = attributed && server_name == "node_repl" && !strict_auto_review;
@@ -845,6 +848,7 @@ async fn strict_browser_nested_review_requires_live_browser_identity(
     }
     let fixture_config = serde_json::from_value(json!({
         "command": if cfg!(windows) { "python" } else { "python3" },
+        "cwd": std::env::current_dir()?,
         "args": ["-u", "-c", ELICITATION_SERVER, "{}", "browser",
                  json!({"_meta": meta}).to_string(), registered_connector_id],
         "default_tools_approval_mode": "approve",
@@ -858,7 +862,7 @@ async fn strict_browser_nested_review_requires_live_browser_identity(
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::User;
         });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test.codex, "codex_apps").await?;
     responses::mount_sse_once(
         &server,
@@ -930,6 +934,7 @@ async fn user_review_preserves_unsupported_guardian_elicitations(mode: &str) -> 
     let mcp_servers = serde_json::from_value(json!({
         "elicitation": {
             "command": if cfg!(windows) { "python" } else { "python3" },
+            "cwd": std::env::current_dir()?,
             "args": ["-u", "-c", ELICITATION_SERVER, "{}", "", params.to_string()],
             "default_tools_approval_mode": "approve",
         }
@@ -951,7 +956,7 @@ async fn user_review_preserves_unsupported_guardian_elicitations(mode: &str) -> 
                 .set(mcp_servers)
                 .expect("set MCP fixture");
         })
-        .build_with_auto_env(&server)
+        .build_with_remote_and_local_env(&server)
         .await?;
     wait_for_mcp_server(&test.codex, "elicitation").await?;
     responses::mount_sse_once(
@@ -1041,11 +1046,16 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
     let mcp_servers = serde_json::from_value(json!({
         "node_repl": {
             "command": if cfg!(windows) { "python" } else { "python3" },
+            "cwd": std::env::current_dir()?,
             "args": ["-u", "-c", ELICITATION_SERVER, meta.to_string(), "forward"],
             "default_tools_approval_mode": "approve",
         }
     }))?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
     let mut builder = test_codex()
+        .with_thread_extension(metrics.clone())
         .with_model_info_override("gpt-5.2", |model| {
             model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
             model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -1063,16 +1073,7 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
             config.approvals_reviewer = ApprovalsReviewer::User;
             config.mcp_servers.set(mcp_servers).unwrap();
         });
-    let mut test = builder.build_with_auto_env(&server).await?;
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
-    )?;
-    let mut options = test.start_thread_options().await;
-    options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
-    options.thread_extension_init.insert(metrics.clone());
-    let thread = test.thread_manager.start_thread(options).await?;
-    test.codex.shutdown_and_wait().await?;
-    test.codex = thread.thread;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     wait_for_mcp_server(&test.codex, "node_repl").await?;
     let barrier = r#"await tools.test_sync_tool({barrier: {
         id: "elicitation-origin", participants: 2, timeout_ms: 60000
